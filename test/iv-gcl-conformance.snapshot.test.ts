@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { posix as path } from 'node:path'
 import test from 'node:test'
 
-type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4'
+type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5'
 
 type Snapshot = {
   batch: AuditBatch
@@ -24,7 +24,7 @@ const GCL_ROOT = 'src/gcl/'
 const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
 
 /*
- * These are immutable local Git snapshots from the D1 through D4 audit batches.
+ * These are immutable local Git snapshots from the D1 through D5 audit batches.
  * Every source read below is `git show <revision>:<path>`, never the mutable
  * worktree file. This fixture does not import target runtime code, load an
  * env file, open a socket, or make a network request. A missing worktree,
@@ -63,6 +63,14 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D4', name: 'Translation', revision: '18a6188', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4bf8b862b22ddb9e0aaeff25f62e3f00123a9345', registryBlob: 'd946ce74ecf0a10b77fcfb584b34fe99ab8395c3', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
   { batch: 'D4', name: 'Language education', revision: '5a16014', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '1a84c98cd3183e6ba60f55b9b1c53b8ff0159142', registryBlob: '1c57c070aa37148134e21310aa258857c5500687', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
   { batch: 'D4', name: 'Camera', revision: '1102d32', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: 'cee7f14571281122917ae038704d6f995e809f99', registryBlob: 'b8787e9af75503bb5b1f5b0c8269545846dfaa95', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D5', name: 'RA OCR', revision: '1540e2e', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: '7cb3bffcee754b3b7b3168214cfd9e483599d96e', registryBlob: '684026b637562c2b820bc7c4ae49d5a2b4bb4598', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D5', name: 'RA image', revision: 'e0bbd31', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: '2ad02996fa62777794af149e3e0879354ac3e90c', registryBlob: '76221dc13d588bd7a042735badf6bc825b573ca3', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D5', name: 'RA 3D/game', revision: '1e3edc2', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: '6e12d3a0d04a72df47f92d248ad5277ca8c9c102', registryBlob: 'd39c1a771ccacb0a13b354626fc054bdeca113f2', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D5', name: 'RA market', revision: 'd9a7677', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: '7a63111faefa0e879f8cffb983cdfc3660f4104c', registryBlob: '4df08cd04321797b8522029a4754926f4fa715df', hardDeniesLiveOptIn: true, quotaFailureAudited: false },
+  { batch: 'D5', name: 'RFID', revision: '146539a', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: '4dc6d48c4c6b8d7dcad424e080c3db2f47d583fa', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D5', name: 'Translation', revision: 'cc63f92', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4bf8b862b22ddb9e0aaeff25f62e3f00123a9345', registryBlob: 'f8ba8b74b1c8945d5ff26a32de776a25cd5221a3', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D5', name: 'Language education', revision: 'f1dff88', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '73ae75585a82ec7734c1d3da52bedd48d0a2ef4d', registryBlob: '1c57c070aa37148134e21310aa258857c5500687', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D5', name: 'Camera', revision: '9228cd5', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '864abf2b2902d3512d630473ee88c9d111f7391d', registryBlob: 'b8787e9af75503bb5b1f5b0c8269545846dfaa95', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
 ]
 
 function repositoryFor(snapshot: Snapshot): string {
@@ -130,9 +138,10 @@ function assertNoRuntimeEscape(source: string, name: string): void {
   assert.doesNotMatch(code, /\b(?:import|require|createRequire|eval|Function)\s*(?:\?\.)?\s*\(|\bmodule\s*(?:\.|\?\.)\s*require\s*\(/, `${name} must not dynamically load or evaluate a runtime module`)
   assert.doesNotMatch(code, /\b(?:globalThis|global|window)\b/, `${name} must not access a global runtime capability`)
   assert.doesNotMatch(code, /\b(?:fetch|XMLHttpRequest|WebSocket|axios|undici|node-fetch)\b/, `${name} must not retain an egress capability by direct or aliased access`)
-  assert.doesNotMatch(code, /\bReflect\s*(?:\.\s*get|\[\s*['"`]get['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not reflectively obtain a runtime or environment capability`)
-  assert.doesNotMatch(code, /\bObject\s*\.\s*getOwnPropertyDescriptor\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not obtain a runtime or environment capability by descriptor`)
+  assert.doesNotMatch(code, /\bReflect\s*(?:\?\.)?\s*(?:\.\s*get|\[\s*['"`]get['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not reflectively obtain a runtime or environment capability`)
+  assert.doesNotMatch(code, /\bObject\s*(?:\?\.)?\s*(?:\.\s*getOwnPropertyDescriptors?|\[\s*['"`]getOwnPropertyDescriptors?['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not obtain a runtime or environment capability by descriptor`)
   assert.doesNotMatch(code, /\b(?:process|environment)\s*(?:\?\.)?\s*\[/, `${name} must not use computed environment access`)
+  assert.doesNotMatch(code, /\bprocess\s*(?:\.|\?\.)\s*env\s*(?:\?\.)?\s*\[/, `${name} must not use computed environment access`)
   assert.doesNotMatch(code, /(?:process\s*(?:\.|\?\.)\s*env|environment)\s*(?:\?\.)?\s*\[\s*['"`][^'"`]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|BEARER)[^'"`]*['"`]\s*\]/i, `${name} must not read a credential-like environment variable by bracket access`)
   assert.doesNotMatch(code, /(?:process\s*(?:\.|\?\.)\s*env|environment)\s*(?:\.|\?\.)\s*[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|BEARER)[A-Z0-9_]*/i, `${name} must not read a credential-like environment variable`)
 }
@@ -176,7 +185,7 @@ function ownerDenialPrecedesReservations(registry: string): boolean {
   return ownerGate >= 0 && ownerGate < preflight && preflight < requestedAudit && requestedAudit < quota
 }
 
-test('D1/D2/D3/D4 source fixture pins every audited connector and its governance runner to local Git objects', () => {
+test('D1/D2/D3/D4/D5 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
     assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
@@ -185,7 +194,7 @@ test('D1/D2/D3/D4 source fixture pins every audited connector and its governance
   }
 })
 
-test('D1/D2/D3/D4 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
+test('D1/D2/D3/D4/D5 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
     const closure = [...sourceClosure(snapshot).values()].join('\n')
@@ -204,7 +213,7 @@ test('D1/D2/D3/D4 synthetic source closure has no egress, privileged configurati
   }
 })
 
-test('D1/D2/D3/D4 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
+test('D1/D2/D3/D4/D5 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
@@ -212,7 +221,7 @@ test('D1/D2/D3/D4 denied-owner and quota-rejection edge cases are classified wit
   }
 })
 
-test('D4 fail-closed safety checks reject aliased globals, computed environment access, and reflective capability bypasses', () => {
+test('D5 fail-closed safety checks reject optional reflective descriptors and computed environment capability recovery', () => {
   for (const source of [
     "const adapter = import('node:https')",
     "const request = globalThis['fetch']",
@@ -220,22 +229,29 @@ test('D4 fail-closed safety checks reject aliased globals, computed environment 
     "const request = globalThis?.['fetch']",
     "const request = Reflect.get(globalThis, 'fetch')",
     "const request = Reflect['get'](globalThis, 'fetch')",
+    "const request = Reflect?.get(globalThis, 'fetch')",
+    "const request = Reflect?.['get'](globalThis, 'fetch')",
     "const request = globalThis['fe' + 'tch']",
     "const request = (globalThis).fetch",
     "const request = Object.getOwnPropertyDescriptor(globalThis, 'fetch')?.value",
+    "const request = Object?.['getOwnPropertyDescriptor'](globalThis, 'fetch')?.value",
+    "const request = Object.getOwnPropertyDescriptors(globalThis).fetch.value",
     "const response = fetch?.('https://synthetic.invalid')",
     "const token = process.env['SYNTHETIC_API_KEY']",
     "const token = process.env?.['SYNTHETIC_TOKEN']",
+    "const token = process.env?.['SYNTHETIC_' + 'TOKEN']",
     "const token = process['env']?.['SYNTHETIC_TOKEN']",
     "const environment = process['en' + 'v']",
     "const token = process?.env?.SYNTHETIC_TOKEN",
     "const token = Reflect.get(process.env, 'SYNTHETIC_TOKEN')",
     "const token = Object.getOwnPropertyDescriptor(process.env, 'SYNTHETIC_TOKEN')?.value",
+    "const token = Object?.['getOwnPropertyDescriptors'](process.env).SYNTHETIC_TOKEN.value",
     "const childProcess = require('node:child_process')",
     "const childProcess = module?.require('node:child_process')",
     "const adapter = import /* deferred */ ('node:https')",
     "const runtime = Function('return process')()",
-  ]) assert.throws(() => assertNoRuntimeEscape(source, `D4 negative probe: ${source}`))
-  assert.throws(() => assertAllowedImports("import { request } from 'node:https'", 'D4 negative probe'))
+  ]) assert.throws(() => assertNoRuntimeEscape(source, `D5 negative probe: ${source}`))
+  assert.doesNotThrow(() => assertNoRuntimeEscape("const enabled = environment.GCL_RFID_SYNTHETIC_ENABLED === 'true'", 'D5 allowed synthetic configuration'))
+  assert.throws(() => assertAllowedImports("import { request } from 'node:https'", 'D5 negative probe'))
   assert.throws(() => localGclImportPaths('src/gcl/connector.ts', "import '../auth.js'"))
 })
