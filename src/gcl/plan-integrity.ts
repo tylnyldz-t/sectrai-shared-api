@@ -15,11 +15,12 @@ function canonicalJson(value: unknown, seen = new WeakSet<object>()): string {
     if (!Number.isFinite(value)) throw new TypeError('SYNTHETIC_PLAN_NON_FINITE_NUMBER')
     return JSON.stringify(value)
   }
-  if (Array.isArray(value)) return `[${value.map((item) => canonicalJson(item, seen)).join(',')}]`
+  if (Array.isArray(value)) return `[${value.map((item) => item === undefined ? 'null' : canonicalJson(item, seen)).join(',')}]`
   if (!value || typeof value !== 'object') throw new TypeError('SYNTHETIC_PLAN_NON_JSON_VALUE')
   if (seen.has(value)) throw new TypeError('SYNTHETIC_PLAN_CYCLIC_VALUE')
   seen.add(value)
-  const output = `{${Object.keys(value).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson((value as Record<string, unknown>)[key], seen)}`).join(',')}}`
+  const record = value as Record<string, unknown>
+  const output = `{${Object.keys(record).filter((key) => record[key] !== undefined).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key], seen)}`).join(',')}}`
   seen.delete(value)
   return output
 }

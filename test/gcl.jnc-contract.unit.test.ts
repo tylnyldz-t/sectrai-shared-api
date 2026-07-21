@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
-import { ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError } from '../src/gcl/errors.js'
+import { hashAuditEvent, InMemoryHashChainAuditLog, verifiedAuditChainHead } from '../src/gcl/audit.js'
+import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
 import { gameEngineConnectorFromEnvironment, SyntheticGameEngineConnector, type GameEngineBuildInput, type GameEngineBuildPlan } from '../src/gcl/game-engine.js'
 import { ownerGateError } from '../src/gcl/owner-gate.js'
 import { InMemoryDailyConnectorQuota } from '../src/gcl/quota.js'
@@ -50,6 +50,11 @@ test('GM5 returns only a synthetic proposal, an unleased GPU contract card, and 
   assert.equal(result.data.artifact.generation, 'SYNTHETIC_PROPOSAL_ONLY')
   assert.equal(result.data.artifact.lifecycle, 'GENERATED_CANDIDATE_NOT_A_FILE')
   assert.equal(result.data.artifact.publicationState, 'NOT_PUBLISHED')
+  assert.equal(result.data.integrity.contract, 'gcl.synthetic-plan-integrity.v1')
+  assert.match(result.data.integrity.payloadSha256, /^[a-f0-9]{64}$/)
+  assert.equal(result.data.integrity.mutation, 'DEEP_FROZEN')
+  assert.equal(Object.isFrozen(result.data), true)
+  assert.equal(Object.isFrozen(result.data.artifact), true)
   assert.match(result.data.artifact.syntheticUri, /^synthetic:\/\/gcl-3d\/text-to-3d\//)
   assert.equal(result.data.gpuResourceCard.mode, 'CONTRACT_ONLY')
   assert.equal(result.data.gpuResourceCard.transport, 'NONE')
@@ -67,6 +72,26 @@ test('GM5 returns only a synthetic proposal, an unleased GPU contract card, and 
   assert.equal(audit.entries[1]?.previousHash, audit.entries[0]?.hash)
   assert.equal(result.provenance.auditHash, audit.entries[1]?.hash)
   assert.equal(quota.reservations.length, 1)
+})
+
+test('GM5 proposal ids are scope-bound, canonical across input key order, and immutable', async () => {
+  const first = await runner(new SyntheticTextToThreeDConnector(threeDConfig())).run.run(request({
+    input: { prompt: 'Low-poly learning globe', outputFormat: 'glb', style: 'educational' },
+  })) as ConnectorResult<SyntheticThreeDResult>
+  const reordered = await runner(new SyntheticTextToThreeDConnector(threeDConfig())).run.run(request({
+    input: { style: 'educational', outputFormat: 'glb', prompt: 'Low-poly learning globe' },
+  })) as ConnectorResult<SyntheticThreeDResult>
+  const otherScope = await runner(new SyntheticTextToThreeDConnector(threeDConfig())).run.run(request({
+    workspaceId: 'another-gm-workspace',
+    input: { prompt: 'Low-poly learning globe', outputFormat: 'glb', style: 'educational' },
+  })) as ConnectorResult<SyntheticThreeDResult>
+
+  assert.equal(first.data.artifact.artifactId, reordered.data.artifact.artifactId)
+  assert.equal(first.data.integrity.payloadSha256, reordered.data.integrity.payloadSha256)
+  assert.notEqual(first.data.artifact.artifactId, otherScope.data.artifact.artifactId)
+  assert.notEqual(first.data.integrity.payloadSha256, otherScope.data.integrity.payloadSha256)
+  assert.throws(() => { (first.data.artifact as { publicationState: string }).publicationState = 'PUBLISHED' }, TypeError)
+  assert.equal(first.data.artifact.publicationState, 'NOT_PUBLISHED')
 })
 
 test('GM5 image-plus-text accepts only an immutable local reference and closes before audit for a URL', async () => {
@@ -106,6 +131,8 @@ test('GM6 maps premium Unreal and Blender plans to JNC pilot contracts without s
   const governed = runner(connector)
   const unreal = await governed.run.run(gameRequest(premiumUnreal)) as ConnectorResult<GameEngineBuildPlan>
   assert.equal(unreal.data.execution, 'SYNTHETIC_PLAN_ONLY_NOT_EXECUTED')
+  assert.equal(unreal.data.integrity.mutation, 'DEEP_FROZEN')
+  assert.equal(Object.isFrozen(unreal.data.pipeline), true)
   assert.equal(unreal.data.gpuResourceCard?.mode, 'CONTRACT_ONLY')
   assert.equal(unreal.data.gpuResourceCard?.transport, 'NONE')
   assert.equal(unreal.data.jncPilotHandoff?.contract, 'jarvis-node-controller.unreal-cli-pilot.v1')
@@ -159,4 +186,49 @@ test('environment wiring accepts exactly LIVE_DISABLED and owner gates are uncon
   assert.equal(ownerGateError(undefined, 'synthetic-test-token')?.message, 'GCL_OWNER_GATE_NOT_CONFIGURED')
   assert.equal(ownerGateError('synthetic-test-token', 'wrong') instanceof OwnerGateError, true)
   assert.equal(ownerGateError('synthetic-test-token', 'synthetic-test-token'), null)
+})
+
+test('corrupt audit links are rejected instead of silently becoming a new chain root', () => {
+  const firstEvent = {
+    type: 'connector.run.requested' as const, connectorId: 'text-to-3d', product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace',
+    actor: 'synthetic-owner', scopes: ['3d:generate'], costCapCents: 50, requestedItems: 1,
+    occurredAt: fixedNow().toISOString(), detail: {},
+  }
+  const firstHash = hashAuditEvent(firstEvent, null)
+  const secondEvent = { ...firstEvent, type: 'connector.run.succeeded' as const, detail: { requestedAuditHash: firstHash } }
+  const secondHash = hashAuditEvent(secondEvent, firstHash)
+  assert.equal(verifiedAuditChainHead([
+    { event: firstEvent, previousHash: null, hash: firstHash },
+    { event: secondEvent, previousHash: firstHash, hash: secondHash },
+  ]), secondHash)
+  assert.throws(() => verifiedAuditChainHead([
+    { event: firstEvent, previousHash: null, hash: firstHash },
+    { event: secondEvent, previousHash: null, hash: secondHash },
+  ]), AuditChainError)
+  assert.throws(() => verifiedAuditChainHead([{ event: firstEvent, previousHash: null, hash: '0'.repeat(64) }]), AuditChainError)
+  assert.throws(() => verifiedAuditChainHead([{ event: {}, previousHash: null, hash: firstHash }]), AuditChainError)
+})
+
+test('direct runner calls reject malformed governance context before audit or quota reservation', async () => {
+  const governed = runner(new SyntheticTextToThreeDConnector(threeDConfig()))
+  await assert.rejects(governed.run.run(request({ product: 'outside-product' })), (error: unknown) => error instanceof ConnectorInputError && error.message === 'CONNECTOR_INVALID_CONTEXT')
+  await assert.rejects(governed.run.run(request({ actor: 'invalid/owner' })), (error: unknown) => error instanceof ConnectorInputError && error.message === 'CONNECTOR_INVALID_CONTEXT')
+  await assert.rejects(governed.run.run(request({ ownerApproved: 'true' as unknown as boolean })), (error: unknown) => error instanceof OwnerGateError)
+  await assert.rejects(governed.run.run(request({ scopes: ['3d:generate', '3d:generate'] })), (error: unknown) => error instanceof ScopeError)
+  assert.equal(governed.audit.entries.length, 0)
+  assert.equal(governed.quota.reservations.length, 0)
+})
+
+test('audit persistence unavailability prevents adapter execution and quota reservation', async () => {
+  let adapterRuns = 0
+  const connector: Connector = {
+    id: 'audit-gated-proposal', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { adapterRuns += 1; throw new Error('ADAPTER_MUST_NOT_RUN') },
+  }
+  const quota = new InMemoryDailyConnectorQuota({ dailyRuns: 1, dailyItems: 1 })
+  const audit = { async append(): Promise<{ hash: string }> { throw new Error('AUDIT_STORE_UNAVAILABLE') } }
+  const governed = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, fixedNow)
+  await assert.rejects(governed.run(request({ connectorId: connector.id })), /AUDIT_STORE_UNAVAILABLE/)
+  assert.equal(adapterRuns, 0)
+  assert.equal(quota.reservations.length, 0)
 })

@@ -25,11 +25,30 @@ export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string 
   return createHash('sha256').update(JSON.stringify(normalize({ event, previousHash }))).digest('hex')
 }
 
+function auditEvent(value: unknown): ConnectorAuditEvent | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const event = value as Record<string, unknown>
+  const allowed = new Set(['type', 'connectorId', 'product', 'workspaceId', 'actor', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'])
+  if (Object.keys(event).some((key) => !allowed.has(key))) return null
+  if (event.type !== 'connector.run.requested' && event.type !== 'connector.run.succeeded' && event.type !== 'connector.run.failed') return null
+  if (typeof event.connectorId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(event.connectorId)) return null
+  if (typeof event.product !== 'string' || !/^sectrai-[a-z0-9-]{1,80}$/.test(event.product)) return null
+  if (typeof event.workspaceId !== 'string' || !/^[a-zA-Z0-9:_-]{1,120}$/.test(event.workspaceId)) return null
+  if (typeof event.actor !== 'string' || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(event.actor)) return null
+  if (!Array.isArray(event.scopes) || event.scopes.length === 0 || event.scopes.some((scope) => typeof scope !== 'string' || !scope || scope.length > 120) || new Set(event.scopes).size !== event.scopes.length) return null
+  if (typeof event.costCapCents !== 'number' || !Number.isSafeInteger(event.costCapCents) || event.costCapCents < 1) return null
+  if (typeof event.requestedItems !== 'number' || !Number.isSafeInteger(event.requestedItems) || event.requestedItems < 1) return null
+  if (typeof event.occurredAt !== 'string' || Number.isNaN(Date.parse(event.occurredAt)) || new Date(event.occurredAt).toISOString() !== event.occurredAt) return null
+  if (!event.detail || typeof event.detail !== 'object' || Array.isArray(event.detail)) return null
+  return event as ConnectorAuditEvent
+}
+
 function auditValue(value: unknown): AuditRecordValue | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const candidate = value as Partial<AuditRecordValue>
-  if (!candidate.event || typeof candidate.event !== 'object' || Array.isArray(candidate.event) || typeof candidate.hash !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.hash) || (candidate.previousHash !== null && (typeof candidate.previousHash !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.previousHash)))) return null
-  return candidate as AuditRecordValue
+  const event = auditEvent(candidate.event)
+  if (!event || typeof candidate.hash !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.hash) || (candidate.previousHash !== null && (typeof candidate.previousHash !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.previousHash)))) return null
+  return { event, previousHash: candidate.previousHash ?? null, hash: candidate.hash }
 }
 
 /**

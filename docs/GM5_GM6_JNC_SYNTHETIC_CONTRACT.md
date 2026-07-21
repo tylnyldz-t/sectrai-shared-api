@@ -23,6 +23,28 @@ ADOS DCC asset-safety protocol.
 - Audit and quota persistence are governance records in the existing shared
   API only. They do not contact a model provider, JNC, Blender, or Unreal.
 
+## Review snapshot integrity
+
+Every GM5/GM6 `data` result is a recursively frozen review snapshot. It carries
+`gcl.synthetic-plan-integrity.v1`, whose `payloadSha256` is calculated from
+canonical JSON data only. The digest is a review-correlation value, not a
+credential, signature, or execution authorisation.
+
+GM5 synthetic artifact IDs and integrity hashes include the product and
+workspace scope. The same validated input therefore produces a stable proposal
+inside one scope but cannot be correlated through the same synthetic artifact
+ID across workspaces. Reordered JSON keys normalise to the same result. Neither
+the digest nor freezing creates an asset, starts a process, or permits a plan
+to be changed into a publication instruction.
+
+The durable audit append path takes the workspace lock and verifies every prior
+SHA-256 link before writing its next link. A malformed, reordered, or hash-
+mismatched audit record returns `503 gcl_audit_chain_corrupt`; it never starts a
+new chain root. This is a fail-closed consistency control, not a signed
+tamper-proof ledger: a separately designed signing/attestation system would be
+required to defend against a privileged database writer who can recompute
+hashes.
+
 ## Connector mapping
 
 | GM connector | Synthetic result | JNC pilot pattern represented | Execution state |
@@ -47,6 +69,14 @@ owner actor, exact input fields, scope, per-run cost ceiling, and requested
 item count. The runner performs all validation and `LIVE_DISABLED` preflight
 checks before it appends the workspace SHA-256 audit event or reserves daily
 quota. Reserved module IDs are not exposed through ordinary record CRUD.
+
+The runner independently validates its direct-call boundary too: product,
+workspace, owner actor, exact `true` owner approval, and a non-empty unique
+scope set must all be valid. Thus a malformed internal call fails before any
+audit append or quota reservation. If audit persistence itself is unavailable,
+the connector adapter is not run and no quota reservation is made. Once a
+quota reservation exists, it remains accounted for even when a later plan
+construction fails; this intentionally prevents retry-based quota bypass.
 
 Premium GM6 reserves GPU-minute units: `requestedItems` must exactly equal
 `input.gpuMinutes`. GM5 reserves exactly one proposal item. Both outputs mark
