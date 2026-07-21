@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, type JncBlenderPilotHandoff, type JncGpuResourceCard, type JncUnrealPilotHandoff } from './jnc-pilot.js'
+import { createSyntheticPlanIntegrity, deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
 import { LIVE_DISABLED, type LiveDisabled } from './safety.js'
 import type { Connector, ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
 
@@ -26,6 +26,7 @@ export type SyntheticPipelineStage = {
 export type GameEngineBuildPlan = {
   adapter: 'SYNTHETIC'
   liveMode: LiveDisabled
+  integrity: SyntheticPlanIntegrity
   execution: 'SYNTHETIC_PLAN_ONLY_NOT_EXECUTED'
   buildId: string
   tier: GameEngineTier
@@ -67,8 +68,8 @@ function inputFrom(value: unknown): GameEngineBuildInput {
 }
 
 function buildId(input: GameEngineBuildInput, context: ConnectorRunContext): string {
-  const fingerprint = JSON.stringify({ input, product: context.product, workspaceId: context.workspaceId, costCapCents: context.costCapCents, requestedItems: context.requestedItems })
-  return `synthetic-game-${createHash('sha256').update(fingerprint).digest('hex').slice(0, 20)}`
+  const digest = syntheticPlanSha256({ input, product: context.product, workspaceId: context.workspaceId, scopes: [...context.scopes].sort(), costCapCents: context.costCapCents, requestedItems: context.requestedItems })
+  return `synthetic-game-${digest.slice(0, 20)}`
 }
 
 function pipeline(input: GameEngineBuildInput): SyntheticPipelineStage[] {
@@ -135,20 +136,34 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
       : input.engine === 'blender'
         ? this.jncPilotMapper.createBlenderHandoff()
         : undefined
-    const data: GameEngineBuildPlan = {
+    const planPipeline = pipeline(input)
+    const buildOutput = { state: 'OWNER_APPROVAL_REQUIRED' as const, evidence: 'SYNTHETIC_BUILD_PLAN_ONLY' as const }
+    const publication = { automatic: false as const, state: 'DISABLED_NOT_IMPLEMENTED' as const }
+    const data = deepFreeze<GameEngineBuildPlan>({
       adapter: 'SYNTHETIC',
       liveMode: LIVE_DISABLED,
+      integrity: createSyntheticPlanIntegrity({
+        connectorId: this.id,
+        scope: { product: context.product, workspaceId: context.workspaceId },
+        input,
+        buildId: id,
+        pipeline: planPipeline,
+        buildOutput,
+        publication,
+        ...(gpuResourceCard ? { gpuResourceCard } : {}),
+        ...(jncPilotHandoff ? { jncPilotHandoff } : {}),
+      }),
       execution: 'SYNTHETIC_PLAN_ONLY_NOT_EXECUTED',
       buildId: id,
       tier: input.tier,
       engine: input.engine,
       target: input.target,
-      pipeline: pipeline(input),
-      buildOutput: { state: 'OWNER_APPROVAL_REQUIRED', evidence: 'SYNTHETIC_BUILD_PLAN_ONLY' },
-      publication: { automatic: false, state: 'DISABLED_NOT_IMPLEMENTED' },
+      pipeline: planPipeline,
+      buildOutput,
+      publication,
       ...(gpuResourceCard ? { gpuResourceCard } : {}),
       ...(jncPilotHandoff ? { jncPilotHandoff } : {}),
-    }
+    })
     return {
       data,
       provenance: { connectorId: this.id, source: 'synthetic-game-engine-plan', retrievedAt: context.now().toISOString(), runId: id, untrustedContent: isolatedContent(input) },

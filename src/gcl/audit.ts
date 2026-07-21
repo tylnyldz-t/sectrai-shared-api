@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
+import { AuditChainError } from './errors.js'
 import type { AuditLog, ConnectorAuditEvent } from './types.js'
 
 export const GCL_AUDIT_MODULE_ID = 'gcl-audit'
@@ -27,8 +28,22 @@ export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string 
 function auditValue(value: unknown): AuditRecordValue | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const candidate = value as Partial<AuditRecordValue>
-  if (!candidate.event || typeof candidate.hash !== 'string' || (candidate.previousHash !== null && typeof candidate.previousHash !== 'string')) return null
+  if (!candidate.event || typeof candidate.event !== 'object' || Array.isArray(candidate.event) || typeof candidate.hash !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.hash) || (candidate.previousHash !== null && (typeof candidate.previousHash !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.previousHash)))) return null
   return candidate as AuditRecordValue
+}
+
+/**
+ * Verifies every stored link, rather than trusting only the newest row. A
+ * broken chain is unavailable governance state, never a new chain root.
+ */
+export function verifiedAuditChainHead(values: readonly unknown[]): string | null {
+  let previousHash: string | null = null
+  for (const value of values) {
+    const candidate = auditValue(value)
+    if (!candidate || candidate.previousHash !== previousHash || candidate.hash !== hashAuditEvent(candidate.event, previousHash)) throw new AuditChainError()
+    previousHash = candidate.hash
+  }
+  return previousHash
 }
 
 /** Durable, workspace-scoped SHA-256 audit chain in the existing record store. */
@@ -38,11 +53,11 @@ export class PrismaHashChainAuditLog implements AuditLog {
   async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
     return this.prisma.$transaction(async (transaction) => {
       await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${event.product}:${event.workspaceId}:${GCL_AUDIT_MODULE_ID}`}))`
-      const previous = await transaction.record.findFirst({
+      const priorRecords = await transaction.record.findMany({
         where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       })
-      const previousHash = previous ? auditValue(previous.values)?.hash ?? null : null
+      const previousHash = verifiedAuditChainHead(priorRecords.map((record) => record.values))
       const hash = hashAuditEvent(event, previousHash)
       await transaction.record.create({
         data: {

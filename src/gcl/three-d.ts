@@ -1,6 +1,6 @@
-import { createHash } from 'node:crypto'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, type GpuResourceRequest, type JncBlenderPilotHandoff, type JncGpuResourceCard } from './jnc-pilot.js'
+import { createSyntheticPlanIntegrity, deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
 import { LIVE_DISABLED, type LiveDisabled } from './safety.js'
 import type { Connector, ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
 
@@ -34,6 +34,7 @@ export type SyntheticThreeDArtifact = {
 export type SyntheticThreeDResult = {
   connectorKind: 'text-to-3d' | 'image-text-to-3d'
   liveMode: LiveDisabled
+  integrity: SyntheticPlanIntegrity
   artifact: SyntheticThreeDArtifact
   gpuResourceCard: JncGpuResourceCard
   blenderPilotHandoff: JncBlenderPilotHandoff
@@ -124,8 +125,8 @@ function isolatedContent(source: string, value: unknown): IsolatedContent {
   return { source, value, handling: 'data-only', instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS' }
 }
 
-function artifactId(connectorKind: SyntheticThreeDResult['connectorKind'], input: unknown): string {
-  const digest = createHash('sha256').update(JSON.stringify(input)).digest('hex')
+function artifactId(connectorKind: SyntheticThreeDResult['connectorKind'], input: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): string {
+  const digest = syntheticPlanSha256({ connectorKind, input, product: context.product, workspaceId: context.workspaceId })
   return `synthetic-3d-${connectorKind}-${digest.slice(0, 24)}`
 }
 
@@ -161,24 +162,36 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
   async run(input: TInput, context: ConnectorRunContext): Promise<ConnectorResult<SyntheticThreeDResult>> {
     const validated = this.validate(input)
     this.configured(context)
-    const id = artifactId(this.connectorKind, validated)
+    const id = artifactId(this.connectorKind, validated, context)
     const source = `synthetic-3d:${this.connectorKind}`
+    const artifact: SyntheticThreeDArtifact = {
+      artifactId: id,
+      syntheticUri: `synthetic://gcl-3d/${this.connectorKind}/${id}`,
+      generation: 'SYNTHETIC_PROPOSAL_ONLY',
+      outputFormat: validated.outputFormat,
+      lifecycle: 'GENERATED_CANDIDATE_NOT_A_FILE',
+      reviewState: 'OWNER_REVIEW_REQUIRED',
+      publicationState: 'NOT_PUBLISHED',
+    }
+    const gpuResourceCard = this.jncPilotMapper.createGpuResourceCard(validated.gpuResourceRequest)
+    const blenderPilotHandoff = this.jncPilotMapper.createBlenderHandoff()
+    const data = deepFreeze<SyntheticThreeDResult>({
+      connectorKind: this.connectorKind,
+      liveMode: LIVE_DISABLED,
+      integrity: createSyntheticPlanIntegrity({
+        connectorId: this.id,
+        scope: { product: context.product, workspaceId: context.workspaceId },
+        input: validated,
+        artifact,
+        gpuResourceCard,
+        blenderPilotHandoff,
+      }),
+      artifact,
+      gpuResourceCard,
+      blenderPilotHandoff,
+    })
     return {
-      data: {
-        connectorKind: this.connectorKind,
-        liveMode: LIVE_DISABLED,
-        artifact: {
-          artifactId: id,
-          syntheticUri: `synthetic://gcl-3d/${this.connectorKind}/${id}`,
-          generation: 'SYNTHETIC_PROPOSAL_ONLY',
-          outputFormat: validated.outputFormat,
-          lifecycle: 'GENERATED_CANDIDATE_NOT_A_FILE',
-          reviewState: 'OWNER_REVIEW_REQUIRED',
-          publicationState: 'NOT_PUBLISHED',
-        },
-        gpuResourceCard: this.jncPilotMapper.createGpuResourceCard(validated.gpuResourceRequest),
-        blenderPilotHandoff: this.jncPilotMapper.createBlenderHandoff(),
-      },
+      data,
       provenance: { connectorId: this.id, source, retrievedAt: context.now().toISOString(), untrustedContent: isolatedContent(source, validated) },
       confidence: 0,
     }

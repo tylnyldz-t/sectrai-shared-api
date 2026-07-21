@@ -1,4 +1,4 @@
-import { ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError } from './errors.js'
+import { ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError } from './errors.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export type RunConnectorRequest = {
@@ -14,6 +14,13 @@ export type RunConnectorRequest = {
 }
 
 function positiveInteger(value: number): boolean { return Number.isSafeInteger(value) && value > 0 }
+const PRODUCT_PATTERN = /^sectrai-[a-z0-9-]{1,80}$/
+const WORKSPACE_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
+const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
+
+function validContext(request: RunConnectorRequest): boolean {
+  return PRODUCT_PATTERN.test(request.product) && WORKSPACE_PATTERN.test(request.workspaceId) && ACTOR_PATTERN.test(request.actor)
+}
 
 export class ConnectorRegistry {
   private readonly connectors = new Map<string, Connector>()
@@ -46,10 +53,11 @@ export class GovernedConnectorRunner {
 
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
     const connector = this.registry.get(request.connectorId)
-    if (!request.ownerApproved) throw new OwnerGateError()
+    if (request.ownerApproved !== true) throw new OwnerGateError()
+    if (!validContext(request)) throw new ConnectorInputError('CONNECTOR_INVALID_CONTEXT')
     if (!positiveInteger(request.costCapCents)) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
     if (!positiveInteger(request.requestedItems)) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
-    if (request.scopes.length === 0 || request.scopes.some((scope) => !connector.scopes.includes(scope))) throw new ScopeError()
+    if (!Array.isArray(request.scopes) || request.scopes.length === 0 || request.scopes.some((scope) => typeof scope !== 'string' || !connector.scopes.includes(scope)) || new Set(request.scopes).size !== request.scopes.length) throw new ScopeError()
 
     const occurredAt = this.now()
     const context: ConnectorRunContext = {
@@ -57,7 +65,7 @@ export class GovernedConnectorRunner {
       workspaceId: request.workspaceId,
       actor: request.actor,
       ownerApproved: request.ownerApproved,
-      scopes: [...new Set(request.scopes)].sort(),
+      scopes: [...request.scopes].sort(),
       costCapCents: request.costCapCents,
       requestedItems: request.requestedItems,
       now: this.now,
