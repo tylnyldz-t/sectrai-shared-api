@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
+import { hashAuditEvent } from './audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, ScopeError } from './errors.js'
 import type { MarketReviewDecision, MarketReviewLedger } from './market-review-ledger.js'
-import type { Connector, ConnectorResult, ConnectorRunContext } from './types.js'
+import type { Connector, ConnectorAuditEvent, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export type { MarketReviewDecision, MarketReviewLedger, MarketReviewLedgerEntry } from './market-review-ledger.js'
 
@@ -9,6 +10,7 @@ export const MARKET_CONNECTOR_ID = 'market'
 export const MARKET_LIVE_STATUS = 'MARKET_LIVE_DISABLED'
 const MARKET_REVIEW_PACKET_VERSION = 'synthetic-market-review-packet-v1'
 export const MARKET_REVIEW_RECEIPT_VERSION = 'synthetic-market-review-receipt-v1'
+export const MARKET_REVIEW_AUDIT_WITNESS_VERSION = 'synthetic-market-review-audit-witness-v1'
 const MARKET_SCOPES = ['market:discover', 'market:capacity:quote', 'market:review'] as const
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
@@ -194,6 +196,18 @@ export type SyntheticMarketReviewReceipt = {
   }
 }
 
+/**
+ * A caller-held, local D4 audit-link witness. It can prove only that the
+ * supplied review result and the supplied hash-chain event agree. It cannot
+ * prove that an audit store retained the event, and is never an authorization.
+ */
+export type SyntheticMarketReviewAuditWitness = {
+  version: typeof MARKET_REVIEW_AUDIT_WITNESS_VERSION
+  event: ConnectorAuditEvent
+  previousHash: string | null
+  hash: string
+}
+
 export type MarketReviewContext = Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'scopes' | 'now'>
 
 const OWNER_ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
@@ -289,21 +303,19 @@ function canonicalScopeId(value: unknown): string | null {
 }
 
 function reviewContext(context: unknown): { product: string; workspaceId: string; scopes: readonly string[] } {
-  if (!context || typeof context !== 'object' || Array.isArray(context)) throw new ConnectorInputError('INVALID_MARKET_REVIEW_CONTEXT')
-  const candidate = context as Partial<MarketReviewContext>
+  const candidate = exactMarketObject(context, ['product', 'workspaceId', 'scopes', 'now'], 'INVALID_MARKET_REVIEW_CONTEXT')
   const product = canonicalScopeId(candidate.product)
   const workspaceId = canonicalScopeId(candidate.workspaceId)
-  if (!product || !workspaceId || !Array.isArray(candidate.scopes) || candidate.scopes.some((scope) => typeof scope !== 'string' || !MARKET_SCOPES.includes(scope as typeof MARKET_SCOPES[number]))) {
+  if (!product || !workspaceId || typeof candidate.now !== 'function' || !Array.isArray(candidate.scopes) || candidate.scopes.some((scope) => typeof scope !== 'string' || !MARKET_SCOPES.includes(scope as typeof MARKET_SCOPES[number]))) {
     throw new ConnectorInputError('INVALID_MARKET_REVIEW_CONTEXT')
   }
   return { product, workspaceId, scopes: candidate.scopes }
 }
 
 function reviewNow(context: unknown): Date {
-  if (!context || typeof context !== 'object' || Array.isArray(context) || typeof (context as Partial<MarketReviewContext>).now !== 'function') {
-    throw new ConnectorInputError('INVALID_MARKET_REVIEW_TIME')
-  }
-  const value = (context as MarketReviewContext).now()
+  const candidate = exactMarketObject(context, ['product', 'workspaceId', 'scopes', 'now'], 'INVALID_MARKET_REVIEW_TIME')
+  if (typeof candidate.now !== 'function') throw new ConnectorInputError('INVALID_MARKET_REVIEW_TIME')
+  const value = candidate.now()
   if (!(value instanceof Date) || !Number.isFinite(value.getTime())) throw new ConnectorInputError('INVALID_MARKET_REVIEW_TIME')
   return value
 }
