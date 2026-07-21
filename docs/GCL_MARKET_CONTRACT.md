@@ -109,12 +109,36 @@ The receipt is deliberately limited to `NOT_AUTHORIZED`. Both decisions keep
 external network, reservation, booking and publication at `false`. In
 particular, `acknowledged` is not “approved”, is not a consent to execute,
 and cannot create an offer or reservation. The digest is a deterministic
-binding check, not a signature, durable approval record, replay-prevention
-mechanism, or authorization token. Because this synthetic package owns no
-review storage, a future durable, owner-designed workflow must fail closed
-until it supplies its own scoped mutable review state, idempotency/replay
-rules, and final-decision rules. D1 has no such state transition: a receipt
-can never make a market action available.
+binding check, not a signature or authorization token. D1 has no state
+transition: a receipt can never make a market action available.
+
+## D2 — process-local terminal review ledger
+
+`InMemorySyntheticMarketReviewLedger` is the next, deliberately narrow
+package. `independentlyReviewSyntheticMarketPlan()` now requires an injected
+ledger and lets it append exactly one terminal receipt for the canonical
+`product/workspace/planId/reviewPacketIntegrityDigest` tuple. It serializes
+same-plan calls, so concurrent opposite decisions yield one receipt and one
+rejected replay; an additional sequential decision also fails closed with
+`MARKET_REVIEW_ALREADY_DECIDED`.
+
+The ledger validates its already-canonical entry and only marks the tuple
+decided after its `connector.market.owner_reviewed` audit append returns a
+SHA-256-shaped hash. A missing ledger, invalid review clock, malformed ledger
+entry, or malformed audit result fails before it creates a local terminal
+receipt. The review context likewise default-denies malformed product,
+workspace, scope, and clock values; direct connector calls cannot create a
+plan with an unknown market scope or malformed product/workspace identifier.
+
+This is intentionally an **in-memory, process-local** guard. It adds no
+database table, migration, Prisma adapter, HTTP route, background worker, or
+cross-process state; its entries disappear on restart. It is consequently not
+a durable review workflow, signature, global replay-prevention mechanism, or
+authorization record. A future durable owner-controlled host must still
+supply its own atomic scoped state, retention, idempotency/replay, final
+decision, legal/ToS, and execution rules—and must fail closed until it does.
+D2 never turns a receipt into an offer, quote, reservation, booking,
+publication, handoff, notification, provider call, or sending action.
 
 ## Synthetic-only boundary
 
@@ -180,13 +204,15 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1 test evidence and ADOS 10-rule conformance
+## D1/D2 test evidence and ADOS 10-rule conformance
 
-`test/gcl-market.unit.test.ts` covers the normal synthetic packet and the D1
-negative path. The negative path rejects injected provider-shaped fields,
-source-state drift, invented quote data, action-flag drift, cross-workspace
-use, and whitespace-based maker/reviewer bypass attempts before it can append
-a review event or consume another quota item.
+`test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
+integrity, and D2 terminal-ledger paths. Negative tests reject injected
+provider-shaped fields, source-state drift, invented quote data, action-flag
+drift, cross-workspace use, whitespace-based maker/reviewer bypass attempts,
+missing ledger, invalid review clock, malformed audit result, malformed direct
+run context, and sequential/concurrent replay attempts before another review
+event or quota item can be created.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -194,15 +220,16 @@ a review event or consume another quota item.
 3. Configuration default-denies; only exact `LIVE_ENABLED=false` permits this
    synthetic adapter.
 4. Full canonical reconstruction rejects changed, malformed, and unknown
-   packet fields.
+   packet fields; D2 permits one process-local terminal receipt only after a
+   valid audit append.
 5. Request content is explicitly data-only, never an instruction.
 6. Owner gate, `market:review`, and maker–checker separation are mandatory.
 7. The module has no network client, provider URL, credential/API-key field,
    scheduler, or automatic sync.
 8. Preflight, cost caps, independent grouped quotas, and the scoped SHA-256
    audit chain bound every run.
-9. A review cannot quote, reserve, book, publish, hand off, notify, or trigger
-   an automatic action.
+9. A review cannot quote, reserve, book, publish, hand off, notify, send, or
+   trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
 
@@ -210,4 +237,5 @@ a review event or consume another quota item.
 
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
-production migration, live launch, or write to `main`/production in D1.
+durable review store, production migration, live launch, or write to
+`main`/production in D1/D2.

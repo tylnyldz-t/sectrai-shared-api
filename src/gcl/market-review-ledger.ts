@@ -28,6 +28,7 @@ const PLAN_ID_PATTERN = /^synthetic-market-[a-f0-9]{24}$/
 const REVIEW_ID_PATTERN = /^synthetic-market-review-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
+const ENTRY_FIELDS = ['product', 'workspaceId', 'planId', 'planDigest', 'reviewId', 'reviewPacketIntegrityDigest', 'decision', 'reviewedBy', 'reviewedAt']
 
 function canonicalTimestamp(value: unknown): string | null {
   if (typeof value !== 'string') return null
@@ -38,6 +39,7 @@ function canonicalTimestamp(value: unknown): string | null {
 function normalizedEntry(value: MarketReviewLedgerEntry): MarketReviewLedgerEntry {
   if (
     !value || typeof value !== 'object' ||
+    Object.getOwnPropertySymbols(value).length > 0 || Object.getOwnPropertyNames(value).some((field) => !ENTRY_FIELDS.includes(field)) ||
     !SCOPE_ID_PATTERN.test(value.product) || !SCOPE_ID_PATTERN.test(value.workspaceId) ||
     !PLAN_ID_PATTERN.test(value.planId) || !REVIEW_ID_PATTERN.test(value.reviewId) ||
     !DIGEST_PATTERN.test(value.planDigest) || !DIGEST_PATTERN.test(value.reviewPacketIntegrityDigest) ||
@@ -46,6 +48,10 @@ function normalizedEntry(value: MarketReviewLedgerEntry): MarketReviewLedgerEntr
   ) throw new ConnectorInputError('INVALID_MARKET_REVIEW_LEDGER_ENTRY')
   const reviewedAt = canonicalTimestamp(value.reviewedAt)
   if (!reviewedAt) throw new ConnectorInputError('INVALID_MARKET_REVIEW_LEDGER_ENTRY')
+  const digestPrefix = value.planDigest.slice(0, 24)
+  if (value.planId !== `synthetic-market-${digestPrefix}` || value.reviewId !== `synthetic-market-review-${digestPrefix}`) {
+    throw new ConnectorInputError('INVALID_MARKET_REVIEW_LEDGER_ENTRY')
+  }
   return { ...value, reviewedAt }
 }
 

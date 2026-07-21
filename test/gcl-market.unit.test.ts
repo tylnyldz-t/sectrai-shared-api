@@ -148,6 +148,10 @@ test('synthetic market rejects missing operation scope and mismatched listing qu
     () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context, requestedItems: 2 }),
     (error: unknown) => error instanceof Error && error.message === 'MARKET_LISTINGS_MUST_MATCH_REQUESTED_ITEMS',
   )
+  await assert.rejects(
+    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context, workspaceId: 'invalid/workspace' }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_CONTEXT',
+  )
   assert.equal(setup.audit.entries.length, 0)
   assert.equal(setup.quota.requests.length, 0)
 })
@@ -313,18 +317,24 @@ test('D2 process-local terminal review ledger rejects sequential and concurrent 
 
 test('D2 ledger does not create a terminal receipt when its audit append is malformed', async () => {
   const ledger = new InMemorySyntheticMarketReviewLedger({ append: async () => ({ hash: 'not-a-sha256-digest' }) })
+  const entry = {
+    product: context.product,
+    workspaceId: context.workspaceId,
+    planId: `synthetic-market-${'a'.repeat(24)}`,
+    planDigest: 'a'.repeat(64),
+    reviewId: `synthetic-market-review-${'a'.repeat(24)}`,
+    reviewPacketIntegrityDigest: 'b'.repeat(64),
+    decision: 'acknowledged' as const,
+    reviewedBy: 'checker@example.test',
+    reviewedAt: now().toISOString(),
+  }
   await assert.rejects(
-    () => ledger.recordTerminalReview({
-      product: context.product,
-      workspaceId: context.workspaceId,
-      planId: 'synthetic-market-a'.repeat(0) + `synthetic-market-${'a'.repeat(24)}`,
-      planDigest: 'a'.repeat(64),
-      reviewId: `synthetic-market-review-${'a'.repeat(24)}`,
-      reviewPacketIntegrityDigest: 'b'.repeat(64),
-      decision: 'acknowledged',
-      reviewedBy: 'checker@example.test',
-      reviewedAt: now().toISOString(),
-    }),
+    () => ledger.recordTerminalReview({ ...entry, providerCredential: 'synthetic-not-accepted' } as never),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REVIEW_LEDGER_ENTRY',
+  )
+  assert.equal(ledger.entries.length, 0)
+  await assert.rejects(
+    () => ledger.recordTerminalReview(entry),
     (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_REVIEW_AUDIT_APPEND_INVALID',
   )
   assert.equal(ledger.entries.length, 0)

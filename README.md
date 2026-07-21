@@ -59,4 +59,7 @@ reserve capacity, book a load, publish a listing, or start a background sync.
 It remains `LIVE_DISABLED`; only the exact `GCL_MARKET_LIVE_ENABLED=false`
 configuration permits the synthetic proposal path. D1 returns a
 digest-bound, canonically validated independent-review packet; its receipt is
-always `NOT_AUTHORIZED` and cannot authorize any action.
+always `NOT_AUTHORIZED` and cannot authorize any action. D2 can place exactly
+one such receipt in an injected process-local synthetic ledger; it is neither
+durable nor an HTTP workflow, and it cannot authorize an action after a
+restart or in another process.

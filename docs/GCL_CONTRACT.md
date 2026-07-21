@@ -44,8 +44,9 @@ Every registered connector is governed by these rules:
   SHA-256 linked audit events. Each product/workspace chain is serialized by a
   PostgreSQL advisory transaction lock. A synthetic market plan may also
   receive a canonically reconstructed, independent owner-review packet in the
-  same chain; that receipt records only `NOT_AUTHORIZED`, never an execution
-  approval.
+  same chain; D2's explicitly injected process-local review ledger permits at
+  most one terminal receipt for its exact plan/packet tuple. That receipt
+  records only `NOT_AUTHORIZED`, never an execution approval.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
   error. There is no local fallback, provider fallback, queue worker, or
@@ -117,8 +118,10 @@ background sync, reservation, booking, publishing, or live execution path.
 Setting any value other than `GCL_MARKET_LIVE_ENABLED=false` returns
 `MARKET_LIVE_DISABLED`; it does not enable anything. A market review packet
 is deliberately not an HTTP action endpoint, a persisted approval workflow,
-replay-prevention mechanism, or an authorization token. The specific market
-inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
+or an authorization token. D2's local-only in-memory ledger prevents a
+duplicate receipt only within the injected process; it is not durable,
+cross-process replay prevention. The specific market inputs and output limits
+are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
 
 ## Privacy, KVKK, and content boundary
 
