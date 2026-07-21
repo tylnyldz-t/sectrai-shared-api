@@ -2,6 +2,8 @@
 
 Shared, product-scoped persistence API for Sectrai synthetic demo products. It uses one Neon Postgres database and one Render web service. It never connects to Sektral, Xontainer, Yapıborsası, or any other database.
 
+The GM6 game-engine connector is a governed synthetic plan adapter: it emits a Godot headless CLI *skeleton* or an Unreal/Blender jarvis GPU-arbitration *hook*, but never starts a process, contacts a GPU node, or publishes a build. Its contract is in [GM6_GAME_ENGINE_CONTRACT.md](docs/GM6_GAME_ENGINE_CONTRACT.md).
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:
