@@ -3,6 +3,7 @@ import test from 'node:test'
 import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
 import { ADOS_10_MARKET_CONTROLS, MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, SyntheticMarketConnector, independentlyReviewSyntheticMarketPlan, syntheticMarketConnectorFromEnvironment, validateSyntheticMarketPlanForReview, type MarketCapacityQuoteInput, type MarketReviewContext, type SyntheticMarketConnectorConfig, type SyntheticMarketPlan } from '../src/gcl/market.js'
+import { InMemorySyntheticMarketReviewLedger } from '../src/gcl/market-review-ledger.js'
 import { dailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import type { ConnectorQuota, ConnectorRunContext } from '../src/gcl/types.js'
@@ -44,8 +45,9 @@ class TestQuota implements ConnectorQuota {
 function marketRunner(config = limits) {
   const connector = new SyntheticMarketConnector(config)
   const audit = new InMemoryHashChainAuditLog()
+  const reviews = new InMemorySyntheticMarketReviewLedger(audit)
   const quota = new TestQuota()
-  return { connector, audit, quota, runner: new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now) }
+  return { connector, audit, reviews, quota, runner: new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now) }
 }
 
 test('synthetic market returns only an owner-review plan and never a quote, booking, reservation, publication, or provider contact', async () => {
@@ -170,6 +172,14 @@ test('synthetic market also rejects invalid direct-run governance values instead
     () => connector.run(capacityQuote, { ...context, requestedItems: 0 }),
     (error: unknown) => error instanceof CostCapError && error.message === 'MARKET_REQUESTED_ITEMS_REQUIRED',
   )
+  await assert.rejects(
+    () => connector.run(capacityQuote, { ...context, product: 'invalid/product' }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_CONTEXT',
+  )
+  await assert.rejects(
+    () => connector.run(capacityQuote, { ...context, scopes: ['market:capacity:quote', 'market:provider:write'] }),
+    (error: unknown) => error instanceof ScopeError && error.message === 'MARKET_SCOPE_DENIED',
+  )
 })
 
 test('a distinct owner can audit a market review, but neither decision can authorize an execution', async () => {
@@ -179,29 +189,29 @@ test('a distinct owner can audit a market review, but neither decision can autho
   const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
 
   await assert.rejects(
-    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', false, 'checker@example.test', setup.audit, reviewContext),
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', false, 'checker@example.test', setup.reviews, reviewContext),
     OwnerGateError,
   )
   await assert.rejects(
-    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, context.actor, setup.audit, reviewContext),
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, context.actor, setup.reviews, reviewContext),
     (error: unknown) => error instanceof MakerCheckerError && error.message === 'MARKET_REVIEW_REQUIRES_INDEPENDENT_CHECKER',
   )
   await assert.rejects(
-    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.audit, { ...reviewContext, scopes: ['market:discover'] }),
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, { ...reviewContext, scopes: ['market:discover'] }),
     (error: unknown) => error instanceof ScopeError && error.message === 'MARKET_REVIEW_SCOPE_REQUIRED',
   )
   const tampered = { ...plan, request: { ...plan.request, originCountry: 'FR' } }
   await assert.rejects(
-    () => independentlyReviewSyntheticMarketPlan(tampered, 'acknowledged', true, 'checker@example.test', setup.audit, reviewContext),
+    () => independentlyReviewSyntheticMarketPlan(tampered, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID',
   )
   await assert.rejects(
-    () => independentlyReviewSyntheticMarketPlan(plan, 'approved' as never, true, 'checker@example.test', setup.audit, reviewContext),
+    () => independentlyReviewSyntheticMarketPlan(plan, 'approved' as never, true, 'checker@example.test', setup.reviews, reviewContext),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REVIEW_DECISION',
   )
   assert.equal(setup.audit.entries.length, 2)
 
-  const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.audit, reviewContext)
+  const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext)
   assert.equal(reviewed.decision, 'acknowledged')
   assert.equal(reviewed.reviewedBy, 'checker@example.test')
   assert.equal(reviewed.mode, 'SYNTHETIC')
@@ -252,7 +262,7 @@ test('D1 review packet reconstruction rejects injection, source/quote/action dri
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID',
   )
   await assert.rejects(
-    () => independentlyReviewSyntheticMarketPlan(clone(), 'acknowledged', true, ` ${context.actor}`, setup.audit, reviewContext),
+    () => independentlyReviewSyntheticMarketPlan(clone(), 'acknowledged', true, ` ${context.actor}`, setup.reviews, reviewContext),
     (error: unknown) => error instanceof OwnerGateError && error.message === 'MARKET_REVIEWER_REQUIRED',
   )
   await assert.rejects(
@@ -261,6 +271,63 @@ test('D1 review packet reconstruction rejects injection, source/quote/action dri
   )
   assert.equal(setup.audit.entries.length, 2)
   assert.equal(setup.quota.requests.length, 1)
+})
+
+test('D2 process-local terminal review ledger rejects sequential and concurrent replays without creating a market action', async () => {
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const plan = result.data as SyntheticMarketPlan
+  const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
+
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', {} as never, reviewContext),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_REVIEW_LEDGER_REQUIRED',
+  )
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, { ...reviewContext, now: (() => new Date('invalid')) as typeof now }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REVIEW_TIME',
+  )
+  assert.equal(setup.audit.entries.length, 2)
+
+  const decisions = await Promise.allSettled([
+    independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext),
+    independentlyReviewSyntheticMarketPlan(plan, 'rejected', true, 'checker-two@example.test', setup.reviews, reviewContext),
+  ])
+  assert.equal(decisions.filter((decision) => decision.status === 'fulfilled').length, 1)
+  assert.equal(decisions.filter((decision) => decision.status === 'rejected').length, 1)
+  assert.equal(setup.reviews.entries.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
+  assert.equal(setup.audit.entries[2]?.event.detail.execution, 'NOT_AUTHORIZED')
+  assert.equal(setup.audit.entries[2]?.event.detail.reservation, false)
+  assert.equal(setup.audit.entries[2]?.event.detail.booking, false)
+  assert.equal(setup.audit.entries[2]?.event.detail.publication, false)
+
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker-three@example.test', setup.reviews, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_ALREADY_DECIDED',
+  )
+  assert.equal(setup.reviews.entries.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
+  assert.equal(setup.quota.requests.length, 1)
+})
+
+test('D2 ledger does not create a terminal receipt when its audit append is malformed', async () => {
+  const ledger = new InMemorySyntheticMarketReviewLedger({ append: async () => ({ hash: 'not-a-sha256-digest' }) })
+  await assert.rejects(
+    () => ledger.recordTerminalReview({
+      product: context.product,
+      workspaceId: context.workspaceId,
+      planId: 'synthetic-market-a'.repeat(0) + `synthetic-market-${'a'.repeat(24)}`,
+      planDigest: 'a'.repeat(64),
+      reviewId: `synthetic-market-review-${'a'.repeat(24)}`,
+      reviewPacketIntegrityDigest: 'b'.repeat(64),
+      decision: 'acknowledged',
+      reviewedBy: 'checker@example.test',
+      reviewedAt: now().toISOString(),
+    }),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_REVIEW_AUDIT_APPEND_INVALID',
+  )
+  assert.equal(ledger.entries.length, 0)
 })
 
 test('ADOS 10 controls are complete and explicitly prohibit egress and production launch', () => {
