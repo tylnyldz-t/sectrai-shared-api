@@ -233,6 +233,30 @@ send a handoff, reserve/book/publish, or authorize execution. It is an unkeyed
 mutation check, not a signature, credential, durable replay guard, or
 authorization token.
 
+## D6 — minimized audit-trail receipt
+
+`createSyntheticMarketReviewAuditTrailReceipt(sourcePlan, reviewResult, trail,
+context)` first repeats D5's strict reconstruction of the caller-supplied
+three-event segment. It then returns only a fixed-no-action receipt containing
+product/workspace digests, plan/review IDs, the three event hashes, the first
+predecessor hash, and an unkeyed SHA-256 integrity digest. It omits the market
+request, actor identities, review decision, offer/price/provider data, and any
+credential or action capability.
+
+`validateSyntheticMarketReviewAuditTrailReceipt(sourcePlan, reviewResult,
+trail, receipt, context)` accepts only an exact own-data receipt, rebuilds the
+D5 segment and expected receipt, and compares its canonical receipt ID and
+integrity. Unknown, hidden, symbol, accessor, inherited, Proxy, credential-
+shaped, malformed, cross-workspace, or mutated values fail closed before a
+result is returned; getters and Proxy traps are not evaluated.
+
+D6 is a library-only, read-only rendering and check. It does not read or write
+storage, consume quota, append audit, add a route, contact a provider, send a
+handoff, reserve/book/publish, or authorize execution. It proves neither
+durable retention nor the first predecessor. Its digest is mutation evidence,
+not a signature, credential, durable audit proof, replay guard, or execution
+token.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -297,12 +321,13 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
 caller-held audit-witness link reconstruction, plus D5 caller-held
-requested/succeeded/owner-review continuity reconstruction.
+requested/succeeded/owner-review continuity reconstruction and D6's minimized,
+context-bound rendering of that exact segment.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -311,7 +336,9 @@ malformed direct-run context, malformed receipt execution/integrity, malformed
 or credential-shaped D4 witnesses, changed audit events/action flags,
 predecessor/hash drift, sequential/concurrent replay attempts, and D5
 discontinuous, semantically mismatched, time-inverted, hidden-field,
-accessor-shaped, and Proxy-shaped trail evidence. D3/D4/D5 rejection produces
+accessor-shaped, and Proxy-shaped trail evidence. D6 additionally rejects
+mutated hashes/receipt IDs, credential-shaped, hidden, symbol, prototype,
+accessor, and Proxy-shaped receipt evidence. D3/D4/D5/D6 rejection produces
 no extra review event, quota item, or local terminal entry.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
@@ -324,15 +351,16 @@ no extra review event, quota item, or local terminal entry.
    terminal receipt only after a valid audit append, D3 rechecks its local
    receipt without a write, and D4 rechecks one caller-held audit hash link
    without reading or writing audit storage. D5 rechecks only a caller-held
-   requested/succeeded/review segment without a write or storage lookup.
+   requested/succeeded/review segment without a write or storage lookup; D6
+   can only minimize and recheck that same segment.
 5. Request content is explicitly data-only, never an instruction.
 6. Owner gate, `market:review`, and maker–checker separation are mandatory.
 7. The module has no network client, provider URL, credential/API-key field,
    scheduler, or automatic sync.
 8. Preflight, cost caps, independent grouped quotas, and the scoped SHA-256
-   audit chain bound every run; D5 only checks a caller-held three-event
-   segment.
-9. A review and its D3/D4/D5 evidence cannot quote, reserve, book, publish,
+   audit chain bound every run; D5/D6 only check a caller-held three-event
+   segment and a minimized rendering of it.
+9. A review and its D3/D4/D5/D6 evidence cannot quote, reserve, book, publish,
    hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -342,4 +370,4 @@ no extra review event, quota item, or local terminal entry.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5.
+`main`/production in D1/D2/D3/D4/D5/D6.

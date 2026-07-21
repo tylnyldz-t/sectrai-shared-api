@@ -73,4 +73,7 @@ cannot authorize any action. D5 can only read-check a caller-held
 `requested → succeeded → owner_reviewed` segment, including its two internal
 links and canonical run semantics. It returns fixed `NOT_AUTHORIZED` evidence
 only, does not prove durable storage or a predecessor, and cannot authorize any
-action.
+action. D6 can derive and recheck only a minimized, digest-bound rendering of
+that same caller-held D5 segment. It performs no storage lookup or write and
+remains unkeyed mutation evidence, never a signature, credential, authorization,
+or execution capability.
