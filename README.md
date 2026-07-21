@@ -36,7 +36,7 @@ DATABASE_URL='your Neon URL' npm run db:migrate
 DATABASE_URL='your Neon URL' SHARED_API_KEY_HEALTH='...' npm start
 ```
 
-`npm test` is a real Neon integration test. It creates records only under the temporary `sectrai-integration-test` product, verifies create → list → edit → a new Prisma connection → delete, and cleans those records up.
+`npm test` always runs the offline contract tests. When `DATABASE_URL` is set, it additionally runs the real Neon integration test: it creates records only under the temporary `sectrai-integration-test` product, verifies create → list → edit → a new Prisma connection → delete, and cleans those records up.
 
 ## Product adaptation guide
 
@@ -50,3 +50,14 @@ DATABASE_URL='your Neon URL' SHARED_API_KEY_HEALTH='...' npm start
 ## Safety boundary
 
 The service stores only product-owned synthetic demo records. It does not make AI calls, execute product actions, or interpret `values`. Product-level Vercel admin gates remain the outer authentication layer; this API key is a second product boundary, not a replacement for user authentication.
+
+## GM1 Voice GCL (synthetic-only)
+
+GM1 adds owner-gated STT/TTS connector contracts for an interactive product surface. It is deliberately **not** a notification or message-delivery layer: it follows the F19 seam by describing a voice artifact for the owning product rather than delivering anything to a user or another product.
+
+- `voice-stt-synthetic` accepts a synthetic audio descriptor and an explicit synthetic transcript fixture; it never decodes audio or calls a provider.
+- `voice-tts-synthetic` accepts synthetic text and returns a deterministic `synthetic://` audio reference, never audio bytes.
+- Both need the product key, `X-Sectrai-Owner-Token`, `X-Sectrai-Owner-Actor`, a positive cost cap, the matching minimum scope, daily quota, and `GCL_VOICE_LIVE_DISABLED=true`.
+- Runs produce a pending, metadata-only artifact. It cannot publish automatically. An explicit owner decision is required and each lifecycle event joins the tenant hash-chain audit. Transcript text and audio bytes are not stored in the GCL artifact/audit records.
+
+See [the GM1 Voice contract](docs/GCL_VOICE_CONTRACT.md) for the exact request and approval shapes.
