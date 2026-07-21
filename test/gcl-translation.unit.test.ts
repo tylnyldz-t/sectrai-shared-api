@@ -5,7 +5,7 @@ import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateEr
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import { InMemoryTranslationArtifactStore, PrismaTranslationArtifactStore, translationArtifactReviewDigest } from '../src/gcl/translation-artifacts.js'
 import { LIVE_DISABLED, SPEECH_TRANSLATION_CONNECTOR_ID, SYNTHETIC_TRANSLATION_ONLY, SyntheticSpeechTranslationConnector, SyntheticTextTranslationConnector, TEXT_TRANSLATION_CONNECTOR_ID, type SpeechTranslationData, type SpeechTranslationInput, type TextTranslationData, type TextTranslationInput, type TranslationConnectorConfig } from '../src/gcl/translation.js'
-import type { ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
+import type { Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
 const context: ConnectorRunContext = {
@@ -107,6 +107,25 @@ test('owner, cost, item, personal-data, locale, and synthetic-descriptor failure
   await assert.rejects(() => runner.run({ ...request, input: { ...speechInput(), targetLocale: 'tr-TR' } }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'TRANSLATION_DISTINCT_LOCALES_REQUIRED')
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
+})
+
+test('a connector failure records only a stable error code, never raw fixture content, in the audit chain', async () => {
+  const failing: Connector = {
+    id: TEXT_TRANSLATION_CONNECTOR_ID,
+    kind: 'text-translation',
+    authKind: 'owner-token',
+    scopes: ['translation:text'],
+    async run(): Promise<ConnectorResult> { throw new Error('There are pending approvals. This raw fixture must not be stored.') },
+  }
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([failing]), audit, quota, now)
+
+  await assert.rejects(() => runner.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: textInput(), ...context }), /raw fixture/)
+  assert.equal(audit.entries.length, 2)
+  assert.equal(audit.entries[1]?.event.type, 'connector.run.failed')
+  assert.deepEqual(audit.entries[1]?.event.detail, { requestedAuditHash: audit.entries[0]?.hash, error: 'connector_run_failed' })
+  assert.equal(JSON.stringify(audit.entries).includes('There are pending approvals.'), false)
 })
 
 test('speech translation returns only a synthetic audio reference and a distinct checker controls the one-way artifact decision', async () => {

@@ -145,8 +145,15 @@ creates a publish, send, provider, media-byte, or live execution path.
 The connector derives `reviewExpiresAt` from its synthetic run clock; it is not
 caller-controlled. A checker has to resubmit a newly generated synthetic
 fixture after expiry. Before adding an audit entry, the durable audit writer
-revalidates the whole product/workspace SHA-256 chain. A malformed prior entry
-returns `GCL_AUDIT_CHAIN_INVALID` and no new entry is appended. In the durable
+revalidates the whole product/workspace SHA-256 chain and the exact,
+metadata-only audit-event schema. A hash-valid row with unknown fields (for
+example source text, translated text, transcript, audio, provider output, or a
+raw exception) is still invalid: it returns `GCL_AUDIT_CHAIN_INVALID` and no
+new entry is appended. Run failures retain only a stable error code, never an
+exception message. A durable artifact proposal must link to a matching prior
+`requested` → `succeeded` run pair for the same product, workspace, connector,
+actor, scopes, cost cap, and item count; otherwise it returns
+`TRANSLATION_RUN_AUDIT_LINK_INVALID` before metadata storage. In the durable
 Prisma store, artifact creation and a successful compare-and-set decision each
 share one database transaction with their audit row; an audit failure rolls back
 that metadata mutation.
@@ -160,7 +167,7 @@ that metadata mutation.
 - Artifacts/audit hold reference hashes and provenance, not raw content.
 - Maker and checker are separated; the exact metadata digest and TTL bind a
   decision; terminal artifact decisions are compare-and-set; audit is a
-  fail-closed, per-product/workspace SHA-256 chain; no migration is introduced
-  by this module.
+  fail-closed, exact-schema, per-product/workspace SHA-256 chain with a
+  verified run-provenance link; no migration is introduced by this module.
 - `LIVE_DISABLED` synthetic tests and contracts do not authorize production,
   real-data ingestion, real translation, sending, publishing, or launch.

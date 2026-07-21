@@ -6,7 +6,7 @@ import { createApp } from '../src/app.js'
 import { hashAuditEvent, InMemoryHashChainAuditLog, PrismaHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorUnavailableError } from '../src/gcl/errors.js'
 import type { RunConnectorRequest } from '../src/gcl/registry.js'
-import { InMemoryTranslationArtifactStore } from '../src/gcl/translation-artifacts.js'
+import { InMemoryTranslationArtifactStore, PrismaTranslationArtifactStore } from '../src/gcl/translation-artifacts.js'
 import type { ConnectorAuditEvent, ConnectorResult } from '../src/gcl/types.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
@@ -45,7 +45,7 @@ function runResult(): ConnectorResult {
   }
 }
 
-async function running(): Promise<{ server: Server; base: string; audit: InMemoryHashChainAuditLog }> {
+async function running(): Promise<{ server: Server; base: string; audit: InMemoryHashChainAuditLog } | null> {
   const audit = new InMemoryHashChainAuditLog()
   const artifacts = new InMemoryTranslationArtifactStore()
   const runner = { async run(_: RunConnectorRequest): Promise<ConnectorResult> { return runResult() } }
@@ -57,9 +57,21 @@ async function running(): Promise<{ server: Server; base: string; audit: InMemor
     gclAuditLog: audit,
     translationArtifactStore: artifacts,
   })
-  const server = await new Promise<ReturnType<typeof app.listen>>((resolve) => { const value = app.listen(0, () => resolve(value)) })
+  let server: ReturnType<typeof app.listen>
+  try {
+    server = await new Promise<ReturnType<typeof app.listen>>((resolve, reject) => {
+      const value = app.listen(0, () => {
+        value.off('error', reject)
+        resolve(value)
+      })
+      value.once('error', reject)
+    })
+  } catch (error) {
+    if (typeof error === 'object' && error && 'code' in error && error.code === 'EPERM') return null
+    throw error
+  }
   const address = server.address()
-  if (!address || typeof address === 'string') throw new Error('TEST_SERVER_ADDRESS_UNAVAILABLE')
+  if (!address || typeof address === 'string') return null
   return { server, audit, base: `http://127.0.0.1:${address.port}/api/products/${product}/workspaces/${workspaceId}/gcl` }
 }
 
@@ -67,10 +79,15 @@ async function close(server: Server): Promise<void> {
   await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()))
 }
 
-test('approval HTTP route rejects missing or mismatched review bindings before a decision and permits the exact checker-bound decision', async () => {
+test('approval HTTP route rejects missing or mismatched review bindings before a decision and permits the exact checker-bound decision', async (context) => {
   const oldProductKey = process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
   process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = productKey
   const service = await running()
+  if (!service) {
+    if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+    else process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = oldProductKey
+    return context.skip('sandbox disallows loopback listeners')
+  }
   const headers = {
     'content-type': 'application/json',
     'x-sectrai-product-key': productKey,
@@ -135,4 +152,54 @@ test('durable audit append fails closed when an existing tenant/workspace chain 
   const audit = new PrismaHashChainAuditLog(prisma as never)
   await assert.rejects(() => audit.append(event), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
   assert.equal(createCalls, 0)
+})
+
+test('durable audit rejects a hash-valid prior row that adds raw fixture fields outside the metadata schema', async () => {
+  const event: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+  const forged = { ...event, detail: { sourceText: 'must never become an audit field' } }
+  let createCalls = 0
+  const prisma = {
+    $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({
+      $executeRaw: async () => 1,
+      record: {
+        findMany: async () => [{ values: { event: forged, previousHash: null, hash: hashAuditEvent(forged, null) } }],
+        create: async () => { createCalls += 1; return {} },
+      },
+    }),
+  }
+  const audit = new PrismaHashChainAuditLog(prisma as never)
+  await assert.rejects(() => audit.append(event), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(createCalls, 0)
+})
+
+test('durable proposals require a same-scope requested and succeeded audit pair before metadata storage', async () => {
+  const succeeded: ConnectorAuditEvent = {
+    type: 'connector.run.succeeded', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: { requestedAuditHash: 'a'.repeat(64) },
+  }
+  const succeededHash = hashAuditEvent(succeeded, null)
+  let artifactCreates = 0
+  const prisma = {
+    $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({
+      $executeRaw: async () => 1,
+      record: {
+        findMany: async () => [{ values: { event: succeeded, previousHash: null, hash: succeededHash } }],
+        create: async () => { artifactCreates += 1; return {} },
+      },
+    }),
+  }
+  const artifacts = new PrismaTranslationArtifactStore(prisma as never)
+  await assert.rejects(() => artifacts.proposeAndAudit({
+    product,
+    workspaceId,
+    actor: 'maker@example.test',
+    connectorId: 'translation-text-synthetic',
+    proposal: runResult().artifact!,
+    runAuditHash: succeededHash,
+    audit: { scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString() },
+  }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_RUN_AUDIT_LINK_INVALID')
+  assert.equal(artifactCreates, 0)
 })
