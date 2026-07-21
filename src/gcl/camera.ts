@@ -10,6 +10,7 @@ export const CAMERA_SCOPE = 'camera:observe' as const
 export const CAMERA_REVIEW_PACKET_VERSION = 'synthetic-camera-review-packet-v1' as const
 export const CAMERA_REVIEW_RECEIPT_VERSION = 'synthetic-camera-review-receipt-v1' as const
 export const CAMERA_REVIEW_AUDIT_WITNESS_VERSION = 'synthetic-camera-review-audit-witness-v1' as const
+export const CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION = 'synthetic-camera-review-audit-trail-witness-v1' as const
 
 export type AdosCameraControl = {
   id: `ADOS-${string}`
@@ -29,8 +30,8 @@ export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.free
   { id: 'ADOS-05', control: 'PURPOSE_BOUND_CONSENT', enforcement: 'A granted synthetic KVKK consent assertion must match the selected fixture and purpose.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'The governed run requires owner approval and separate request/check actors; review rejects the original maker.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIAL_INTERFACE', enforcement: 'The adapter has no camera SDK, network client, stream URL, credential, or provider configuration surface.' },
-  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D4 only read-checks a caller-supplied entry.' },
-  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipt, and D4 witness record only an approved or rejected decision; action, notification, publication, and handoff remain not sent.' },
+  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment.' },
+  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipt, and D4/D5 witnesses record only an approved or rejected decision; action, notification, publication, and handoff remain not sent.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or camera connection is part of this connector.' },
 ])
 
@@ -126,6 +127,25 @@ export type CameraReviewAuditWitness = {
   auditHash: string
   previousAuditHash: string | null
   state: 'SYNTHETIC_REVIEW_AUDIT_ENTRY_VERIFIED_NO_ACTION'
+  rawMediaIncluded: false
+  automaticAction: false
+  notification: 'NOT_SENT'
+  publication: 'NOT_PUBLISHED'
+}
+
+/**
+ * D5's minimized return value after a caller-supplied requested/succeeded/
+ * owner-review segment has been checked. It does not prove storage state,
+ * authorize an action, or carry a replayable capability.
+ */
+export type CameraReviewAuditTrailWitness = {
+  version: typeof CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION
+  reviewId: string
+  requestedAuditHash: string
+  succeededAuditHash: string
+  reviewAuditHash: string
+  predecessorHash: string | null
+  state: 'SYNTHETIC_REVIEW_AUDIT_TRAIL_VERIFIED_NO_ACTION'
   rawMediaIncluded: false
   automaticAction: false
   notification: 'NOT_SENT'
