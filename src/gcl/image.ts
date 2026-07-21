@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, FamilySafetyError, OwnerGateError } from './errors.js'
-import type { AuditLog, Connector, ConnectorResult, ConnectorRunContext } from './types.js'
+import type { ImageOwnerReviewDecisionEvent, ImageOwnerReviewLedger } from './image-review-ledger.js'
+import type { Connector, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export const IMAGE_TTI_CONNECTOR_ID = 'image-tti'
 /** GM3 deliberately has no live-provider code path. Any other value is rejected. */
@@ -360,16 +361,16 @@ function assertOwnerReviewContext(candidate: SyntheticImageCandidate, context: I
   return occurredAt
 }
 
-function assertOwnerReviewRequest(candidate: unknown, ownerApproved: boolean, actor: unknown, auditLog: unknown, context: ImageOwnerReviewContext): { candidate: SyntheticImageCandidate; actor: string; occurredAt: Date } {
+function assertOwnerReviewRequest(candidate: unknown, ownerApproved: boolean, actor: unknown, reviewLedger: unknown, context: ImageOwnerReviewContext): { candidate: SyntheticImageCandidate; actor: string; occurredAt: Date } {
   if (!ownerApproved) throw new OwnerGateError()
   if (!isSafeIdentifier(actor)) throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
   assertSyntheticCandidate(candidate)
   if (actor === candidate.requestedBy) throw new OwnerGateError('MAKER_CHECKER_SEPARATION_REQUIRED')
-  if (!auditLog || typeof auditLog !== 'object' || typeof (auditLog as AuditLog).append !== 'function') throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_AUDIT_UNAVAILABLE')
+  if (!reviewLedger || typeof reviewLedger !== 'object' || typeof (reviewLedger as ImageOwnerReviewLedger).appendDecision !== 'function') throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
   return { candidate, actor, occurredAt: assertOwnerReviewContext(candidate, context) }
 }
 
-function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected', candidate: SyntheticImageCandidate, actor: string, occurredAt: Date, context: ImageOwnerReviewContext, detail: Record<string, unknown>) {
+function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected', candidate: SyntheticImageCandidate, actor: string, occurredAt: Date, context: ImageOwnerReviewContext, detail: Record<string, unknown>): ImageOwnerReviewDecisionEvent {
   return {
     type,
     connectorId: IMAGE_TTI_CONNECTOR_ID,
@@ -387,13 +388,13 @@ function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.ar
 
 /**
  * Converts only a pending owner-review candidate into an owner-liked artifact
- * and appends the decision to the same per-workspace audit chain. The maker
- * cannot self-approve. The artifact remains blocked from publication.
+ * and atomically persists one terminal receipt with the same audit event. The
+ * maker cannot self-approve. The artifact remains blocked from publication.
  */
-export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate, ownerApproved: boolean, actor: string, auditLog: AuditLog, context: ImageOwnerReviewContext): Promise<OwnerLikedImageArtifact> {
-  const request = assertOwnerReviewRequest(candidate, ownerApproved, actor, auditLog, context)
+export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate, ownerApproved: boolean, actor: string, reviewLedger: ImageOwnerReviewLedger, context: ImageOwnerReviewContext): Promise<OwnerLikedImageArtifact> {
+  const request = assertOwnerReviewRequest(candidate, ownerApproved, actor, reviewLedger, context)
   const artifactId = `owner-liked-${candidate.candidateId}`
-  const audit = await auditLog.append(reviewAuditEvent('connector.artifact.owner_liked', request.candidate, request.actor, request.occurredAt, context, { artifactId, ownerReview: 'liked' }))
+  const audit = await reviewLedger.appendDecision(reviewAuditEvent('connector.artifact.owner_liked', request.candidate, request.actor, request.occurredAt, context, { artifactId, ownerReview: 'liked' }))
   return {
     artifactId,
     candidateId: request.candidate.candidateId,
@@ -409,14 +410,14 @@ export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate
 /**
  * Records a terminal rejection without returning an artifact URI or preview.
  * Rejection reasons are a closed enum so owner-supplied text cannot enter the
- * audit chain. Persisting/replay-protecting this terminal receipt remains the
- * authenticated host's responsibility; this connector never exposes a route.
+ * audit chain and a replay-protected terminal receipt. This connector never
+ * exposes a route, authenticates an actor, or offers a publication path.
  */
-export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandidate, ownerApproved: boolean, actor: string, reason: ImageRejectionReason, auditLog: AuditLog, context: ImageOwnerReviewContext): Promise<OwnerRejectedImageReview> {
-  const request = assertOwnerReviewRequest(candidate, ownerApproved, actor, auditLog, context)
+export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandidate, ownerApproved: boolean, actor: string, reason: ImageRejectionReason, reviewLedger: ImageOwnerReviewLedger, context: ImageOwnerReviewContext): Promise<OwnerRejectedImageReview> {
+  const request = assertOwnerReviewRequest(candidate, ownerApproved, actor, reviewLedger, context)
   if (reason !== 'NOT_SUITABLE' && reason !== 'SAFETY_CONCERN' && reason !== 'NEEDS_REVISION') throw new ConnectorInputError('INVALID_IMAGE_REJECTION_REASON')
   const reviewId = `owner-rejected-${request.candidate.candidateId}`
-  const audit = await auditLog.append(reviewAuditEvent('connector.artifact.owner_rejected', request.candidate, request.actor, request.occurredAt, context, { reviewId, ownerReview: 'rejected', reason }))
+  const audit = await reviewLedger.appendDecision(reviewAuditEvent('connector.artifact.owner_rejected', request.candidate, request.actor, request.occurredAt, context, { reviewId, ownerReview: 'rejected', reason }))
   return {
     reviewId,
     candidateId: request.candidate.candidateId,

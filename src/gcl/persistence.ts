@@ -22,7 +22,7 @@ export type GclRecordTransaction = {
   $executeRaw(query: TemplateStringsArray, ...values: unknown[]): Promise<unknown>
   record: {
     findFirst(input: { where: { product: string; workspaceId: string; moduleId: string }; orderBy: Array<{ createdAt: 'desc' } | { id: 'desc' }> }): Promise<GclStoredRecord | null>
-    findMany(input: { where: { product: string; workspaceId: string; moduleId: string; createdAt: { gte: Date } }; select: { values: true } }): Promise<Array<Pick<GclStoredRecord, 'values'>>>
+    findMany(input: { where: { product: string; workspaceId: string; moduleId: string; createdAt?: { gte: Date } }; select: { values: true } }): Promise<Array<Pick<GclStoredRecord, 'values'>>>
     create(input: { data: GclRecordData }): Promise<unknown>
   }
 }
