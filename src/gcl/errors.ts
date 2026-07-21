@@ -32,3 +32,8 @@ export class ConnectorUpstreamError extends GclError {
 export class ConnectorInputError extends GclError {
   constructor(message = 'INVALID_CONNECTOR_INPUT') { super(message, 422, 'connector_input_invalid') }
 }
+
+/** A proposal maker cannot be the sole checker of the same synthetic plan. */
+export class MakerCheckerError extends GclError {
+  constructor(message = 'INDEPENDENT_OWNER_REVIEW_REQUIRED') { super(message, 403, 'independent_owner_review_required') }
+}

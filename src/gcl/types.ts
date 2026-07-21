@@ -52,7 +52,7 @@ export interface Connector<TInput = unknown, TData = unknown> {
 }
 
 export type ConnectorAuditEvent = {
-  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed'
+  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'connector.market.owner_reviewed'
   connectorId: string
   product: string
   workspaceId: string
