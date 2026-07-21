@@ -22,6 +22,8 @@ const AUDIT_WORKTREE_ROOT = '/home/tayla/projects/_wt'
 const GCL_ROOT = 'src/gcl/'
 /** `node:util` is limited to Camera's in-process proxy detection. */
 const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
+/** Prisma is permitted only as an erased TypeScript type import in the local persistence seam. */
+const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
 
 /*
  * These are immutable local Git snapshots from the D1 through D5 audit batches.
@@ -64,12 +66,12 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D4', name: 'Language education', revision: '5a16014', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '1a84c98cd3183e6ba60f55b9b1c53b8ff0159142', registryBlob: '1c57c070aa37148134e21310aa258857c5500687', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
   { batch: 'D4', name: 'Camera', revision: '1102d32', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: 'cee7f14571281122917ae038704d6f995e809f99', registryBlob: 'b8787e9af75503bb5b1f5b0c8269545846dfaa95', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
   { batch: 'D5', name: 'RA OCR', revision: '1540e2e', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: '7cb3bffcee754b3b7b3168214cfd9e483599d96e', registryBlob: '684026b637562c2b820bc7c4ae49d5a2b4bb4598', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
-  { batch: 'D5', name: 'RA image', revision: 'e0bbd31', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: '2ad02996fa62777794af149e3e0879354ac3e90c', registryBlob: '76221dc13d588bd7a042735badf6bc825b573ca3', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D5', name: 'RA image', revision: 'e0bbd31', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: '2ad02996fa62777794af149e3e0879354ac3e90c', registryBlob: '76221dc13d588bd7a042735badf6bc825b573ca3', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
   { batch: 'D5', name: 'RA 3D/game', revision: '1e3edc2', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: '6e12d3a0d04a72df47f92d248ad5277ca8c9c102', registryBlob: 'd39c1a771ccacb0a13b354626fc054bdeca113f2', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
   { batch: 'D5', name: 'RA market', revision: 'd9a7677', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: '7a63111faefa0e879f8cffb983cdfc3660f4104c', registryBlob: '4df08cd04321797b8522029a4754926f4fa715df', hardDeniesLiveOptIn: true, quotaFailureAudited: false },
   { batch: 'D5', name: 'RFID', revision: '146539a', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: '4dc6d48c4c6b8d7dcad424e080c3db2f47d583fa', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
-  { batch: 'D5', name: 'Translation', revision: 'cc63f92', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4bf8b862b22ddb9e0aaeff25f62e3f00123a9345', registryBlob: 'f8ba8b74b1c8945d5ff26a32de776a25cd5221a3', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
-  { batch: 'D5', name: 'Language education', revision: 'f1dff88', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '73ae75585a82ec7734c1d3da52bedd48d0a2ef4d', registryBlob: '1c57c070aa37148134e21310aa258857c5500687', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D5', name: 'Translation', revision: 'cc63f92', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4bf8b862b22ddb9e0aaeff25f62e3f00123a9345', registryBlob: 'f8ba8b74b1c8945d5ff26a32de776a25cd5221a3', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D5', name: 'Language education', revision: 'f1dff88', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '73ae75585a82ec7734c1d3da52bedd48d0a2ef4d', registryBlob: '1c57c070aa37148134e21310aa258857c5500687', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
   { batch: 'D5', name: 'Camera', revision: '9228cd5', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '864abf2b2902d3512d630473ee88c9d111f7391d', registryBlob: 'b8787e9af75503bb5b1f5b0c8269545846dfaa95', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
 ]
 
@@ -146,9 +148,31 @@ function assertNoRuntimeEscape(source: string, name: string): void {
   assert.doesNotMatch(code, /(?:process\s*(?:\.|\?\.)\s*env|environment)\s*(?:\.|\?\.)\s*[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|BEARER)[A-Z0-9_]*/i, `${name} must not read a credential-like environment variable`)
 }
 
+function allImportsOf(source: string, importedPath: string): readonly string[] {
+  const escapedPath = importedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const imports = [...sourceCode(source).matchAll(new RegExp(`\\b(?:import|export)\\s+([^;'"\\n]+?)\\s+from\\s+['"]${escapedPath}['"]`, 'g'))]
+  return imports.map((match) => match[1]?.trim() ?? '')
+}
+
+function isTypeOnlyImportClause(clause: string): boolean {
+  if (clause.startsWith('type ')) return true
+  if (!clause.startsWith('{') || !clause.endsWith('}')) return false
+  const namedImports = clause.slice(1, -1).split(',').map((item) => item.trim()).filter(Boolean)
+  return namedImports.length > 0 && namedImports.every((item) => /^type\s+[A-Za-z_$][A-Za-z0-9_$]*(?:\s+as\s+[A-Za-z_$][A-Za-z0-9_$]*)?$/.test(item))
+}
+
+function isAllowedTypeOnlyImport(source: string, importedPath: string): boolean {
+  if (!ALLOWED_TYPE_ONLY_GCL_IMPORTS.has(importedPath)) return false
+  const imports = allImportsOf(source, importedPath)
+  return imports.length > 0 && imports.every(isTypeOnlyImportClause)
+}
+
 function assertAllowedImports(source: string, name: string): void {
   for (const importedPath of staticModuleSpecifiers(source)) {
-    if (!importedPath.startsWith('.')) assert.equal(ALLOWED_NONLOCAL_GCL_IMPORTS.has(importedPath), true, `${name} imports prohibited runtime module ${importedPath}`)
+    if (!importedPath.startsWith('.')) {
+      const allowed = ALLOWED_NONLOCAL_GCL_IMPORTS.has(importedPath) || isAllowedTypeOnlyImport(source, importedPath)
+      assert.equal(allowed, true, `${name} imports prohibited runtime module ${importedPath}`)
+    }
   }
 }
 
@@ -174,7 +198,10 @@ function auditCapturesQuotaFailure(registry: string): boolean {
 }
 
 function hardDeniesLiveOptIn(connector: string): boolean {
-  return /if \((?:this\.)?config\.liveEnabled(?:\)| !== false\)) throw new ConnectorUnavailableError/.test(connector)
+  const directRejection = /if \((?:this\.)?config\.liveEnabled(?:\)| !== false\)) throw new ConnectorUnavailableError/.test(connector)
+  const environmentPoisonPill = /Object\.hasOwn\(environment, 'GCL_[A-Z0-9_]+_LIVE_ENABLED'\)/.test(connector)
+    && /syntheticEnabled:\s*environment\.GCL_[A-Z0-9_]+_SYNTHETIC_ENABLED\s*===\s*'true'\s*&&\s*!liveOptInWasProvided/.test(connector)
+  return directRejection || environmentPoisonPill
 }
 
 function ownerDenialPrecedesReservations(registry: string): boolean {
@@ -253,5 +280,7 @@ test('D5 fail-closed safety checks reject optional reflective descriptors and co
   ]) assert.throws(() => assertNoRuntimeEscape(source, `D5 negative probe: ${source}`))
   assert.doesNotThrow(() => assertNoRuntimeEscape("const enabled = environment.GCL_RFID_SYNTHETIC_ENABLED === 'true'", 'D5 allowed synthetic configuration'))
   assert.throws(() => assertAllowedImports("import { request } from 'node:https'", 'D5 negative probe'))
+  assert.throws(() => assertAllowedImports("import { PrismaClient } from '@prisma/client'", 'D5 negative probe'))
+  assert.doesNotThrow(() => assertAllowedImports("import { type PrismaClient } from '@prisma/client'", 'D5 allowed erased type import'))
   assert.throws(() => localGclImportPaths('src/gcl/connector.ts', "import '../auth.js'"))
 })

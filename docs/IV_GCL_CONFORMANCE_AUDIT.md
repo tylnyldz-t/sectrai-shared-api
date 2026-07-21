@@ -367,3 +367,86 @@ invented; no migration is introduced; every artifact remains proposal-only;
 no JARVIS/JNC job is launched; and source/test evidence is never a live-enable
 or deployment decision. D4 loaded no credential, contacted no provider or
 network endpoint, sent nothing, and made no `main`/prod write.
+
+## D5 — next committed connector package
+
+D5 pins the next immutable package after D4: RA OCR `1540e2e`, RA image
+`e0bbd31`, RA 3D/game `1e3edc2`, RA market `d9a7677`, RFID `146539a`,
+translation `cc63f92`, language education `f1dff88`, and camera `9228cd5`.
+Voice has no later committed connector package and remains D1 evidence. The
+fixture resolves each commit and validates the SHA-1 blob IDs of both the
+connector and its governance runner before it reads their local `src/gcl`
+closure with `git show`. It neither imports target runtime code nor consults a
+mutable target worktree; uncommitted files in those worktrees cannot affect
+this result.
+
+D5 still permits only `node:crypto` and `node:util` as non-local **runtime**
+modules. The image and market closures also contain `@prisma/client` solely as
+erased TypeScript type imports in their local persistence/audit seams. The
+fixture proves each such import is type-only and has a negative probe that
+rejects a value import from the same package; it is not a database client
+allowance or a transport exception. Missing worktree/object/closure files,
+revision or blob mismatches, a non-local runtime import, egress primitive,
+credential-like configuration read, subprocess, endpoint, publish flag, or
+closure escape fails the audit.
+
+Run the full immutable audit with:
+
+```bash
+npm run test:conformance
+```
+
+| Connector | D5 source-only change/evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D5 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | v5 document-review packets reject causally inconsistent evidence-capture, issuance, consent-expiry, and evidence-expiry timelines before review audit | `requested` only | Pass | Nonconformant |
+| RA image | Success audit binds the redacted candidate-set digest; issuance and later proof revalidate the complete ordered audit chain | `requested` only | Pass | Nonconformant |
+| RA 3D/game | Exact frozen run contexts and a post-adapter synthetic result boundary reject altered result/provenance/snapshot fields before success audit serialization | `requested` only | Pass | Nonconformant |
+| RA market | The local, no-action market receipt/witness path rechecks exact caller-held audit-event/hash bindings without storage lookup or execution | `requested` only | Pass | Nonconformant |
+| RFID | Adds fixed anonymous coarse class-mix fixtures while rejecting real timing, speed, sensor, identifier, raw-count, and individual-event fields | `requested`, `failed` | Pass | Conformant |
+| Translation | Exact-schema audit rows and a maker/envelope-bound requested→succeeded artifact link reject legacy, malformed, replayed, or cross-scope metadata | `requested` only | Pass | Nonconformant |
+| Language education | Adds writing/listening fixture-reference proposals with no draft text, feedback, transcript, audio, score, or learner profile; any live-enable variable poisons the factory closed | `requested`, `failed` | Pass | Conformant |
+| Camera | A caller-held review-audit witness is exact-shape/hash checked and minimized to a fixed no-action result | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` remains deliberately narrow: the pinned source meets this IV
+synthetic governance envelope only. It does not authorize a provider, API key,
+database operation, camera/RFID device, media input, JARVIS/JNC launch,
+reservation, booking, publication, handoff, production write, or send.
+
+### D5 negative and edge evidence
+
+- The fail-closed scanner now rejects optional reflective capability recovery
+  (`Reflect?.get` and `Reflect?.['get']`) as well as optional/bracketed
+  `Object.getOwnPropertyDescriptor(s)` access to a global or environment
+  object. A stored `fetch` capability cannot evade the global/egress rule by
+  changing only the reflective syntax.
+- Computed `process.env` reads, including optional-chain and concatenated key
+  forms such as `process.env?.['SYNTHETIC_' + 'TOKEN']`, are rejected. Ordinary
+  direct synthetic limit settings remain supported; the test fixes that
+  distinction with an allowed configuration probe rather than weakening the
+  credential boundary.
+- The D5 type-only exception is itself fail closed: a type import from
+  `@prisma/client` may be scanned as part of the local source closure, while a
+  runtime/value import from it fails. This keeps the audit's runtime boundary
+  closed without hiding local persistence type definitions from source review.
+- The immutable source audit and the selected connector unit suites passed from
+  temporary Git archives at the exact D5 commits: OCR, image, 3D/game, both
+  market suites, RFID, both translation suites, language education, and camera
+  (ten test files). No integration/database test, migration, external-provider
+  test, credential, network call, device access, or send was run.
+
+### D5 remediation and ADOS boundary
+
+RA OCR, image, 3D/game, market, and translation still consume quota before the
+protected lifecycle that appends `connector.run.failed`; they require protected
+quota reservation (or an equivalent linked failure-audit path) plus a
+behavioural rejecting-quota fixture before certification. The historical D1
+Apify live-opt-in blocker remains unchanged and outside this source package.
+
+All ten ADOS rules remain enforced: no product data-plane join; synthetic,
+minimized inputs and proposal-only outputs; default-deny configuration;
+owner/maker–checker checks where applicable; audit gaps reported rather than
+invented; no migration; no publication, reservation, booking, handoff, or
+action; no JARVIS/JNC launch; and no test result is a deployment or live-enable
+decision. D5 performed only local immutable Git-object reads and unit tests;
+it loaded no credential, contacted no provider or network endpoint, sent
+nothing, and made no `main`/production write.
