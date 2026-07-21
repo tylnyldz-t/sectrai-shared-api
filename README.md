@@ -50,3 +50,7 @@ DATABASE_URL='your Neon URL' SHARED_API_KEY_HEALTH='...' npm start
 ## Safety boundary
 
 The service stores only product-owned synthetic demo records. It does not make AI calls, execute product actions, or interpret `values`. Product-level Vercel admin gates remain the outer authentication layer; this API key is a second product boundary, not a replacement for user authentication.
+
+## GM2 synthetic vision adapter
+
+`src/gcl/vision.ts` provides a non-wired, synthetic-only document-field proposal adapter based on the MagicScan form-field pattern. It accepts no raw image, camera input, credential, provider client, or live mode; it returns masked, owner-review-only proposals with `confidence: 0`. See [the GM2 contract](docs/GCL_VISION_CONTRACT.md).
