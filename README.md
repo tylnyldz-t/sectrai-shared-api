@@ -6,8 +6,10 @@ GM3 adds a synthetic-only text-to-image GCL contract. It emits local SVG
 owner-review candidates and a redacted Jarvis Creative Worker ComfyUI/SDXL
 plan shape only: `LIVE_DISABLED` is mandatory, no provider credential, graph
 execution, Docker/loopback client, or network adapter exists, and a separate
-owner checker is required before a still-unpublished liked artifact or a
-non-publishable rejection receipt can exist. See [the GM3 contract](docs/GM3_IMAGE_TTI_CONTRACT.md).
+owner checker plus a replay-protected terminal review ledger is required before
+a still-unpublished liked artifact or a non-publishable rejection receipt can
+exist. The ledger reuses existing Records and adds no migration. See [the GM3
+contract](docs/GM3_IMAGE_TTI_CONTRACT.md).
 
 ## Record contract
 

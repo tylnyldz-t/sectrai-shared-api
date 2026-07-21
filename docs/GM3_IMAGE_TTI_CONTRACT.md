@@ -29,15 +29,17 @@ only accepted mode.
 5. Each candidate is `owner-only`, `pending`, and `publication: blocked`.
    It records its maker and originating product/workspace/correlation scope.
    Only a different owner checker may call
-   `ownerLikeSyntheticImage(..., true, checker, auditLog, context)`; self
+   `ownerLikeSyntheticImage(..., true, checker, reviewLedger, context)`; self
    approval is denied. The resulting artifact is still blocked from
    publication.
 6. An independent checker may instead call
-   `ownerRejectSyntheticImage(..., true, checker, reason, auditLog, context)`.
+   `ownerRejectSyntheticImage(..., true, checker, reason, reviewLedger, context)`.
    `reason` is a closed code (`NOT_SUITABLE`, `SAFETY_CONCERN`, or
    `NEEDS_REVISION`), so free-form owner text never enters the audit chain.
    A rejection returns a terminal review receipt, not an artifact URI or image
-   preview, and remains `publication: blocked`.
+   preview, and remains `publication: blocked`. The supplied review ledger
+   accepts exactly one terminal decision per product/workspace/correlation/
+   candidate tuple.
 
 Before either terminal decision, the module fail-closes unless the candidate
 has the exact local SVG preview, synthetic URI, non-executable plan shape,
@@ -47,9 +49,13 @@ those redacted fields, preventing an accidental scope/actor/preview mix-up;
 it is an integrity check, not an authentication signature. Cross-workspace or
 correlation review, altered preview or URI, extra candidate fields (including
 a raw prompt), malformed audit log, and attempted self approval are rejected
-before an audit append. The host is still responsible for authenticating its
-actors and durably persisting the terminal receipt/replay state; this module
-has no HTTP route, database migration, or publishing path.
+before an audit append. `PrismaImageOwnerReviewLedger` writes a minimal
+terminal receipt and its audit event inside the same existing-Record
+transaction, under the existing per-workspace audit lock; a duplicate or
+opposite decision is rejected before either write. The host is still
+responsible for authenticating its actors before it grants owner approval or
+calls a decision function. This module has no HTTP route, database migration,
+or publishing path.
 
 The candidate's `creativeWorkerPlan` is intentionally **not** an executable
 Creative Worker manifest: it has no raw prompt or negative prompt, no actual
@@ -60,9 +66,12 @@ to Jarvis Creative Worker or ComfyUI.
 A host may compose the governed path with `SyntheticImageTtiConnector`,
 `ConnectorRegistry`, `GovernedConnectorRunner`, `PrismaHashChainAuditLog`, and
 `new PrismaDailyConnectorQuota(prisma, imageDailyQuotaFromEnvironment())`.
-The host must authenticate both maker and independent owner checker before it
-can set `ownerApproved: true` or call the owner-like function. This module does
-not expose an HTTP route or manage credentials.
+Terminal owner decisions additionally require
+`new PrismaImageOwnerReviewLedger(prisma)`, not a bare audit log. The host
+must authenticate both maker and independent owner checker before it can set
+`ownerApproved: true` or call an owner-decision function. `InMemoryImageOwnerReviewLedger`
+is a test seam only. This module does not expose an HTTP route or manage
+credentials.
 
 ## Synthetic-only environment contract
 
@@ -98,6 +107,10 @@ decision and must be implemented behind its own bounded approval path.
   controlled decision fields, and the blocked publication state. It never
   records the prompt, negative prompt, preview bytes, provider endpoint, or a
   credential.
+- The durable review ledger serializes on the audit lock and records one
+  terminal decision only. A replay, concurrent opposite decision, malformed
+  receipt, or malformed audit-chain tail fails closed and cannot add another
+  decision event.
 - `creativeWorkerPlan.dispatch` remains exactly
   `{ performed: false, gate: "LIVE_DISABLED", network: "not-attempted" }`.
   This package does not invoke Creative Worker, ComfyUI, Docker, loopback, a
