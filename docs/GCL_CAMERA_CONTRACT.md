@@ -39,9 +39,35 @@ The digest is deliberately unkeyed: it is an in-process mutation/tamper check, n
 
 An `approved` or `rejected` return value only records the decision in the existing scoped SHA-256 audit chain. It does not mutate the camera result; it leaves handoff, action, notification, and publication at `NOT_SENT`/`NOT_EXECUTED`. It neither consumes another quota item nor persists media or review state.
 
+## D2 — minimized review receipt
+
+The D1 library result now carries `synthetic-camera-review-receipt-v1`. It is a
+strict, minimized evidence envelope containing only the review/packet IDs,
+fixture-observation and packet digests, product/workspace digests, a digest of
+the normalized reviewer identity, decision/time, existing audit hash, and fixed
+`SYNTHETIC`/`LIVE_DISABLED`/no-action flags. The raw reviewer string, consent
+receipt, camera fixture ID, media, device information, and observations are not
+copied into the receipt.
+
+`validateCameraReviewReceipt(sourceResult, reviewedResult, context)` is also a
+library-only seam. It rebuilds D1's fixture packet and then verifies the D2
+receipt's exact shape, canonical timestamp, source packet link, data-plane
+binding, reviewer digest, fixed no-action fields, and deterministic integrity
+digest. Unknown/raw-media-shaped fields, a changed audit hash or decision,
+cross-workspace use, malformed digests, inherited/prototype-shaped inputs, and
+any changed receipt field fail closed. Validation is read-only: it consumes no
+quota, appends no audit event, opens no route, and creates no durable state.
+
+The D2 receipt digest is deliberately unkeyed. It detects accidental or
+in-process mutation only; it does not prove an audit-chain lookup, authenticate
+a reviewer, grant a capability, transfer data, send a notification, authorize a
+handoff, or permit an action. A future product-owned host would need its own
+scoped durable lookup and a separate explicit owner decision. That host is not
+implemented here.
+
 ## Audit and storage boundary
 
-The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1 adds no migration and no new persistence model.
+The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1/D2 add no migration and no new persistence model.
 
 ## ADOS 10-rule conformance
 
@@ -50,10 +76,10 @@ The existing shared `gcl-audit` and `gcl-usage` records use the product/workspac
 3. The front door default-denies absent configuration; `LIVE_DISABLED` is permanent.
 4. Unknown fields, media, device identifiers, personal identity, and biometric inference are excluded.
 5. Purpose-bound synthetic KVKK consent must match the fixture.
-6. Owner approval plus maker–checker separation are required; D1 rejects the original maker as reviewer.
+6. Owner approval plus maker–checker separation are required; D1 rejects the original maker as reviewer and D2 minimizes that review evidence.
 7. The code has no device SDK, transport, network client, credential, or provider interface.
 8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema.
-9. Owner review records no handoff, command, notification, publication, or automatic action.
+9. Owner review and its D2 receipt record no handoff, command, notification, publication, or automatic action.
 10. This branch contains no live launch, production migration, main/prod write, or camera hardware path.
 
 ## Explicit non-goals

@@ -6,6 +6,7 @@ export const CAMERA_CONNECTOR_ID = 'camera-observation'
 export const CAMERA_LIVE_STATUS = 'LIVE_DISABLED' as const
 export const CAMERA_SCOPE = 'camera:observe' as const
 export const CAMERA_REVIEW_PACKET_VERSION = 'synthetic-camera-review-packet-v1' as const
+export const CAMERA_REVIEW_RECEIPT_VERSION = 'synthetic-camera-review-receipt-v1' as const
 
 export type AdosCameraControl = {
   id: `ADOS-${string}`
@@ -87,6 +88,31 @@ export type CameraObservationResult = {
   reviewPacket: SyntheticCameraReviewPacket
 }
 
+/**
+ * A minimized, library-only proof that a D1 review was recorded. It is not a
+ * credential, signature, delivery instruction, or authorization to act.
+ */
+export type SyntheticCameraReviewReceipt = {
+  version: typeof CAMERA_REVIEW_RECEIPT_VERSION
+  receiptId: string
+  scopeBinding: { productDigest: string; workspaceDigest: string }
+  reviewId: string
+  observationDigest: string
+  reviewPacketIntegrityDigest: string
+  reviewerDigest: string
+  decision: 'approved' | 'rejected'
+  occurredAt: string
+  mode: 'SYNTHETIC'
+  liveStatus: typeof CAMERA_LIVE_STATUS
+  disposition: 'SYNTHETIC_REVIEW_RECORDED_NO_ACTION'
+  rawMediaIncluded: false
+  automaticAction: false
+  notification: 'NOT_SENT'
+  publication: 'NOT_PUBLISHED'
+  auditHash: string
+  integrityDigest: string
+}
+
 export type ReviewedCameraObservation = {
   reviewId: string
   decision: 'approved' | 'rejected'
@@ -105,6 +131,7 @@ export type ReviewedCameraObservation = {
     publication: 'NOT_PUBLISHED'
   }
   auditHash: string
+  reviewReceipt: SyntheticCameraReviewReceipt
 }
 
 export type SyntheticCameraConnectorConfig = {
@@ -123,6 +150,7 @@ type CameraFixture = {
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const CAMERA_REVIEW_ID_PATTERN = /^synthetic-camera-review-[a-f0-9]{24}$/
+const CAMERA_REVIEW_RECEIPT_ID_PATTERN = /^synthetic-camera-review-receipt-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 
@@ -154,7 +182,9 @@ function environmentPositiveInteger(value: string | undefined): number | undefin
 function digest(value: string): string { return createHash('sha256').update(value).digest('hex') }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
 }
 
 function exactObject(value: unknown, allowed: readonly string[], error: string): Record<string, unknown> {
@@ -265,6 +295,76 @@ function reviewPacketFor(result: Omit<CameraObservationResult, 'reviewPacket'>, 
   }
 }
 
+type ReviewedCameraObservationDetails = Omit<ReviewedCameraObservation, 'reviewReceipt'>
+
+function reviewStateFor(decision: 'approved' | 'rejected'): ReviewedCameraObservation['ownerReview']['state'] {
+  return decision === 'approved' ? 'APPROVED_FOR_SYNTHETIC_OBSERVATION_ONLY' : 'REJECTED_FOR_SYNTHETIC_OBSERVATION_ONLY'
+}
+
+function canonicalIsoInstant(value: unknown, error: string): string {
+  const instant = requiredString(value, error, 30)
+  const parsed = new Date(instant)
+  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== instant) throw new ConnectorInputError(error)
+  return instant
+}
+
+function cameraReviewHandoffForReceipt(value: unknown): ReviewedCameraObservation['handoff'] {
+  const handoff = exactObject(value, ['state', 'rawMediaIncluded', 'sent', 'automaticAction', 'notification', 'publication'], 'INVALID_CAMERA_REVIEW_RECEIPT_HANDOFF')
+  if (handoff.state !== 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED' || handoff.rawMediaIncluded !== false || handoff.sent !== false || handoff.automaticAction !== false || handoff.notification !== 'NOT_SENT' || handoff.publication !== 'NOT_PUBLISHED') {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_RECEIPT_HANDOFF')
+  }
+  return { state: 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED', rawMediaIncluded: false, sent: false, automaticAction: false, notification: 'NOT_SENT', publication: 'NOT_PUBLISHED' }
+}
+
+function reviewReceiptIntegrityMaterial(receipt: Omit<SyntheticCameraReviewReceipt, 'receiptId' | 'integrityDigest'>): Record<string, unknown> {
+  return {
+    version: receipt.version,
+    scopeBinding: receipt.scopeBinding,
+    reviewId: receipt.reviewId,
+    observationDigest: receipt.observationDigest,
+    reviewPacketIntegrityDigest: receipt.reviewPacketIntegrityDigest,
+    reviewerDigest: receipt.reviewerDigest,
+    decision: receipt.decision,
+    occurredAt: receipt.occurredAt,
+    mode: receipt.mode,
+    liveStatus: receipt.liveStatus,
+    disposition: receipt.disposition,
+    rawMediaIncluded: receipt.rawMediaIncluded,
+    automaticAction: receipt.automaticAction,
+    notification: receipt.notification,
+    publication: receipt.publication,
+    auditHash: receipt.auditHash,
+  }
+}
+
+function reviewReceiptFor(result: CameraObservationResult, reviewed: ReviewedCameraObservationDetails, context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): SyntheticCameraReviewReceipt {
+  const scoped = cameraReviewContext(context)
+  const material: Omit<SyntheticCameraReviewReceipt, 'receiptId' | 'integrityDigest'> = {
+    version: CAMERA_REVIEW_RECEIPT_VERSION,
+    scopeBinding: { productDigest: digest(scoped.product), workspaceDigest: digest(scoped.workspaceId) },
+    reviewId: reviewed.reviewId,
+    observationDigest: result.reviewPacket.observationDigest,
+    reviewPacketIntegrityDigest: reviewed.reviewPacketIntegrityDigest,
+    reviewerDigest: digest(reviewed.ownerReview.reviewer),
+    decision: reviewed.decision,
+    occurredAt: reviewed.ownerReview.occurredAt,
+    mode: 'SYNTHETIC',
+    liveStatus: CAMERA_LIVE_STATUS,
+    disposition: 'SYNTHETIC_REVIEW_RECORDED_NO_ACTION',
+    rawMediaIncluded: false,
+    automaticAction: false,
+    notification: 'NOT_SENT',
+    publication: 'NOT_PUBLISHED',
+    auditHash: reviewed.auditHash,
+  }
+  const integrityDigest = digest(JSON.stringify(reviewReceiptIntegrityMaterial(material)))
+  return {
+    ...material,
+    receiptId: `synthetic-camera-review-receipt-${digest(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
+    integrityDigest,
+  }
+}
+
 function cameraObservationForReview(value: unknown): CameraObservationResult['observation'] {
   const observation = exactObject(value, ['category', 'severity', 'findingCode', 'summary'], 'INVALID_CAMERA_REVIEW_OBSERVATION')
   const category = observation.category
@@ -340,6 +440,94 @@ export function validateCameraObservationForReview(value: unknown, context: Pick
   return { ...normalizedWithoutPacket, reviewPacket }
 }
 
+function reviewedCameraObservationForReceipt(value: unknown): { reviewed: ReviewedCameraObservationDetails; receipt: unknown } {
+  const candidate = exactObject(value, ['reviewId', 'decision', 'reviewPacketIntegrityDigest', 'ownerReview', 'handoff', 'auditHash', 'reviewReceipt'], 'UNEXPECTED_CAMERA_REVIEW_RECEIPT_FIELD')
+  const reviewId = requiredString(candidate.reviewId, 'INVALID_CAMERA_REVIEW_RECEIPT', 64)
+  const reviewPacketIntegrityDigest = requiredString(candidate.reviewPacketIntegrityDigest, 'INVALID_CAMERA_REVIEW_RECEIPT', 64)
+  const auditHash = requiredString(candidate.auditHash, 'INVALID_CAMERA_REVIEW_RECEIPT', 64)
+  if (!CAMERA_REVIEW_ID_PATTERN.test(reviewId) || !SHA256_PATTERN.test(reviewPacketIntegrityDigest) || !SHA256_PATTERN.test(auditHash)) {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_RECEIPT')
+  }
+  if (candidate.decision !== 'approved' && candidate.decision !== 'rejected') throw new ConnectorInputError('INVALID_CAMERA_REVIEW_RECEIPT')
+  const ownerReview = exactObject(candidate.ownerReview, ['state', 'reviewer', 'occurredAt'], 'INVALID_CAMERA_REVIEW_RECEIPT_OWNER_REVIEW')
+  const reviewer = normalizedActor(ownerReview.reviewer)
+  const occurredAt = canonicalIsoInstant(ownerReview.occurredAt, 'INVALID_CAMERA_REVIEW_RECEIPT_OWNER_REVIEW')
+  if (!reviewer || reviewer !== ownerReview.reviewer || ownerReview.state !== reviewStateFor(candidate.decision)) {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_RECEIPT_OWNER_REVIEW')
+  }
+  return {
+    reviewed: {
+      reviewId,
+      decision: candidate.decision,
+      reviewPacketIntegrityDigest,
+      ownerReview: { state: reviewStateFor(candidate.decision), reviewer, occurredAt },
+      handoff: cameraReviewHandoffForReceipt(candidate.handoff),
+      auditHash,
+    },
+    receipt: candidate.reviewReceipt,
+  }
+}
+
+function cameraReviewReceiptForReview(value: unknown): SyntheticCameraReviewReceipt {
+  const receipt = exactObject(value, ['version', 'receiptId', 'scopeBinding', 'reviewId', 'observationDigest', 'reviewPacketIntegrityDigest', 'reviewerDigest', 'decision', 'occurredAt', 'mode', 'liveStatus', 'disposition', 'rawMediaIncluded', 'automaticAction', 'notification', 'publication', 'auditHash', 'integrityDigest'], 'UNEXPECTED_CAMERA_REVIEW_RECEIPT_FIELD')
+  const scopeBinding = exactObject(receipt.scopeBinding, ['productDigest', 'workspaceDigest'], 'INVALID_CAMERA_REVIEW_RECEIPT_SCOPE')
+  const productDigest = requiredString(scopeBinding.productDigest, 'INVALID_CAMERA_REVIEW_RECEIPT_SCOPE', 64)
+  const workspaceDigest = requiredString(scopeBinding.workspaceDigest, 'INVALID_CAMERA_REVIEW_RECEIPT_SCOPE', 64)
+  const receiptId = requiredString(receipt.receiptId, 'INVALID_CAMERA_REVIEW_RECEIPT', 72)
+  const reviewId = requiredString(receipt.reviewId, 'INVALID_CAMERA_REVIEW_RECEIPT', 64)
+  const observationDigest = requiredString(receipt.observationDigest, 'INVALID_CAMERA_REVIEW_RECEIPT', 64)
+  const reviewPacketIntegrityDigest = requiredString(receipt.reviewPacketIntegrityDigest, 'INVALID_CAMERA_REVIEW_RECEIPT', 64)
+  const reviewerDigest = requiredString(receipt.reviewerDigest, 'INVALID_CAMERA_REVIEW_RECEIPT', 64)
+  const auditHash = requiredString(receipt.auditHash, 'INVALID_CAMERA_REVIEW_RECEIPT', 64)
+  const integrityDigest = requiredString(receipt.integrityDigest, 'INVALID_CAMERA_REVIEW_RECEIPT', 64)
+  const occurredAt = canonicalIsoInstant(receipt.occurredAt, 'INVALID_CAMERA_REVIEW_RECEIPT')
+  if (!SHA256_PATTERN.test(productDigest) || !SHA256_PATTERN.test(workspaceDigest) || !CAMERA_REVIEW_RECEIPT_ID_PATTERN.test(receiptId) || !CAMERA_REVIEW_ID_PATTERN.test(reviewId) || !SHA256_PATTERN.test(observationDigest) || !SHA256_PATTERN.test(reviewPacketIntegrityDigest) || !SHA256_PATTERN.test(reviewerDigest) || !SHA256_PATTERN.test(auditHash) || !SHA256_PATTERN.test(integrityDigest)) {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_RECEIPT')
+  }
+  if (receipt.version !== CAMERA_REVIEW_RECEIPT_VERSION || (receipt.decision !== 'approved' && receipt.decision !== 'rejected') || receipt.mode !== 'SYNTHETIC' || receipt.liveStatus !== CAMERA_LIVE_STATUS || receipt.disposition !== 'SYNTHETIC_REVIEW_RECORDED_NO_ACTION' || receipt.rawMediaIncluded !== false || receipt.automaticAction !== false || receipt.notification !== 'NOT_SENT' || receipt.publication !== 'NOT_PUBLISHED') {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_RECEIPT')
+  }
+  return {
+    version: CAMERA_REVIEW_RECEIPT_VERSION,
+    receiptId,
+    scopeBinding: { productDigest, workspaceDigest },
+    reviewId,
+    observationDigest,
+    reviewPacketIntegrityDigest,
+    reviewerDigest,
+    decision: receipt.decision,
+    occurredAt,
+    mode: 'SYNTHETIC',
+    liveStatus: CAMERA_LIVE_STATUS,
+    disposition: 'SYNTHETIC_REVIEW_RECORDED_NO_ACTION',
+    rawMediaIncluded: false,
+    automaticAction: false,
+    notification: 'NOT_SENT',
+    publication: 'NOT_PUBLISHED',
+    auditHash,
+    integrityDigest,
+  }
+}
+
+/**
+ * D2 revalidates a minimized D1 review receipt without reading storage or
+ * performing any action. It is an in-process mutation check, not audit-chain
+ * lookup, authorization, delivery, or a substitute for a future owner host.
+ */
+export function validateCameraReviewReceipt(sourceResult: unknown, value: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): ReviewedCameraObservation {
+  const source = validateCameraObservationForReview(sourceResult, context)
+  const candidate = reviewedCameraObservationForReceipt(value)
+  const receipt = cameraReviewReceiptForReview(candidate.receipt)
+  const expected = reviewReceiptFor(source, candidate.reviewed, context)
+  if (candidate.reviewed.reviewId !== source.reviewPacket.reviewId || candidate.reviewed.reviewPacketIntegrityDigest !== source.reviewPacket.integrityDigest) {
+    throw new ConnectorInputError('CAMERA_REVIEW_RECEIPT_PACKET_MISMATCH')
+  }
+  if (receipt.integrityDigest !== digest(JSON.stringify(reviewReceiptIntegrityMaterial(receipt))) || receipt.receiptId !== expected.receiptId || receipt.integrityDigest !== expected.integrityDigest) {
+    throw new ConnectorInputError('CAMERA_REVIEW_RECEIPT_INTEGRITY_MISMATCH')
+  }
+  return { ...candidate.reviewed, reviewReceipt: expected }
+}
+
 /**
  * Records an independent synthetic-only review decision. It never mutates a
  * camera result, starts an action, contacts a device, sends a handoff, or
@@ -367,14 +555,15 @@ export async function independentlyReviewCameraObservation(result: CameraObserva
       action: 'NOT_EXECUTED', notification: 'NOT_SENT', publication: 'NOT_PUBLISHED', handoff: 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED',
     },
   })
-  return {
+  const reviewed: ReviewedCameraObservationDetails = {
     reviewId: normalized.reviewPacket.reviewId,
     decision,
     reviewPacketIntegrityDigest: normalized.reviewPacket.integrityDigest,
-    ownerReview: { state: decision === 'approved' ? 'APPROVED_FOR_SYNTHETIC_OBSERVATION_ONLY' : 'REJECTED_FOR_SYNTHETIC_OBSERVATION_ONLY', reviewer: normalizedReviewer, occurredAt },
+    ownerReview: { state: reviewStateFor(decision), reviewer: normalizedReviewer, occurredAt },
     handoff: { state: 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED', rawMediaIncluded: false, sent: false, automaticAction: false, notification: 'NOT_SENT', publication: 'NOT_PUBLISHED' },
     auditHash: audit.hash,
   }
+  return { ...reviewed, reviewReceipt: reviewReceiptFor(normalized, reviewed, context) }
 }
 
 /**

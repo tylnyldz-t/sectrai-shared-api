@@ -6,7 +6,7 @@ import { ownerTokenMatches } from '../src/gcl/owner.js'
 import { cameraDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import type { ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
-import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, SyntheticCameraConnector, cameraConnectorFromEnvironment, independentlyReviewCameraObservation, validateCameraObservationForReview, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
+import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
 const context: ConnectorRunContext = {
@@ -114,11 +114,63 @@ test('D1 review packet permits only an independent owner decision and records no
   assert.equal(reviewed.handoff.notification, 'NOT_SENT')
   assert.equal(reviewed.handoff.publication, 'NOT_PUBLISHED')
   assert.equal(reviewed.auditHash, setup.audit.entries[2]?.hash)
+  assert.equal(reviewed.reviewReceipt.version, CAMERA_REVIEW_RECEIPT_VERSION)
+  assert.equal(reviewed.reviewReceipt.reviewId, result.data.reviewPacket.reviewId)
+  assert.equal(reviewed.reviewReceipt.observationDigest, result.data.reviewPacket.observationDigest)
+  assert.equal(reviewed.reviewReceipt.reviewPacketIntegrityDigest, result.data.reviewPacket.integrityDigest)
+  assert.equal(reviewed.reviewReceipt.disposition, 'SYNTHETIC_REVIEW_RECORDED_NO_ACTION')
+  assert.equal(reviewed.reviewReceipt.rawMediaIncluded, false)
+  assert.equal(reviewed.reviewReceipt.automaticAction, false)
+  assert.equal(reviewed.reviewReceipt.notification, 'NOT_SENT')
+  assert.equal(reviewed.reviewReceipt.publication, 'NOT_PUBLISHED')
+  assert.equal(JSON.stringify(reviewed.reviewReceipt).includes('reviewer@example.test'), false)
+  assert.deepEqual(validateCameraReviewReceipt(result.data, reviewed, context), reviewed)
   assert.equal(setup.audit.entries[2]?.event.type, 'connector.camera.owner_reviewed')
   assert.equal(setup.audit.entries[2]?.event.detail.reviewPacketIntegrityDigest, result.data.reviewPacket.integrityDigest)
   assert.equal(JSON.stringify(setup.audit.entries[2]).includes('synthetic-loading-dock-001'), false)
   assert.equal((setup.quota as TestQuota).requests.length, 1)
   assert.equal(setup.audit.entries[2]?.previousHash, setup.audit.entries[1]?.hash)
+})
+
+test('D2 receipt validation rejects mutated, raw-shaped, cross-scope, and prototype-shaped review evidence without writes', async () => {
+  const setup = runnerFor()
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const reviewed = await independentlyReviewCameraObservation(result.data, 'rejected', true, 'reviewer@example.test', setup.audit, context)
+  const clone = () => structuredClone(reviewed)
+
+  const alteredDigest = clone()
+  alteredDigest.reviewReceipt.reviewerDigest = '0'.repeat(64)
+  assert.throws(
+    () => validateCameraReviewReceipt(result.data, alteredDigest, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_REVIEW_RECEIPT_INTEGRITY_MISMATCH',
+  )
+
+  const alteredAudit = clone()
+  alteredAudit.reviewReceipt.auditHash = '1'.repeat(64)
+  assert.throws(
+    () => validateCameraReviewReceipt(result.data, alteredAudit, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_REVIEW_RECEIPT_INTEGRITY_MISMATCH',
+  )
+
+  const rawShaped = clone() as typeof reviewed & { reviewReceipt: typeof reviewed.reviewReceipt & { snapshot?: string } }
+  rawShaped.reviewReceipt.snapshot = 'data:image/png;base64,not-accepted'
+  assert.throws(
+    () => validateCameraReviewReceipt(result.data, rawShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_RECEIPT_FIELD',
+  )
+
+  assert.throws(
+    () => validateCameraReviewReceipt(result.data, clone(), { ...context, workspaceId: 'another-workspace' }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_REVIEW_PACKET_SCOPE_MISMATCH',
+  )
+
+  const inheritedResult = Object.create(result.data) as CameraObservationResult
+  assert.throws(
+    () => validateCameraReviewReceipt(inheritedResult, clone(), context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_RESULT_FIELD',
+  )
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
 })
 
 test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
