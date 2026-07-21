@@ -454,6 +454,29 @@ test('the audit log rejects a newly appended event whose canonical timestamp pre
   assert.equal(audit.entries.length, 1)
 })
 
+test('the closed audit envelope rejects nested accessor detail without reading it', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  let getterRead = false
+  const candidates: unknown[] = []
+  Object.defineProperty(candidates, '0', { enumerable: true, get: () => { getterRead = true; return 'PRIVATE-OWNER-PROMPT-ONLY' } })
+  const event = {
+    type: 'connector.run.requested' as const,
+    connectorId: 'image-tti',
+    product: context.product,
+    workspaceId: context.workspaceId,
+    actor: context.actor,
+    correlationId: context.correlationId,
+    scopes: ['image:generate'],
+    costCapCents: 20,
+    requestedItems: 1,
+    occurredAt: '2026-07-22T12:00:00.000Z',
+    detail: { candidates },
+  }
+  await assert.rejects(() => audit.append(event), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_EVENT_INVALID')
+  assert.equal(getterRead, false)
+  assert.equal(audit.entries.length, 0)
+})
+
 test('accessor-shaped stored audit records fail closed without executing their getters', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const reviews = new InMemoryImageOwnerReviewLedger(audit)
