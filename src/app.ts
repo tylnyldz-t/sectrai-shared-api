@@ -7,7 +7,7 @@ import { EnvironmentPrismaDailyConnectorQuota, GCL_USAGE_MODULE_ID } from './gcl
 import { ConnectorRegistry, GovernedConnectorRunner, type RunConnectorRequest } from './gcl/registry.js'
 import { translationConnectorsFromEnvironment } from './gcl/translation.js'
 import { GCL_TRANSLATION_ARTIFACT_MODULE_ID, PrismaTranslationArtifactStore, type TranslationArtifactRecord } from './gcl/translation-artifacts.js'
-import type { ConnectorResult } from './gcl/types.js'
+import type { AuditLog, ConnectorResult } from './gcl/types.js'
 import { serializeRecord } from './types.js'
 import { connectorRunFrom, mutationFrom, scopeFrom, translationArtifactApprovalFrom, workspaceScopeFrom } from './validation.js'
 
@@ -15,9 +15,9 @@ type ConnectorRunner = { run(request: RunConnectorRequest): Promise<ConnectorRes
 type TranslationArtifactStore = {
   propose(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: NonNullable<ConnectorResult['artifact']>; runAuditHash: string }): Promise<TranslationArtifactRecord>
   get(product: string, workspaceId: string, id: string): Promise<TranslationArtifactRecord | null>
-  decide(input: { product: string; workspaceId: string; id: string; actor: string; decision: 'approved' | 'rejected'; now: Date }): Promise<TranslationArtifactRecord | null>
+  decide(input: { product: string; workspaceId: string; id: string; actor: string; decision: 'approved' | 'rejected'; reviewDigest: string; now: Date }): Promise<TranslationArtifactRecord | null>
 }
-type AppOptions = { prisma?: PrismaClient; now?: () => Date; gclRunner?: ConnectorRunner; gclOwnerToken?: string; translationArtifactStore?: TranslationArtifactStore }
+type AppOptions = { prisma?: PrismaClient; now?: () => Date; gclRunner?: ConnectorRunner; gclOwnerToken?: string; gclAuditLog?: AuditLog; translationArtifactStore?: TranslationArtifactStore }
 
 const GCL_RESERVED_MODULES = new Set([GCL_AUDIT_MODULE_ID, GCL_USAGE_MODULE_ID, GCL_TRANSLATION_ARTIFACT_MODULE_ID])
 
@@ -69,9 +69,9 @@ function recordIdFrom(request: Request): string {
   return recordId
 }
 
-export function createApp({ prisma = new PrismaClient(), now = () => new Date(), gclRunner, gclOwnerToken = process.env.GCL_OWNER_TOKEN, translationArtifactStore }: AppOptions = {}) {
+export function createApp({ prisma = new PrismaClient(), now = () => new Date(), gclRunner, gclOwnerToken = process.env.GCL_OWNER_TOKEN, gclAuditLog, translationArtifactStore }: AppOptions = {}) {
   const app = express()
-  const auditLog = new PrismaHashChainAuditLog(prisma)
+  const auditLog = gclAuditLog ?? new PrismaHashChainAuditLog(prisma)
   const governedRunner = gclRunner ?? new GovernedConnectorRunner(
     new ConnectorRegistry(translationConnectorsFromEnvironment()),
     auditLog,
@@ -170,7 +170,7 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
     const scope = workspaceScopeFrom(request)
     const actor = ownerActorFrom(request)
     const decision = translationArtifactApprovalFrom(request.body)
-    const artifact = await artifacts.decide({ ...scope, id: recordIdFrom(request), actor, decision: decision.decision, now: now() })
+    const artifact = await artifacts.decide({ ...scope, id: recordIdFrom(request), actor, decision: decision.decision, reviewDigest: decision.reviewDigest, now: now() })
     if (!artifact) return response.status(404).json({ error: 'TRANSLATION_ARTIFACT_NOT_FOUND', code: 'translation_artifact_not_found' })
     const artifactAudit = await auditLog.append({
       type: decision.decision === 'approved' ? 'translation.artifact.approved' : 'translation.artifact.rejected', connectorId: artifact.connectorId,

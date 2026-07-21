@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
+import { ConnectorUnavailableError } from './errors.js'
 import type { AuditLog, ConnectorAuditEvent } from './types.js'
 
 export const GCL_AUDIT_MODULE_ID = 'gcl-audit'
@@ -9,6 +10,8 @@ type AuditRecordValue = {
   previousHash: string | null
   hash: string
 }
+
+const SHA256 = /^[a-f0-9]{64}$/
 
 function normalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalize)
@@ -25,7 +28,7 @@ export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string 
 function auditValue(value: unknown): AuditRecordValue | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const candidate = value as Partial<AuditRecordValue>
-  if (!candidate.event || typeof candidate.hash !== 'string' || (candidate.previousHash !== null && typeof candidate.previousHash !== 'string')) return null
+  if (Object.keys(candidate).length !== 3 || !candidate.event || typeof candidate.hash !== 'string' || !SHA256.test(candidate.hash) || (candidate.previousHash !== null && (typeof candidate.previousHash !== 'string' || !SHA256.test(candidate.previousHash)))) return null
   return candidate as AuditRecordValue
 }
 
@@ -37,11 +40,19 @@ export class PrismaHashChainAuditLog implements AuditLog {
   async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
     return this.prisma.$transaction(async (transaction) => {
       await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${event.product}:${event.workspaceId}:${GCL_AUDIT_MODULE_ID}`}))`
-      const previous = await transaction.record.findFirst({
+      const records = await transaction.record.findMany({
         where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { values: true },
       })
-      const previousHash = previous ? auditValue(previous.values)?.hash ?? null : null
+      let previousHash: string | null = null
+      for (const record of records) {
+        const value = auditValue(record.values)
+        if (!value || value.previousHash !== previousHash || value.hash !== hashAuditEvent(value.event, value.previousHash)) {
+          throw new ConnectorUnavailableError('GCL_AUDIT_CHAIN_INVALID')
+        }
+        previousHash = value.hash
+      }
       const hash = hashAuditEvent(event, previousHash)
       await transaction.record.create({
         data: {

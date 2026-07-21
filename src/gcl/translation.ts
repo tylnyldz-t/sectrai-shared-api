@@ -14,6 +14,7 @@ export type TranslationConnectorConfig = {
   maxCostCapCents?: number
   maxInputCharacters?: number
   maxAudioDurationMs?: number
+  reviewTtlMs?: number
 }
 
 export type SyntheticAudioDescriptor = {
@@ -127,23 +128,34 @@ function digest(value: unknown): string {
   return `sha256:${createHash('sha256').update(JSON.stringify(value)).digest('hex')}`
 }
 
-function artifact(kind: TranslationArtifactProposal['kind'], contentHash: string, mediaType: TranslationArtifactProposal['mediaType'], source: TranslationArtifactProposal['source']): TranslationArtifactProposal {
-  return { kind, contentHash, mediaType, source, synthetic: true, approvalState: 'pending-checker-approval', autoPublish: false }
+function artifact(kind: TranslationArtifactProposal['kind'], contentHash: string, mediaType: TranslationArtifactProposal['mediaType'], source: TranslationArtifactProposal['source'], reviewTtlMs: number, now: Date): TranslationArtifactProposal {
+  return {
+    kind,
+    contentHash,
+    mediaType,
+    source,
+    synthetic: true,
+    approvalState: 'pending-checker-approval',
+    autoPublish: false,
+    reviewPolicyVersion: 'gcl-translation-synthetic-v1',
+    reviewExpiresAt: new Date(now.valueOf() + reviewTtlMs).toISOString(),
+  }
 }
 
 function positiveConfig(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 }
 
-function configured(config: TranslationConnectorConfig, ctx: ConnectorRunContext): Required<Pick<TranslationConnectorConfig, 'maxCostCapCents' | 'maxInputCharacters' | 'maxAudioDurationMs'>> {
+function configured(config: TranslationConnectorConfig, ctx: ConnectorRunContext): Required<Pick<TranslationConnectorConfig, 'maxCostCapCents' | 'maxInputCharacters' | 'maxAudioDurationMs' | 'reviewTtlMs'>> {
   if (!SYNTHETIC_TRANSLATION_ONLY || !config.syntheticEnabled || config.liveState !== LIVE_DISABLED) throw new ConnectorUnavailableError('TRANSLATION_SYNTHETIC_CONNECTOR_NOT_CONFIGURED')
   const maxCostCapCents = config.maxCostCapCents
   const maxInputCharacters = config.maxInputCharacters
   const maxAudioDurationMs = config.maxAudioDurationMs
-  if (!positiveConfig(maxCostCapCents) || !positiveConfig(maxInputCharacters) || !positiveConfig(maxAudioDurationMs)) {
+  const reviewTtlMs = config.reviewTtlMs
+  if (!positiveConfig(maxCostCapCents) || !positiveConfig(maxInputCharacters) || !positiveConfig(maxAudioDurationMs) || !positiveConfig(reviewTtlMs)) {
     throw new ConnectorUnavailableError('TRANSLATION_GOVERNANCE_LIMITS_NOT_CONFIGURED')
   }
   if (ctx.costCapCents > maxCostCapCents) throw new CostCapError()
   if (ctx.requestedItems !== 1) throw new CostCapError('TRANSLATION_SINGLE_ARTIFACT_REQUIRED')
-  return { maxCostCapCents, maxInputCharacters, maxAudioDurationMs }
+  return { maxCostCapCents, maxInputCharacters, maxAudioDurationMs, reviewTtlMs }
 }
 
 function audioDescriptor(value: unknown, maxAudioDurationMs: number): SyntheticAudioDescriptor {
@@ -221,7 +233,7 @@ export class SyntheticTextTranslationConnector implements Connector<TextTranslat
     const contentHash = digest({ sourceText: parsed.sourceText, ...data })
     return {
       data,
-      artifact: artifact('translated-text', contentHash, 'text/plain', 'synthetic-text-translation'),
+      artifact: artifact('translated-text', contentHash, 'text/plain', 'synthetic-text-translation', limits.reviewTtlMs, ctx.now()),
       provenance: {
         connectorId: this.id,
         source: 'synthetic-text-translation-fixture',
@@ -279,7 +291,7 @@ export class SyntheticSpeechTranslationConnector implements Connector<SpeechTran
     const contentHash = digest({ sourceAudioHash: parsed.sourceAudio.contentHash, sourceTranscript: parsed.sourceTranscript, ...data })
     return {
       data,
-      artifact: artifact('translated-speech', contentHash, 'audio/wav', 'synthetic-speech-translation'),
+      artifact: artifact('translated-speech', contentHash, 'audio/wav', 'synthetic-speech-translation', limits.reviewTtlMs, ctx.now()),
       provenance: {
         connectorId: this.id,
         source: 'synthetic-speech-translation-fixture',
@@ -310,6 +322,7 @@ export function translationConnectorsFromEnvironment(environment: NodeJS.Process
     maxCostCapCents: environmentPositiveInteger(environment.GCL_TRANSLATION_MAX_COST_CENTS),
     maxInputCharacters: environmentPositiveInteger(environment.GCL_TRANSLATION_MAX_INPUT_CHARACTERS),
     maxAudioDurationMs: environmentPositiveInteger(environment.GCL_TRANSLATION_MAX_AUDIO_DURATION_MS),
+    reviewTtlMs: environmentPositiveInteger(environment.GCL_TRANSLATION_REVIEW_TTL_MS),
   }
   return [new SyntheticTextTranslationConnector(config), new SyntheticSpeechTranslationConnector(config)]
 }

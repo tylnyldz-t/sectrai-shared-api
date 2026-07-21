@@ -8,7 +8,7 @@ export type RecordScope = { product: string; workspaceId: string; moduleId: stri
 export type RecordMutation = { values: Record<string, unknown>; status: string | null; createdBy?: string }
 export type WorkspaceScope = { product: string; workspaceId: string }
 export type ConnectorRunMutation = { input: Record<string, unknown>; scopes: string[]; costCapCents: number; requestedItems: number }
-export type TranslationArtifactApprovalMutation = { decision: 'approved' | 'rejected' }
+export type TranslationArtifactApprovalMutation = { decision: 'approved' | 'rejected'; reviewDigest: string }
 
 export function scopeFrom(request: Request): RecordScope {
   const { product, workspaceId, moduleId } = request.params
@@ -81,7 +81,8 @@ export function connectorRunFrom(body: unknown): ConnectorRunMutation {
 }
 
 export function translationArtifactApprovalFrom(body: unknown): TranslationArtifactApprovalMutation {
-  const input = exactObject(body, ['decision'], 'INVALID_TRANSLATION_ARTIFACT_APPROVAL')
+  const input = exactObject(body, ['decision', 'reviewDigest'], 'INVALID_TRANSLATION_ARTIFACT_APPROVAL')
   if (input.decision !== 'approved' && input.decision !== 'rejected') throw Object.assign(new Error('INVALID_TRANSLATION_ARTIFACT_DECISION'), { status: 422 })
-  return { decision: input.decision }
+  if (typeof input.reviewDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(input.reviewDigest)) throw Object.assign(new Error('INVALID_TRANSLATION_ARTIFACT_REVIEW_DIGEST'), { status: 422 })
+  return { decision: input.decision, reviewDigest: input.reviewDigest }
 }

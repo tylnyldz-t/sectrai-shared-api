@@ -25,6 +25,8 @@ export type TranslationArtifactProposal = {
   synthetic: true
   approvalState: 'pending-checker-approval'
   autoPublish: false
+  reviewPolicyVersion: 'gcl-translation-synthetic-v1'
+  reviewExpiresAt: string
 }
 
 export type ConnectorResult<TData = unknown> = {

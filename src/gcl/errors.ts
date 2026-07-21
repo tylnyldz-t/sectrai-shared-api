@@ -36,3 +36,13 @@ export class ArtifactStateError extends GclError {
 export class MakerCheckerError extends GclError {
   constructor(message = 'MAKER_CHECKER_SEPARATION_REQUIRED') { super(message, 403, 'maker_checker_separation_required') }
 }
+
+/** The checker must approve the exact, still-current metadata envelope they reviewed. */
+export class ArtifactReviewBindingError extends GclError {
+  constructor(message = 'TRANSLATION_ARTIFACT_REVIEW_BINDING_REQUIRED') { super(message, 409, 'translation_artifact_review_binding_required') }
+}
+
+/** Review authority is deliberately short lived; a new synthetic run is required after expiry. */
+export class ArtifactReviewExpiredError extends GclError {
+  constructor(message = 'TRANSLATION_ARTIFACT_REVIEW_EXPIRED') { super(message, 409, 'translation_artifact_review_expired') }
+}
