@@ -150,13 +150,21 @@ metadata-only audit-event schema. A hash-valid row with unknown fields (for
 example source text, translated text, transcript, audio, provider output, or a
 raw exception) is still invalid: it returns `GCL_AUDIT_CHAIN_INVALID` and no
 new entry is appended. Run failures retain only a stable error code, never an
-exception message. A durable artifact proposal must link to a matching prior
-`requested` → `succeeded` run pair for the same product, workspace, connector,
-actor, scopes, cost cap, and item count; otherwise it returns
-`TRANSLATION_RUN_AUDIT_LINK_INVALID` before metadata storage. In the durable
-Prisma store, artifact creation and a successful compare-and-set decision each
-share one database transaction with their audit row; an audit failure rolls back
-that metadata mutation.
+exception message.
+
+For an artifact-producing success, the `succeeded` audit event contains the
+complete metadata-only proposal envelope (binding, content hash, synthetic
+marker, review policy, and expiry), never fixture content. A durable artifact
+proposal must link to a matching prior `requested` → `succeeded` pair and must
+match its product, workspace, connector, maker, canonical scopes, cost cap,
+item count, and every proposal-envelope value. A successful run cannot be
+reused by another actor, request budget, or content hash, and can authorize
+only one stored artifact. Missing, legacy unbound, or mismatched success
+metadata returns `TRANSLATION_RUN_AUDIT_LINK_INVALID`; a second use of the same
+successful run returns `TRANSLATION_RUN_AUDIT_ALREADY_BOUND`, before metadata
+storage. In the durable Prisma store, artifact creation and a successful
+compare-and-set decision each share one database transaction with their audit
+row; an audit failure rolls back that metadata mutation.
 
 ## ADOS boundary checklist
 
@@ -168,6 +176,7 @@ that metadata mutation.
 - Maker and checker are separated; the exact metadata digest and TTL bind a
   decision; terminal artifact decisions are compare-and-set; audit is a
   fail-closed, exact-schema, per-product/workspace SHA-256 chain with a
-  verified run-provenance link; no migration is introduced by this module.
+  verified, maker-and-envelope-bound run-provenance link; no migration is
+  introduced by this module.
 - `LIVE_DISABLED` synthetic tests and contracts do not authorize production,
   real-data ingestion, real translation, sending, publishing, or launch.

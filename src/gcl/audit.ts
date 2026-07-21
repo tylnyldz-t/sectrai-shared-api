@@ -67,6 +67,18 @@ function artifactProposalDetail(connectorId: unknown, value: unknown): value is 
     && canonicalTimestamp(value.reviewExpiresAt)
 }
 
+function sameArtifactProposal(left: TranslationArtifactProposal, right: TranslationArtifactProposal): boolean {
+  return left.kind === right.kind
+    && left.contentHash === right.contentHash
+    && left.mediaType === right.mediaType
+    && left.source === right.source
+    && left.synthetic === right.synthetic
+    && left.approvalState === right.approvalState
+    && left.autoPublish === right.autoPublish
+    && left.reviewPolicyVersion === right.reviewPolicyVersion
+    && left.reviewExpiresAt === right.reviewExpiresAt
+}
+
 function artifactDetail(value: unknown, state: 'pending-checker-approval' | 'approved' | 'rejected'): boolean {
   if (!isObject(value) || !hasExactlyKeys(value, ['artifactId', 'kind', 'contentHash', 'mediaType', 'source', 'synthetic', 'approvalState', 'reviewPolicyVersion', 'reviewDigest', 'reviewExpiresAt', 'runAuditHash', 'autoPublish'])) return false
   return typeof value.artifactId === 'string'
@@ -185,7 +197,7 @@ export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionC
     || succeeded.event.costCapCents !== input.costCapCents
     || succeeded.event.requestedItems !== input.requestedItems
     || !artifactProposalDetail(input.connectorId, succeededArtifact)
-    || JSON.stringify(succeededArtifact) !== JSON.stringify(input.proposal)) {
+    || !sameArtifactProposal(succeededArtifact, input.proposal)) {
     throw new ConnectorUnavailableError('TRANSLATION_RUN_AUDIT_LINK_INVALID')
   }
 }

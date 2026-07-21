@@ -145,6 +145,19 @@ function toRecord(record: { id: string; product: string; workspaceId: string; va
   return stored ? { id: record.id, product: record.product, workspaceId: record.workspaceId, createdAt: record.createdAt.toISOString(), createdBy: record.createdBy, ...stored } : null
 }
 
+/** The audit lock held by requireSuccessfulRunAudit makes this one-use check serializable per workspace. */
+async function requireUnusedRunAudit(transaction: Prisma.TransactionClient, input: { product: string; workspaceId: string; runAuditHash: string }): Promise<void> {
+  const records = await transaction.record.findMany({
+    where: { product: input.product, workspaceId: input.workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID },
+    select: { values: true },
+  })
+  for (const record of records) {
+    const existing = storedArtifact(record.values)
+    if (!existing) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
+    if (existing.runAuditHash === input.runAuditHash) throw new ConnectorUnavailableError('TRANSLATION_RUN_AUDIT_ALREADY_BOUND')
+  }
+}
+
 /** Stores only metadata and hashes. Decisions require a checker different from the maker. */
 export class PrismaTranslationArtifactStore {
   constructor(private readonly prisma: PrismaClient) {}
@@ -184,6 +197,7 @@ export class PrismaTranslationArtifactStore {
         proposal,
         runAuditHash: input.runAuditHash,
       })
+      await requireUnusedRunAudit(transaction, input)
       const pending = { connectorId: input.connectorId, ...proposal, runAuditHash: input.runAuditHash }
       const record = await transaction.record.create({
         data: {

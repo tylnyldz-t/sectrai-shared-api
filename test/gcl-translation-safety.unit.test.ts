@@ -218,19 +218,36 @@ test('durable proposals bind the maker, request limits, and exact metadata envel
   }
   const succeededHash = hashAuditEvent(succeeded, requestedHash)
   let artifactCreates = 0
+  let auditCreates = 0
   const prisma = {
     $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({
       $executeRaw: async () => 1,
       record: {
-        findMany: async () => [
+        findMany: async (argument: { where?: { moduleId?: string } }) => argument.where?.moduleId === 'gcl-translation-artifacts' ? boundArtifacts : [
           { values: { event: requested, previousHash: null, hash: requestedHash } },
           { values: { event: succeeded, previousHash: requestedHash, hash: succeededHash } },
         ],
-        create: async () => { artifactCreates += 1; return {} },
+        create: async (argument: { data: { moduleId: string; product: string; workspaceId: string; values: unknown; createdBy: string } }) => {
+          if (argument.data.moduleId !== 'gcl-translation-artifacts') {
+            auditCreates += 1
+            return {}
+          }
+          artifactCreates += 1
+          boundArtifacts.push({ values: argument.data.values })
+          return {
+            id: 'translation-artifact-bound',
+            product: argument.data.product,
+            workspaceId: argument.data.workspaceId,
+            values: argument.data.values,
+            createdAt: now(),
+            createdBy: argument.data.createdBy,
+          }
+        },
       },
     }),
   }
   const artifacts = new PrismaTranslationArtifactStore(prisma as never)
+  const boundArtifacts: Array<{ values: unknown }> = []
   const input = {
     product,
     workspaceId,
@@ -250,6 +267,17 @@ test('durable proposals bind the maker, request limits, and exact metadata envel
     await assert.rejects(() => artifacts.proposeAndAudit(forged), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_RUN_AUDIT_LINK_INVALID')
   }
   assert.equal(artifactCreates, 0)
+  assert.equal(auditCreates, 0)
+
+  const accepted = await artifacts.proposeAndAudit(input)
+  assert.equal(accepted.artifact.id, 'translation-artifact-bound')
+  assert.equal(accepted.artifact.contentHash, proposal.contentHash)
+  assert.match(accepted.auditHash, /^[a-f0-9]{64}$/)
+  assert.equal(artifactCreates, 1)
+  assert.equal(auditCreates, 1)
+  await assert.rejects(() => artifacts.proposeAndAudit(input), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_RUN_AUDIT_ALREADY_BOUND')
+  assert.equal(artifactCreates, 1)
+  assert.equal(auditCreates, 1)
 })
 
 test('durable audit fails closed on a hash-valid success event whose bound result carries a raw fixture field', async () => {

@@ -152,7 +152,7 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
     })
     if (!result.artifact || !result.provenance.auditHash) return response.json({ result })
     const artifactAuditContext: ArtifactAuditContext = {
-      scopes: input.scopes, costCapCents: input.costCapCents, requestedItems: input.requestedItems, occurredAt: now().toISOString(),
+      scopes: [...input.scopes].sort(), costCapCents: input.costCapCents, requestedItems: input.requestedItems, occurredAt: now().toISOString(),
     }
     if (artifacts.proposeAndAudit) {
       const persisted = await artifacts.proposeAndAudit({ product: scope.product, workspaceId: scope.workspaceId, actor, connectorId, proposal: result.artifact, runAuditHash: result.provenance.auditHash, audit: artifactAuditContext })
