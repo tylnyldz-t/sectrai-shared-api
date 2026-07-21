@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import { ConnectorUnavailableError } from './errors.js'
-import type { AuditLog, ConnectorAuditEvent } from './types.js'
+import type { AuditLog, ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
 
 export const GCL_AUDIT_MODULE_ID = 'gcl-audit'
 
@@ -19,6 +19,8 @@ const WORKSPACE_ID = /^[a-zA-Z0-9:_-]{1,120}$/
 const ACTOR_ID = /^[a-zA-Z0-9:_@. -]{1,160}$/
 const SCOPE_ID = /^[a-z][a-z0-9:-]{0,79}$/
 const ERROR_CODE = /^[a-z][a-z0-9_]{0,79}$/
+const REVIEW_POLICY_VERSION = 'gcl-translation-synthetic-v1'
+const PROPOSAL_KEYS = ['kind', 'contentHash', 'mediaType', 'source', 'synthetic', 'approvalState', 'autoPublish', 'reviewPolicyVersion', 'reviewExpiresAt'] as const
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -47,14 +49,36 @@ function scopes(value: unknown): value is readonly string[] {
     && new Set(value).size === value.length
 }
 
+function validArtifactBinding(connectorId: unknown, value: Record<string, unknown>): boolean {
+  return (connectorId === 'translation-text-synthetic' && value.kind === 'translated-text' && value.mediaType === 'text/plain' && value.source === 'synthetic-text-translation')
+    || (connectorId === 'translation-speech-synthetic' && value.kind === 'translated-speech' && value.mediaType === 'audio/wav' && value.source === 'synthetic-speech-translation')
+}
+
+/** Safe result envelope: hashes and lifecycle metadata only, never fixture text or audio. */
+function artifactProposalDetail(connectorId: unknown, value: unknown): value is TranslationArtifactProposal {
+  if (!isObject(value) || !hasExactlyKeys(value, PROPOSAL_KEYS)) return false
+  return validArtifactBinding(connectorId, value)
+    && typeof value.contentHash === 'string'
+    && CONTENT_HASH.test(value.contentHash)
+    && value.synthetic === true
+    && value.approvalState === 'pending-checker-approval'
+    && value.autoPublish === false
+    && value.reviewPolicyVersion === REVIEW_POLICY_VERSION
+    && canonicalTimestamp(value.reviewExpiresAt)
+}
+
 function artifactDetail(value: unknown, state: 'pending-checker-approval' | 'approved' | 'rejected'): boolean {
-  if (!isObject(value) || !hasExactlyKeys(value, ['artifactId', 'kind', 'contentHash', 'approvalState', 'reviewDigest', 'reviewExpiresAt', 'runAuditHash', 'autoPublish'])) return false
+  if (!isObject(value) || !hasExactlyKeys(value, ['artifactId', 'kind', 'contentHash', 'mediaType', 'source', 'synthetic', 'approvalState', 'reviewPolicyVersion', 'reviewDigest', 'reviewExpiresAt', 'runAuditHash', 'autoPublish'])) return false
   return typeof value.artifactId === 'string'
     && /^[a-zA-Z0-9_-]{1,120}$/.test(value.artifactId)
     && (value.kind === 'translated-text' || value.kind === 'translated-speech')
     && typeof value.contentHash === 'string'
     && CONTENT_HASH.test(value.contentHash)
+    && (value.mediaType === 'text/plain' || value.mediaType === 'audio/wav')
+    && (value.source === 'synthetic-text-translation' || value.source === 'synthetic-speech-translation')
+    && value.synthetic === true
     && value.approvalState === state
+    && value.reviewPolicyVersion === REVIEW_POLICY_VERSION
     && typeof value.reviewDigest === 'string'
     && CONTENT_HASH.test(value.reviewDigest)
     && canonicalTimestamp(value.reviewExpiresAt)
@@ -81,11 +105,15 @@ function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
     || !canonicalTimestamp(value.occurredAt)) return false
 
   if (value.type === 'connector.run.requested') return isObject(value.detail) && hasExactlyKeys(value.detail, []) && value.costCapCents >= 1 && value.requestedItems >= 1
-  if (value.type === 'connector.run.succeeded') return isObject(value.detail) && hasExactlyKeys(value.detail, ['requestedAuditHash']) && typeof value.detail.requestedAuditHash === 'string' && SHA256.test(value.detail.requestedAuditHash) && value.costCapCents >= 1 && value.requestedItems >= 1
+  if (value.type === 'connector.run.succeeded') {
+    if (!isObject(value.detail) || value.costCapCents < 1 || value.requestedItems < 1 || typeof value.detail.requestedAuditHash !== 'string' || !SHA256.test(value.detail.requestedAuditHash)) return false
+    if (hasExactlyKeys(value.detail, ['requestedAuditHash'])) return true
+    return hasExactlyKeys(value.detail, ['requestedAuditHash', 'artifact']) && artifactProposalDetail(value.connectorId, value.detail.artifact)
+  }
   if (value.type === 'connector.run.failed') return isObject(value.detail) && hasExactlyKeys(value.detail, ['requestedAuditHash', 'error']) && typeof value.detail.requestedAuditHash === 'string' && SHA256.test(value.detail.requestedAuditHash) && typeof value.detail.error === 'string' && ERROR_CODE.test(value.detail.error) && value.costCapCents >= 1 && value.requestedItems >= 1
-  if (value.type === 'translation.artifact.created') return artifactDetail(value.detail, 'pending-checker-approval') && value.costCapCents >= 1 && value.requestedItems >= 1
-  if (value.type === 'translation.artifact.approved') return artifactDetail(value.detail, 'approved') && value.costCapCents === 0 && value.requestedItems === 0
-  if (value.type === 'translation.artifact.rejected') return artifactDetail(value.detail, 'rejected') && value.costCapCents === 0 && value.requestedItems === 0
+  if (value.type === 'translation.artifact.created') return isObject(value.detail) && artifactDetail(value.detail, 'pending-checker-approval') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents >= 1 && value.requestedItems >= 1
+  if (value.type === 'translation.artifact.approved') return isObject(value.detail) && artifactDetail(value.detail, 'approved') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
+  if (value.type === 'translation.artifact.rejected') return isObject(value.detail) && artifactDetail(value.detail, 'rejected') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
   return false
 }
 
@@ -130,10 +158,10 @@ async function validatedAuditEntries(transaction: Prisma.TransactionClient, prod
 
 /**
  * A proposal can only reference a verified successful run from the same
- * connector and product/workspace chain. It deliberately accepts no caller
- * supplied audit payload.
+ * connector and product/workspace chain. The artifact metadata, maker, and
+ * governance context must also be exactly the values from that successful run.
  */
-export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionClient, input: { product: string; workspaceId: string; connectorId: string; runAuditHash: string }): Promise<void> {
+export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionClient, input: { product: string; workspaceId: string; connectorId: string; actor: string; scopes: readonly string[]; costCapCents: number; requestedItems: number; proposal: TranslationArtifactProposal; runAuditHash: string }): Promise<void> {
   if (!SHA256.test(input.runAuditHash)) throw new ConnectorUnavailableError('TRANSLATION_RUN_AUDIT_LINK_INVALID')
   const entries = await validatedAuditEntries(transaction, input.product, input.workspaceId)
   const succeeded = entries.find((entry) => entry.hash === input.runAuditHash
@@ -143,6 +171,7 @@ export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionC
     && entry.event.workspaceId === input.workspaceId)
   const requestedAuditHash = succeeded?.event.detail.requestedAuditHash
   const requested = typeof requestedAuditHash === 'string' ? entries.find((entry) => entry.hash === requestedAuditHash) : undefined
+  const succeededArtifact = succeeded?.event.detail.artifact
   if (!succeeded || !requested || requested.event.type !== 'connector.run.requested'
     || requested.event.connectorId !== succeeded.event.connectorId
     || requested.event.product !== succeeded.event.product
@@ -150,7 +179,13 @@ export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionC
     || requested.event.actor !== succeeded.event.actor
     || JSON.stringify(requested.event.scopes) !== JSON.stringify(succeeded.event.scopes)
     || requested.event.costCapCents !== succeeded.event.costCapCents
-    || requested.event.requestedItems !== succeeded.event.requestedItems) {
+    || requested.event.requestedItems !== succeeded.event.requestedItems
+    || succeeded.event.actor !== input.actor
+    || JSON.stringify(succeeded.event.scopes) !== JSON.stringify(input.scopes)
+    || succeeded.event.costCapCents !== input.costCapCents
+    || succeeded.event.requestedItems !== input.requestedItems
+    || !artifactProposalDetail(input.connectorId, succeededArtifact)
+    || JSON.stringify(succeededArtifact) !== JSON.stringify(input.proposal)) {
     throw new ConnectorUnavailableError('TRANSLATION_RUN_AUDIT_LINK_INVALID')
   }
 }

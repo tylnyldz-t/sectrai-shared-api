@@ -87,6 +87,7 @@ test('governed text translation returns only the owner-supplied fixture, reserve
   assert.equal(result.provenance.auditHash, audit.entries[1]?.hash)
   assert.equal(audit.entries.length, 2)
   assert.equal(audit.entries[1]?.previousHash, audit.entries[0]?.hash)
+  assert.deepEqual(audit.entries[1]?.event.detail, { requestedAuditHash: audit.entries[0]?.hash, artifact: result.artifact })
   assert.deepEqual(quota.requests, [{ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, requestedItems: 1 }])
   assert.equal(JSON.stringify(audit.entries).includes('Bekleyen onaylar var.'), false)
   assert.equal(JSON.stringify(audit.entries).includes('There are pending approvals.'), false)

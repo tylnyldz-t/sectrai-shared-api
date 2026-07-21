@@ -61,7 +61,8 @@ export class GovernedConnectorRunner {
       const result = await connector.run(request.input, context)
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
-        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(), detail: { requestedAuditHash: requestedAudit.hash },
+        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(),
+        detail: result.artifact ? { requestedAuditHash: requestedAudit.hash, artifact: result.artifact } : { requestedAuditHash: requestedAudit.hash },
       })
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
     } catch (error) {

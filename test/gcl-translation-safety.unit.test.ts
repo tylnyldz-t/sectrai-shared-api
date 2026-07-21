@@ -203,3 +203,80 @@ test('durable proposals require a same-scope requested and succeeded audit pair 
   }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_RUN_AUDIT_LINK_INVALID')
   assert.equal(artifactCreates, 0)
 })
+
+test('durable proposals bind the maker, request limits, and exact metadata envelope to the successful synthetic run', async () => {
+  const proposal = runResult().artifact!
+  const requested: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+  const requestedHash = hashAuditEvent(requested, null)
+  const succeeded: ConnectorAuditEvent = {
+    type: 'connector.run.succeeded', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { requestedAuditHash: requestedHash, artifact: proposal },
+  }
+  const succeededHash = hashAuditEvent(succeeded, requestedHash)
+  let artifactCreates = 0
+  const prisma = {
+    $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({
+      $executeRaw: async () => 1,
+      record: {
+        findMany: async () => [
+          { values: { event: requested, previousHash: null, hash: requestedHash } },
+          { values: { event: succeeded, previousHash: requestedHash, hash: succeededHash } },
+        ],
+        create: async () => { artifactCreates += 1; return {} },
+      },
+    }),
+  }
+  const artifacts = new PrismaTranslationArtifactStore(prisma as never)
+  const input = {
+    product,
+    workspaceId,
+    actor: 'maker@example.test',
+    connectorId: 'translation-text-synthetic',
+    proposal,
+    runAuditHash: succeededHash,
+    audit: { scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString() },
+  }
+
+  for (const forged of [
+    { ...input, actor: 'other-maker@example.test' },
+    { ...input, audit: { ...input.audit, costCapCents: 24 } },
+    { ...input, audit: { ...input.audit, requestedItems: 2 } },
+    { ...input, proposal: { ...proposal, contentHash: `sha256:${'c'.repeat(64)}` } },
+  ]) {
+    await assert.rejects(() => artifacts.proposeAndAudit(forged), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_RUN_AUDIT_LINK_INVALID')
+  }
+  assert.equal(artifactCreates, 0)
+})
+
+test('durable audit fails closed on a hash-valid success event whose bound result carries a raw fixture field', async () => {
+  const requested: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+  const requestedHash = hashAuditEvent(requested, null)
+  const forged = {
+    type: 'connector.run.succeeded', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { requestedAuditHash: requestedHash, artifact: { ...runResult().artifact, translatedText: 'must never become audit metadata' } },
+  } as unknown as ConnectorAuditEvent
+  let createCalls = 0
+  const prisma = {
+    $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({
+      $executeRaw: async () => 1,
+      record: {
+        findMany: async () => [
+          { values: { event: requested, previousHash: null, hash: requestedHash } },
+          { values: { event: forged, previousHash: requestedHash, hash: hashAuditEvent(forged, requestedHash) } },
+        ],
+        create: async () => { createCalls += 1; return {} },
+      },
+    }),
+  }
+  const audit = new PrismaHashChainAuditLog(prisma as never)
+  await assert.rejects(() => audit.append(requested), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(createCalls, 0)
+})
