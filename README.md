@@ -56,5 +56,6 @@ The service stores only product-owned synthetic demo records. It does not make A
 The GCL `market` connector is proposal-only. It accepts no provider
 credentials, does not query Hub Connect or any capacity market, and cannot
 reserve capacity, book a load, publish a listing, or start a background sync.
-It remains `LIVE_DISABLED`; setting its environment live flag to `true`
-closes the route.
+It remains `LIVE_DISABLED`; only the exact `GCL_MARKET_LIVE_ENABLED=false`
+configuration permits the synthetic proposal path. Its separate independent
+review receipt cannot authorize any action.

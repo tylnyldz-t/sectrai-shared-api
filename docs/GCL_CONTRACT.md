@@ -42,7 +42,9 @@ Every registered connector is governed by these rules:
   tool call, or system message.
 - Audit: accepted runs receive requested/succeeded or requested/failed
   SHA-256 linked audit events. Each product/workspace chain is serialized by a
-  PostgreSQL advisory transaction lock.
+  PostgreSQL advisory transaction lock. A synthetic market plan may also
+  receive an independent owner-review receipt in the same chain; that receipt
+  records only `NOT_AUTHORIZED`, never an execution approval.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
   error. There is no local fallback, provider fallback, queue worker, or
@@ -99,7 +101,8 @@ record CRUD cannot mutate the audit chain or quota reservation history.
 # Never commit a real owner token.
 GCL_OWNER_TOKEN="replace-with-owner-secret"
 
-# Market is permanently synthetic. A true flag fails closed.
+# Market is permanently synthetic. Only exact lowercase false is accepted;
+# missing, true, uppercase, and malformed values fail closed.
 GCL_MARKET_LIVE_ENABLED=false
 GCL_MARKET_MAX_COST_CENTS=50
 GCL_MARKET_MAX_ITEMS=10
@@ -110,9 +113,11 @@ GCL_MARKET_DAILY_ITEM_QUOTA=20
 
 This worktree contains no provider endpoint, SDK, API key, credential,
 background sync, reservation, booking, publishing, or live execution path.
-Setting `GCL_MARKET_LIVE_ENABLED=true` returns `MARKET_LIVE_DISABLED`; it
-does not enable anything. The specific market inputs and output limits are in
-[the synthetic market contract](GCL_MARKET_CONTRACT.md).
+Setting any value other than `GCL_MARKET_LIVE_ENABLED=false` returns
+`MARKET_LIVE_DISABLED`; it does not enable anything. A market review receipt
+is deliberately not an HTTP action endpoint, a persisted approval workflow,
+or an authorization token. The specific market inputs and output limits are
+in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
 
 ## Privacy, KVKK, and content boundary
 
