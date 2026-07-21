@@ -350,7 +350,7 @@ test('D7 rejects inherited, hidden, or accessor-backed data and validates its pl
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
 
-  const inheritedInput = Object.assign(Object.create({ evidence: input.evidence }), input)
+  const inheritedInput = Object.assign(Object.create({ evidence: input.evidence }), { consent: input.consent, syntheticFields: input.syntheticFields })
   await assert.rejects(() => runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input: inheritedInput, ...context }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_VISION_DOCUMENT_REQUEST')
 
   const hiddenInput = { ...input } as Record<string, unknown>
@@ -403,6 +403,10 @@ test('D7 rejects inherited, hidden, or accessor-backed data and validates its pl
   })
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(accessorPacket, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
   assert.equal(packetAccessorRead, false)
+
+  const hiddenPacket = clone()
+  Object.defineProperty(hiddenPacket.reviewPacket, 'hiddenTrace', { enumerable: false, value: 'forbidden' })
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(hiddenPacket, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
 
   const legacyPacket = clone()
   legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v6' as never
