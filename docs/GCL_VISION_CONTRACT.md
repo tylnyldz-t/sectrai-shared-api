@@ -58,6 +58,12 @@ The v4 integrity material adds `evidenceBinding.capturedAt` and `evidenceBinding
 
 D4 limits only the in-process lifetime of synthetic evidence metadata. It is not revocation lookup, a signature, durable one-time decision state, a retention store, a send/apply authorization, or an OCR/provider capability. A future durable, scoped host must still resolve the proposal and enforce revocation and replay semantics before any separate action.
 
+## D5 — causally coherent review timeline
+
+New proposals use `synthetic-document-review-packet-v5`. At review time, the packet must describe a coherent metadata-only timeline: the evidence capture cannot occur after the packet issue time, and `reviewBy` cannot exceed either the consent expiry or the evidence-freshness expiry. Equality at a deadline is not accepted for a review because expiry checks remain inclusive (`expiresAt <= review time` and `reviewBy <= review time`).
+
+The checks run before a review audit append, including for accidentally altered in-process packets whose integrity digest no longer matches. D5 intentionally does not turn the unkeyed digest into a signature or durable replay control; v1/v2/v3/v4 packets remain non-reviewable and a future scoped host must still resolve state, revocation, and one-time decisions before any separate action.
+
 ## Safe configuration
 
 These values configure a synthetic proposal limit only; they cannot enable a provider or a live execution path:
@@ -72,8 +78,8 @@ GCL_VISION_DAILY_RUN_QUOTA=5
 GCL_VISION_DAILY_ITEM_QUOTA=5
 ```
 
-No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`. D1/D2/D3/D4 add no persistence, review-state mutation, migration, credential, or network client.
+No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`. D1/D2/D3/D4/D5 add no persistence, review-state mutation, migration, credential, or network client.
 
 ## ADOS controls
 
-The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. D1 additionally rejects review-packet tampering and cross-scope review before audit; D2 default-denies stale consent evidence; D3 default-denies a packet outside its bounded review window; D4 default-denies stale synthetic evidence references. It makes no migration, promotion, publication, or provider request.
+The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. D1 additionally rejects review-packet tampering and cross-scope review before audit; D2 default-denies stale consent evidence; D3 default-denies a packet outside its bounded review window; D4 default-denies stale synthetic evidence references; D5 default-denies a causally inconsistent packet or a review deadline beyond consent. It makes no migration, promotion, publication, or provider request.

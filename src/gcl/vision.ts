@@ -15,7 +15,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v4' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v5' as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
 
@@ -401,6 +401,24 @@ function reviewedReviewWindow(value: unknown, reviewedAt: Date): SyntheticDocume
   return { issuedAt: issuedAt.toISOString(), reviewBy: reviewBy.toISOString() }
 }
 
+/**
+ * The deadline must describe a coherent synthetic timeline even when an
+ * in-process object is malformed. This remains validation, not a signature:
+ * an unkeyed packet never authorizes review, apply, or send.
+ */
+function validateReviewPacketTimeline(
+  consentBinding: SyntheticDocumentReviewPacket['consentBinding'],
+  evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
+  reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
+): void {
+  const capturedAt = new Date(evidenceBinding.capturedAt)
+  const issuedAt = new Date(reviewWindow.issuedAt)
+  const reviewBy = new Date(reviewWindow.reviewBy)
+  if (capturedAt.getTime() > issuedAt.getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_CAPTURE_AFTER_ISSUANCE')
+  if (reviewBy.getTime() > new Date(consentBinding.expiresAt).getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_EXCEEDS_CONSENT')
+  if (reviewBy.getTime() > new Date(evidenceBinding.expiresAt).getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_EXCEEDS_EVIDENCE_FRESHNESS')
+}
+
 function validateSyntheticDocumentProposalForReviewAt(
   proposal: unknown,
   context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>,
@@ -445,7 +463,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const consentBinding = reviewedConsentBinding(proposal.reviewPacket.consentBinding, reviewedAt)
   const evidenceBinding = reviewedEvidenceBinding(proposal.reviewPacket.evidenceBinding, evidence, reviewedAt)
   const reviewWindow = reviewedReviewWindow(proposal.reviewPacket.reviewWindow, reviewedAt)
-  if (new Date(reviewWindow.reviewBy).getTime() > new Date(evidenceBinding.expiresAt).getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_EXCEEDS_EVIDENCE_FRESHNESS')
+  validateReviewPacketTimeline(consentBinding, evidenceBinding, reviewWindow)
   const reviewPacket: SyntheticDocumentReviewPacket = {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
     integrityDigest,
