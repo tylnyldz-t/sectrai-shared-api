@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import { appendAuditEvent, requireSuccessfulRunAudit } from './audit.js'
 import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorUnavailableError, MakerCheckerError } from './errors.js'
-import type { ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
+import type { AuditLog, ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
 
 export const GCL_TRANSLATION_ARTIFACT_MODULE_ID = 'gcl-translation-artifacts'
 const SHA256 = /^sha256:[a-f0-9]{64}$/
@@ -52,6 +52,10 @@ function canonicalTimestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const timestamp = new Date(value)
   return !Number.isNaN(timestamp.valueOf()) && timestamp.toISOString() === value
+}
+
+function canonicalActor(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() === value && Boolean(value) && /^[a-zA-Z0-9:_@. -]{1,160}$/.test(value)
 }
 
 function validArtifactBinding(input: Pick<TranslationArtifactRecord, 'connectorId' | 'kind' | 'mediaType' | 'source'>): boolean {
@@ -140,46 +144,61 @@ function storedArtifact(value: unknown): StoredArtifact | null {
   return constantTimeEqual(artifact.reviewDigest, translationArtifactReviewDigest(artifact)) ? artifact : null
 }
 
-function toRecord(record: { id: string; product: string; workspaceId: string; values: Prisma.JsonValue; createdAt: Date; createdBy: string }): TranslationArtifactRecord | null {
+/** A record envelope is part of the artifact state: values alone are not trusted. */
+function toRecord(record: { id: string; product: string; workspaceId: string; values: Prisma.JsonValue; status: string | null; createdAt: Date; createdBy: string }): TranslationArtifactRecord | null {
   const stored = storedArtifact(record.values)
-  return stored ? { id: record.id, product: record.product, workspaceId: record.workspaceId, createdAt: record.createdAt.toISOString(), createdBy: record.createdBy, ...stored } : null
+  if (!stored
+    || typeof record.id !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(record.id)
+    || typeof record.product !== 'string' || !/^[a-z0-9][a-z0-9-]{0,80}$/.test(record.product)
+    || typeof record.workspaceId !== 'string' || !/^[a-zA-Z0-9:_-]{1,120}$/.test(record.workspaceId)
+    || record.status !== stored.approvalState
+    || !canonicalActor(record.createdBy)
+    || !(record.createdAt instanceof Date) || Number.isNaN(record.createdAt.valueOf())) return null
+  return { id: record.id, product: record.product, workspaceId: record.workspaceId, createdAt: record.createdAt.toISOString(), createdBy: record.createdBy, ...stored }
 }
 
 /** The audit lock held by requireSuccessfulRunAudit makes this one-use check serializable per workspace. */
 async function requireUnusedRunAudit(transaction: Prisma.TransactionClient, input: { product: string; workspaceId: string; runAuditHash: string }): Promise<void> {
   const records = await transaction.record.findMany({
     where: { product: input.product, workspaceId: input.workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID },
-    select: { values: true },
+    select: { values: true, status: true, createdBy: true },
   })
   for (const record of records) {
     const existing = storedArtifact(record.values)
-    if (!existing) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
+    if (!existing || record.status !== existing.approvalState || !canonicalActor(record.createdBy)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
     if (existing.runAuditHash === input.runAuditHash) throw new ConnectorUnavailableError('TRANSLATION_RUN_AUDIT_ALREADY_BOUND')
   }
 }
 
-/** Stores only metadata and hashes. Decisions require a checker different from the maker. */
+function artifactAuditEvent(input: { artifact: TranslationArtifactRecord; product: string; workspaceId: string; actor: string; audit: ArtifactAuditContext; type: 'translation.artifact.created' | 'translation.artifact.approved' | 'translation.artifact.rejected' }): ConnectorAuditEvent {
+  const { artifact } = input
+  return {
+    type: input.type,
+    connectorId: artifact.connectorId,
+    product: input.product,
+    workspaceId: input.workspaceId,
+    actor: input.actor,
+    ...input.audit,
+    detail: {
+      artifactId: artifact.id,
+      kind: artifact.kind,
+      contentHash: artifact.contentHash,
+      mediaType: artifact.mediaType,
+      source: artifact.source,
+      synthetic: true,
+      approvalState: artifact.approvalState,
+      reviewPolicyVersion: artifact.reviewPolicyVersion,
+      reviewDigest: artifact.reviewDigest,
+      reviewExpiresAt: artifact.reviewExpiresAt,
+      runAuditHash: artifact.runAuditHash,
+      autoPublish: false,
+    },
+  }
+}
+
+/** Stores only metadata and hashes. Every production mutation includes its audit write. */
 export class PrismaTranslationArtifactStore {
   constructor(private readonly prisma: PrismaClient) {}
-
-  async propose(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: TranslationArtifactProposal; runAuditHash: string }): Promise<TranslationArtifactRecord> {
-    const proposal = translationArtifactProposal(input.connectorId, input.proposal)
-    if (!proposal || !AUDIT_SHA256.test(input.runAuditHash)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_PROPOSAL_INVALID')
-    const pending = { connectorId: input.connectorId, ...proposal, runAuditHash: input.runAuditHash }
-    const record = await this.prisma.record.create({
-      data: {
-        product: input.product,
-        workspaceId: input.workspaceId,
-        moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID,
-        values: { ...pending, reviewDigest: translationArtifactReviewDigest(pending) } as Prisma.InputJsonValue,
-        status: 'pending-checker-approval',
-        createdBy: input.actor,
-      },
-    })
-    const artifact = toRecord(record)
-    if (!artifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
-    return artifact
-  }
 
   /** Atomically persists metadata and its creation audit row; no raw content enters either. */
   async proposeAndAudit(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: TranslationArtifactProposal; runAuditHash: string; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord; auditHash: string }> {
@@ -211,23 +230,7 @@ export class PrismaTranslationArtifactStore {
       })
       const artifact = toRecord(record)
       if (!artifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
-      const audit = await appendAuditEvent(transaction, {
-        type: 'translation.artifact.created', connectorId: input.connectorId, product: input.product, workspaceId: input.workspaceId, actor: input.actor, ...input.audit,
-        detail: {
-          artifactId: artifact.id,
-          kind: artifact.kind,
-          contentHash: artifact.contentHash,
-          mediaType: artifact.mediaType,
-          source: artifact.source,
-          synthetic: true,
-          approvalState: artifact.approvalState,
-          reviewPolicyVersion: artifact.reviewPolicyVersion,
-          reviewDigest: artifact.reviewDigest,
-          reviewExpiresAt: artifact.reviewExpiresAt,
-          runAuditHash: artifact.runAuditHash,
-          autoPublish: false,
-        },
-      })
+      const audit = await appendAuditEvent(transaction, artifactAuditEvent({ artifact, product: input.product, workspaceId: input.workspaceId, actor: input.actor, audit: input.audit, type: 'translation.artifact.created' }))
       return { artifact, auditHash: audit.hash }
     })
   }
@@ -238,51 +241,6 @@ export class PrismaTranslationArtifactStore {
     const artifact = toRecord(record)
     if (!artifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
     return artifact
-  }
-
-  async decide(input: { product: string; workspaceId: string; id: string; actor: string; decision: TranslationArtifactDecision; reviewDigest: string; now: Date }): Promise<TranslationArtifactRecord | null> {
-    const record = await this.prisma.record.findFirst({ where: { id: input.id, product: input.product, workspaceId: input.workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID } })
-    if (!record) return null
-    const artifact = toRecord(record)
-    if (!artifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
-    if (artifact.approvalState !== 'pending-checker-approval') throw new ArtifactStateError()
-    if (artifact.createdBy === input.actor) throw new MakerCheckerError()
-    if (!constantTimeEqual(input.reviewDigest, artifact.reviewDigest)) throw new ArtifactReviewBindingError()
-    if (new Date(artifact.reviewExpiresAt).valueOf() <= input.now.valueOf()) throw new ArtifactReviewExpiredError()
-    const approvalState = input.decision
-    const decidedAt = input.now.toISOString()
-    const next: TranslationArtifactRecord = { ...artifact, approvalState, decidedAt, decidedBy: input.actor }
-    const updated = await this.prisma.record.updateMany({
-      where: { id: record.id, product: input.product, workspaceId: input.workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID, status: 'pending-checker-approval' },
-      data: {
-        values: {
-          connectorId: artifact.connectorId,
-          kind: artifact.kind,
-          contentHash: artifact.contentHash,
-          mediaType: artifact.mediaType,
-          source: artifact.source,
-          synthetic: true,
-          approvalState,
-          autoPublish: false,
-          reviewPolicyVersion: artifact.reviewPolicyVersion,
-          reviewExpiresAt: artifact.reviewExpiresAt,
-          reviewDigest: artifact.reviewDigest,
-          runAuditHash: artifact.runAuditHash,
-          decidedAt,
-          decidedBy: input.actor,
-        } as Prisma.InputJsonValue,
-        status: approvalState,
-        updatedAt: input.now,
-      },
-    })
-    if (updated.count === 1) return next
-
-    const current = await this.prisma.record.findFirst({ where: { id: input.id, product: input.product, workspaceId: input.workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID } })
-    if (!current) return null
-    const currentArtifact = toRecord(current)
-    if (!currentArtifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
-    if (currentArtifact.createdBy === input.actor) throw new MakerCheckerError()
-    throw new ArtifactStateError()
   }
 
   /** The compare-and-set decision and its audit row share one transaction. */
@@ -330,23 +288,7 @@ export class PrismaTranslationArtifactStore {
         if (currentArtifact.createdBy === input.actor) throw new MakerCheckerError()
         throw new ArtifactStateError()
       }
-      const audit = await appendAuditEvent(transaction, {
-        type: input.decision === 'approved' ? 'translation.artifact.approved' : 'translation.artifact.rejected', connectorId: artifact.connectorId, product: input.product, workspaceId: input.workspaceId, actor: input.actor, ...input.audit,
-        detail: {
-          artifactId: next.id,
-          kind: next.kind,
-          contentHash: next.contentHash,
-          mediaType: next.mediaType,
-          source: next.source,
-          synthetic: true,
-          approvalState: next.approvalState,
-          reviewPolicyVersion: next.reviewPolicyVersion,
-          reviewDigest: next.reviewDigest,
-          reviewExpiresAt: next.reviewExpiresAt,
-          runAuditHash: next.runAuditHash,
-          autoPublish: false,
-        },
-      })
+      const audit = await appendAuditEvent(transaction, artifactAuditEvent({ artifact: next, product: input.product, workspaceId: input.workspaceId, actor: input.actor, audit: input.audit, type: input.decision === 'approved' ? 'translation.artifact.approved' : 'translation.artifact.rejected' }))
       return { artifact: next, auditHash: audit.hash }
     })
   }
@@ -355,6 +297,13 @@ export class PrismaTranslationArtifactStore {
 /** Test-only metadata store. It has no field for raw source or translated content. */
 export class InMemoryTranslationArtifactStore {
   readonly entries: TranslationArtifactRecord[] = []
+
+  constructor(private readonly auditLog?: AuditLog) {}
+
+  private requireAuditLog(): AuditLog {
+    if (!this.auditLog) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_AUDIT_NOT_CONFIGURED')
+    return this.auditLog
+  }
 
   async propose(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: TranslationArtifactProposal; runAuditHash: string }): Promise<TranslationArtifactRecord> {
     const proposal = translationArtifactProposal(input.connectorId, input.proposal)
@@ -371,6 +320,20 @@ export class InMemoryTranslationArtifactStore {
     }
     this.entries.push(artifact)
     return { ...artifact }
+  }
+
+  /** Test seam that mirrors the production atomic write contract. */
+  async proposeAndAudit(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: TranslationArtifactProposal; runAuditHash: string; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord; auditHash: string }> {
+    const auditLog = this.requireAuditLog()
+    const before = this.entries.length
+    const artifact = await this.propose(input)
+    try {
+      const audit = await auditLog.append(artifactAuditEvent({ artifact, product: input.product, workspaceId: input.workspaceId, actor: input.actor, audit: input.audit, type: 'translation.artifact.created' }))
+      return { artifact, auditHash: audit.hash }
+    } catch (error) {
+      this.entries.splice(before)
+      throw error
+    }
   }
 
   async get(product: string, workspaceId: string, id: string): Promise<TranslationArtifactRecord | null> {
@@ -407,5 +370,22 @@ export class InMemoryTranslationArtifactStore {
     const updated: TranslationArtifactRecord = { ...artifact, approvalState: input.decision, decidedAt: input.now.toISOString(), decidedBy: input.actor }
     this.entries[index] = updated
     return { ...updated }
+  }
+
+  /** Test seam that restores the prior entry when its corresponding audit fails. */
+  async decideAndAudit(input: { product: string; workspaceId: string; id: string; actor: string; decision: TranslationArtifactDecision; reviewDigest: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord | null; auditHash?: string }> {
+    const auditLog = this.requireAuditLog()
+    const index = this.entries.findIndex((entry) => entry.id === input.id && entry.product === input.product && entry.workspaceId === input.workspaceId)
+    if (index < 0) return { artifact: null }
+    const prior = { ...this.entries[index]! }
+    const artifact = await this.decide(input)
+    if (!artifact) return { artifact: null }
+    try {
+      const audit = await auditLog.append(artifactAuditEvent({ artifact, product: input.product, workspaceId: input.workspaceId, actor: input.actor, audit: input.audit, type: input.decision === 'approved' ? 'translation.artifact.approved' : 'translation.artifact.rejected' }))
+      return { artifact, auditHash: audit.hash }
+    } catch (error) {
+      this.entries[index] = prior
+      throw error
+    }
   }
 }

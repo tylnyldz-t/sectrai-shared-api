@@ -14,11 +14,9 @@ import { connectorRunFrom, mutationFrom, scopeFrom, translationArtifactApprovalF
 type ConnectorRunner = { run(request: RunConnectorRequest): Promise<ConnectorResult> }
 type ArtifactAuditContext = Pick<ConnectorAuditEvent, 'scopes' | 'costCapCents' | 'requestedItems' | 'occurredAt'>
 type TranslationArtifactStore = {
-  propose(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: NonNullable<ConnectorResult['artifact']>; runAuditHash: string }): Promise<TranslationArtifactRecord>
   get(product: string, workspaceId: string, id: string): Promise<TranslationArtifactRecord | null>
-  decide(input: { product: string; workspaceId: string; id: string; actor: string; decision: 'approved' | 'rejected'; reviewDigest: string; now: Date }): Promise<TranslationArtifactRecord | null>
-  proposeAndAudit?(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: NonNullable<ConnectorResult['artifact']>; runAuditHash: string; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord; auditHash: string }>
-  decideAndAudit?(input: { product: string; workspaceId: string; id: string; actor: string; decision: 'approved' | 'rejected'; reviewDigest: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord | null; auditHash?: string }>
+  proposeAndAudit(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: NonNullable<ConnectorResult['artifact']>; runAuditHash: string; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord; auditHash: string }>
+  decideAndAudit(input: { product: string; workspaceId: string; id: string; actor: string; decision: 'approved' | 'rejected'; reviewDigest: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord | null; auditHash?: string }>
 }
 type AppOptions = { prisma?: PrismaClient; now?: () => Date; gclRunner?: ConnectorRunner; gclOwnerToken?: string; gclAuditLog?: AuditLog; translationArtifactStore?: TranslationArtifactStore }
 
@@ -56,8 +54,9 @@ function gclOwnerAuth(expectedToken: string | undefined): RequestHandler {
 
 function ownerActorFrom(request: Request): string {
   const actor = request.header('x-sectrai-owner-actor')
-  if (!actor || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(actor)) throw Object.assign(new Error('INVALID_OWNER_ACTOR'), { status: 422 })
-  return actor
+  const normalized = typeof actor === 'string' ? actor.trim() : ''
+  if (!normalized || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(normalized)) throw Object.assign(new Error('INVALID_OWNER_ACTOR'), { status: 422 })
+  return normalized
 }
 
 function connectorIdFrom(request: Request): string {
@@ -154,29 +153,8 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
     const artifactAuditContext: ArtifactAuditContext = {
       scopes: [...input.scopes].sort(), costCapCents: input.costCapCents, requestedItems: input.requestedItems, occurredAt: now().toISOString(),
     }
-    if (artifacts.proposeAndAudit) {
-      const persisted = await artifacts.proposeAndAudit({ product: scope.product, workspaceId: scope.workspaceId, actor, connectorId, proposal: result.artifact, runAuditHash: result.provenance.auditHash, audit: artifactAuditContext })
-      return response.json({ result, artifact: { ...persisted.artifact, auditHash: persisted.auditHash } })
-    }
-    const artifact = await artifacts.propose({ product: scope.product, workspaceId: scope.workspaceId, actor, connectorId, proposal: result.artifact, runAuditHash: result.provenance.auditHash })
-    const artifactAudit = await auditLog.append({
-      type: 'translation.artifact.created', connectorId, product: scope.product, workspaceId: scope.workspaceId, actor, ...artifactAuditContext,
-      detail: {
-          artifactId: artifact.id,
-          kind: artifact.kind,
-          contentHash: artifact.contentHash,
-          mediaType: artifact.mediaType,
-          source: artifact.source,
-          synthetic: true,
-          approvalState: artifact.approvalState,
-          reviewPolicyVersion: artifact.reviewPolicyVersion,
-          reviewDigest: artifact.reviewDigest,
-        reviewExpiresAt: artifact.reviewExpiresAt,
-        runAuditHash: artifact.runAuditHash,
-        autoPublish: false,
-      },
-    })
-    return response.json({ result, artifact: { ...artifact, auditHash: artifactAudit.hash } })
+    const persisted = await artifacts.proposeAndAudit({ product: scope.product, workspaceId: scope.workspaceId, actor, connectorId, proposal: result.artifact, runAuditHash: result.provenance.auditHash, audit: artifactAuditContext })
+    return response.json({ result, artifact: { ...persisted.artifact, auditHash: persisted.auditHash } })
   }))
 
   const artifactBase = `${gclBase}/translation-artifacts`
@@ -195,32 +173,9 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
     const artifactAuditContext: ArtifactAuditContext = {
       scopes: ['translation:artifact:approve'], costCapCents: 0, requestedItems: 0, occurredAt: now().toISOString(),
     }
-    if (artifacts.decideAndAudit) {
-      const persisted = await artifacts.decideAndAudit({ ...scope, id: recordIdFrom(request), actor, decision: decision.decision, reviewDigest: decision.reviewDigest, now: now(), audit: artifactAuditContext })
-      if (!persisted.artifact || !persisted.auditHash) return response.status(404).json({ error: 'TRANSLATION_ARTIFACT_NOT_FOUND', code: 'translation_artifact_not_found' })
-      return response.json({ artifact: persisted.artifact, auditHash: persisted.auditHash })
-    }
-    const artifact = await artifacts.decide({ ...scope, id: recordIdFrom(request), actor, decision: decision.decision, reviewDigest: decision.reviewDigest, now: now() })
-    if (!artifact) return response.status(404).json({ error: 'TRANSLATION_ARTIFACT_NOT_FOUND', code: 'translation_artifact_not_found' })
-    const artifactAudit = await auditLog.append({
-      type: decision.decision === 'approved' ? 'translation.artifact.approved' : 'translation.artifact.rejected', connectorId: artifact.connectorId,
-      product: scope.product, workspaceId: scope.workspaceId, actor, ...artifactAuditContext,
-      detail: {
-        artifactId: artifact.id,
-        kind: artifact.kind,
-        contentHash: artifact.contentHash,
-        mediaType: artifact.mediaType,
-        source: artifact.source,
-        synthetic: true,
-        approvalState: artifact.approvalState,
-        reviewPolicyVersion: artifact.reviewPolicyVersion,
-        reviewDigest: artifact.reviewDigest,
-        reviewExpiresAt: artifact.reviewExpiresAt,
-        runAuditHash: artifact.runAuditHash,
-        autoPublish: false,
-      },
-    })
-    return response.json({ artifact, auditHash: artifactAudit.hash })
+    const persisted = await artifacts.decideAndAudit({ ...scope, id: recordIdFrom(request), actor, decision: decision.decision, reviewDigest: decision.reviewDigest, now: now(), audit: artifactAuditContext })
+    if (!persisted.artifact || !persisted.auditHash) return response.status(404).json({ error: 'TRANSLATION_ARTIFACT_NOT_FOUND', code: 'translation_artifact_not_found' })
+    return response.json({ artifact: persisted.artifact, auditHash: persisted.auditHash })
   }))
 
   app.use((error: unknown, _: Request, response: Response, __: NextFunction) => {

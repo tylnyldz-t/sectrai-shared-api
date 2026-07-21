@@ -202,7 +202,7 @@ test('checker must echo an unexpired review digest, and failed checks preserve t
   assert.equal((await artifacts.get(context.product, context.workspaceId, proposed.id))?.approvalState, 'pending-checker-approval')
 })
 
-test('durable artifact decisions use compare-and-set so simultaneous checkers cannot overwrite one another', async () => {
+test('durable artifact decisions use compare-and-set with an audit row so simultaneous checkers cannot overwrite one another', async () => {
   let status = 'pending-checker-approval'
   let values: Record<string, unknown> = {
     connectorId: TEXT_TRANSLATION_CONNECTOR_ID,
@@ -222,22 +222,34 @@ test('durable artifact decisions use compare-and-set so simultaneous checkers ca
     id: 'translation-artifact-race', product: context.product, workspaceId: context.workspaceId,
     moduleId: 'gcl-translation-artifacts', createdAt: now(), createdBy: context.actor,
   }
+  const auditRows: Array<{ values: unknown }> = []
   const durablePrisma = {
-    record: {
-      findFirst: async () => ({ ...record, values: { ...values }, status }),
-      updateMany: async (argument: { where: { status?: string }; data: { status: string; values: Record<string, unknown> } }) => {
-        await Promise.resolve()
-        if (argument.where.status !== status) return { count: 0 }
-        status = argument.data.status
-        values = { ...argument.data.values }
-        return { count: 1 }
+    $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({
+      $executeRaw: async () => 1,
+      record: {
+        findFirst: async () => ({ ...record, values: { ...values }, status }),
+        findMany: async () => auditRows.map((row) => ({ ...row })),
+        updateMany: async (argument: { where: { status?: string }; data: { status: string; values: Record<string, unknown> } }) => {
+          await Promise.resolve()
+          if (argument.where.status !== status) return { count: 0 }
+          status = argument.data.status
+          values = { ...argument.data.values }
+          return { count: 1 }
+        },
+        create: async (argument: { data: { values: unknown } }) => {
+          auditRows.push({ values: argument.data.values })
+          return {}
+        },
       },
-    },
+    }),
   }
   const artifacts = new PrismaTranslationArtifactStore(durablePrisma as never)
+  assert.equal('propose' in PrismaTranslationArtifactStore.prototype, false)
+  assert.equal('decide' in PrismaTranslationArtifactStore.prototype, false)
+  const audit = { scopes: ['translation:artifact:approve'], costCapCents: 0, requestedItems: 0, occurredAt: now().toISOString() }
   const decisions = await Promise.allSettled([
-    artifacts.decide({ product: context.product, workspaceId: context.workspaceId, id: record.id, actor: 'checker-one@example.test', decision: 'approved', reviewDigest: values.reviewDigest as string, now: now() }),
-    artifacts.decide({ product: context.product, workspaceId: context.workspaceId, id: record.id, actor: 'checker-two@example.test', decision: 'rejected', reviewDigest: values.reviewDigest as string, now: now() }),
+    artifacts.decideAndAudit({ product: context.product, workspaceId: context.workspaceId, id: record.id, actor: 'checker-one@example.test', decision: 'approved', reviewDigest: values.reviewDigest as string, now: now(), audit }),
+    artifacts.decideAndAudit({ product: context.product, workspaceId: context.workspaceId, id: record.id, actor: 'checker-two@example.test', decision: 'rejected', reviewDigest: values.reviewDigest as string, now: now(), audit }),
   ])
 
   assert.equal(decisions.filter((decision) => decision.status === 'fulfilled').length, 1)
@@ -249,4 +261,5 @@ test('durable artifact decisions use compare-and-set so simultaneous checkers ca
   assert.ok(final)
   assert.equal(final.approvalState === 'approved' || final.approvalState === 'rejected', true)
   assert.equal(final.decidedBy === 'checker-one@example.test' || final.decidedBy === 'checker-two@example.test', true)
+  assert.equal(auditRows.length, 1)
 })

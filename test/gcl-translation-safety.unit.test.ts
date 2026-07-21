@@ -47,7 +47,7 @@ function runResult(): ConnectorResult {
 
 async function running(): Promise<{ server: Server; base: string; audit: InMemoryHashChainAuditLog } | null> {
   const audit = new InMemoryHashChainAuditLog()
-  const artifacts = new InMemoryTranslationArtifactStore()
+  const artifacts = new InMemoryTranslationArtifactStore(audit)
   const runner = { async run(_: RunConnectorRequest): Promise<ConnectorResult> { return runResult() } }
   const app = createApp({
     prisma: {} as PrismaClient,
@@ -233,12 +233,13 @@ test('durable proposals bind the maker, request limits, and exact metadata envel
             return {}
           }
           artifactCreates += 1
-          boundArtifacts.push({ values: argument.data.values })
+          boundArtifacts.push({ values: argument.data.values, status: 'pending-checker-approval', createdBy: argument.data.createdBy })
           return {
             id: 'translation-artifact-bound',
             product: argument.data.product,
             workspaceId: argument.data.workspaceId,
             values: argument.data.values,
+            status: 'pending-checker-approval',
             createdAt: now(),
             createdBy: argument.data.createdBy,
           }
@@ -247,7 +248,7 @@ test('durable proposals bind the maker, request limits, and exact metadata envel
     }),
   }
   const artifacts = new PrismaTranslationArtifactStore(prisma as never)
-  const boundArtifacts: Array<{ values: unknown }> = []
+  const boundArtifacts: Array<{ values: unknown; status: string; createdBy: string }> = []
   const input = {
     product,
     workspaceId,
