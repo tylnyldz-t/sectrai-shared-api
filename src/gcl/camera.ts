@@ -11,6 +11,7 @@ export const CAMERA_REVIEW_PACKET_VERSION = 'synthetic-camera-review-packet-v1' 
 export const CAMERA_REVIEW_RECEIPT_VERSION = 'synthetic-camera-review-receipt-v1' as const
 export const CAMERA_REVIEW_AUDIT_WITNESS_VERSION = 'synthetic-camera-review-audit-witness-v1' as const
 export const CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION = 'synthetic-camera-review-audit-trail-witness-v1' as const
+export const CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION = 'synthetic-camera-review-audit-trail-receipt-v1' as const
 
 export type AdosCameraControl = {
   id: `ADOS-${string}`
@@ -152,6 +153,28 @@ export type CameraReviewAuditTrailWitness = {
   publication: 'NOT_PUBLISHED'
 }
 
+/**
+ * D6's portable, minimized rendering of a D5 witness. It is derived only
+ * after D5's caller-supplied segment has been revalidated. It is not a
+ * signature, a durable audit record, a credential, or an action capability.
+ */
+export type CameraReviewAuditTrailReceipt = {
+  version: typeof CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION
+  receiptId: string
+  scopeBinding: { productDigest: string; workspaceDigest: string }
+  reviewId: string
+  requestedAuditHash: string
+  succeededAuditHash: string
+  reviewAuditHash: string
+  predecessorHash: string | null
+  state: 'SYNTHETIC_REVIEW_AUDIT_TRAIL_RECEIPT_VERIFIED_NO_ACTION'
+  rawMediaIncluded: false
+  automaticAction: false
+  notification: 'NOT_SENT'
+  publication: 'NOT_PUBLISHED'
+  integrityDigest: string
+}
+
 export type ReviewedCameraObservation = {
   reviewId: string
   decision: 'approved' | 'rejected'
@@ -190,6 +213,7 @@ type CameraFixture = {
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const CAMERA_REVIEW_ID_PATTERN = /^synthetic-camera-review-[a-f0-9]{24}$/
 const CAMERA_REVIEW_RECEIPT_ID_PATTERN = /^synthetic-camera-review-receipt-[a-f0-9]{24}$/
+const CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_ID_PATTERN = /^synthetic-camera-review-audit-trail-receipt-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 
