@@ -2,7 +2,7 @@ import { PrismaClient, Prisma } from '@prisma/client'
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import { productAuth, validProduct } from './auth.js'
 import { serializeRecord } from './types.js'
-import { mutationFrom, scopeFrom } from './validation.js'
+import { isInternalGclModuleId, mutationFrom, scopeFrom } from './validation.js'
 
 type AppOptions = { prisma?: PrismaClient; now?: () => Date }
 
@@ -40,6 +40,8 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date() 
 
   const base = '/api/products/:product/workspaces/:workspaceId/modules/:moduleId/records'
   app.use(base, (request, response, next) => {
+    // System-owned GCL records are written only by their transaction-bound ledgers.
+    if (isInternalGclModuleId(request.params.moduleId)) return response.status(404).json({ error: 'NOT_FOUND', code: 'not_found' })
     if (!validProduct(request.params.product ?? '')) return response.status(404).json({ error: 'NOT_FOUND', code: 'not_found' })
     return productAuth(request, response, next)
   })

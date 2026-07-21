@@ -186,6 +186,7 @@ export class PrismaImageCandidateLedger implements ImageCandidateLedger {
 /** Test-only seam; deployed hosts must use the durable Record-backed ledger. */
 export class InMemoryImageCandidateLedger implements ImageCandidateLedger {
   private readonly receipts = new Map<string, StoredCandidateReceipt>()
+  private readonly issuanceStates = new Map<string, 'in-flight' | 'final'>()
 
   constructor(private readonly auditLog: { append(event: ConnectorAuditEvent): Promise<{ hash: string }> }) {}
 
@@ -193,14 +194,24 @@ export class InMemoryImageCandidateLedger implements ImageCandidateLedger {
     assertImageCandidateIssuanceEvent(event)
     if (!this.auditLog || typeof this.auditLog.append !== 'function') throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
     const keys = event.detail.candidates.map((entry) => JSON.stringify([event.product, event.workspaceId, event.correlationId, entry.candidateId]))
-    if (keys.some((key) => this.receipts.has(key))) throw new ConnectorInputError('IMAGE_CANDIDATE_ALREADY_ISSUED')
-    const audit = await this.auditLog.append(event)
-    if (!audit || !safeHash(audit.hash)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
-    for (const entry of event.detail.candidates) {
-      const key = JSON.stringify([event.product, event.workspaceId, event.correlationId, entry.candidateId])
-      this.receipts.set(key, receiptFor(event, entry, audit.hash))
+    if (keys.some((key) => this.issuanceStates.get(key) === 'final' || this.receipts.has(key))) throw new ConnectorInputError('IMAGE_CANDIDATE_ALREADY_ISSUED')
+    if (keys.some((key) => this.issuanceStates.get(key) === 'in-flight')) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_ISSUANCE_IN_FLIGHT')
+    for (const key of keys) this.issuanceStates.set(key, 'in-flight')
+    try {
+      const audit = await this.auditLog.append(event)
+      if (!audit || !safeHash(audit.hash)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
+      for (const entry of event.detail.candidates) {
+        const key = JSON.stringify([event.product, event.workspaceId, event.correlationId, entry.candidateId])
+        this.receipts.set(key, receiptFor(event, entry, audit.hash))
+        this.issuanceStates.set(key, 'final')
+      }
+      return audit
+    } catch (error) {
+      for (const key of keys) {
+        if (this.issuanceStates.get(key) === 'in-flight') this.issuanceStates.delete(key)
+      }
+      throw error
     }
-    return audit
   }
 
   async assertIssued(candidate: SyntheticImageCandidate): Promise<ImageCandidateIssuanceProof> {

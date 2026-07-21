@@ -226,70 +226,115 @@ test('owner rejection is terminal, scope-bound, auditable, and never returns a m
 test('owner review rejects malformed, cross-scope, or already-decided candidates before audit append', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const reviews = new InMemoryImageOwnerReviewLedger(audit)
-  const result = await configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, context)
-  const candidate = result.data.candidates[0]
-  assert.ok(candidate)
+  const { candidate, candidates } = await governedIssuedRun(audit)
   const malformedUri = structuredClone(candidate)
   malformedUri.syntheticUri = 'https://provider.example/image.png'
-  await assert.rejects(() => ownerLikeSyntheticImage(malformedUri, true, 'checker@example.test', reviews, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
+  await assert.rejects(() => ownerLikeSyntheticImage(malformedUri, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
   const movedScope = structuredClone(candidate)
   movedScope.scope.workspaceId = 'other-workspace'
-  await assert.rejects(() => ownerLikeSyntheticImage(movedScope, true, 'checker@example.test', reviews, { ...context, workspaceId: 'other-workspace' }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
+  await assert.rejects(() => ownerLikeSyntheticImage(movedScope, true, 'checker@example.test', reviews, candidates, { ...context, workspaceId: 'other-workspace' }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
   const decided = structuredClone(candidate)
   decided.ownerReview.status = 'liked'
-  await assert.rejects(() => ownerLikeSyntheticImage(decided, true, 'checker@example.test', reviews, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_NOT_PENDING_OWNER_REVIEW')
+  await assert.rejects(() => ownerLikeSyntheticImage(decided, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_NOT_PENDING_OWNER_REVIEW')
   const extraData = structuredClone(candidate) as Record<string, unknown>
   extraData.prompt = 'PRIVATE-OWNER-PROMPT-ONLY'
-  await assert.rejects(() => ownerLikeSyntheticImage(extraData as never, true, 'checker@example.test', reviews, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
-  assert.equal(audit.entries.length, 0)
+  await assert.rejects(() => ownerLikeSyntheticImage(extraData as never, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
+  assert.equal(audit.entries.length, 3)
+})
+
+test('candidate issuance rejects direct output, binds the full redacted candidate, and is replay-safe', async () => {
+  const directLedger = new InMemoryImageCandidateLedger(new InMemoryHashChainAuditLog())
+  const direct = await configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, context)
+  await assert.rejects(() => issueSyntheticImageCandidates(direct, directLedger, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
+
+  const audit = new InMemoryHashChainAuditLog()
+  const { candidate, candidates, result } = await governedIssuedRun(audit)
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', new InMemoryImageOwnerReviewLedger(audit), new InMemoryImageCandidateLedger(audit), context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_NOT_ISSUED')
+  const alteredSafety = structuredClone(candidate)
+  alteredSafety.safety.filterId = 'another-safe-policy'
+  await assert.rejects(() => ownerLikeSyntheticImage(alteredSafety, true, 'checker@example.test', new InMemoryImageOwnerReviewLedger(audit), candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_NOT_ISSUED')
+  await assert.rejects(() => issueSyntheticImageCandidates(result, candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_ALREADY_ISSUED')
+  assert.equal(audit.entries.length, 3)
+
+  const concurrentAudit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), concurrentAudit, new TestQuota(), now)
+  const concurrentResult = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const concurrentLedger = new InMemoryImageCandidateLedger(concurrentAudit)
+  const issuances = await Promise.allSettled([
+    issueSyntheticImageCandidates(concurrentResult, concurrentLedger, context),
+    issueSyntheticImageCandidates(concurrentResult, concurrentLedger, context),
+  ])
+  assert.equal(issuances.filter((issuance) => issuance.status === 'fulfilled').length, 1)
+  assert.equal(concurrentAudit.entries.length, 3)
+})
+
+test('accessor-shaped input and family-safety hooks fail closed without executing getters', async () => {
+  let inputGetterRead = false
+  const input = {}
+  Object.defineProperty(input, 'prompt', { enumerable: true, get: () => { inputGetterRead = true; return 'should-not-be-read' } })
+  await assert.rejects(() => configuredConnector().run(input as never, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_TTI_INPUT')
+  assert.equal(inputGetterRead, false)
+
+  let filterGetterRead = false
+  const filter = { assess: () => ({ allowed: true }) }
+  Object.defineProperty(filter, 'id', { enumerable: true, get: () => { filterGetterRead = true; return 'should-not-be-read' } })
+  const connector = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, familySafetyFilter: filter as never })
+  await assert.rejects(() => connector.run({ prompt: 'A child-friendly solar system poster' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_FAMILY_SAFETY_FILTER_INVALID')
+  assert.equal(filterGetterRead, false)
 })
 
 test('terminal owner-review ledger permits one decision only, including a concurrent opposite decision', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const reviews = new InMemoryImageOwnerReviewLedger(audit)
-  const result = await configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, context)
-  const candidate = result.data.candidates[0]
-  assert.ok(candidate)
+  const { candidate, candidates } = await governedIssuedRun(audit)
 
   const decisions = await Promise.allSettled([
-    ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, context),
-    ownerRejectSyntheticImage(candidate, true, 'checker-two@example.test', 'NEEDS_REVISION', reviews, context),
+    ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, context),
+    ownerRejectSyntheticImage(candidate, true, 'checker-two@example.test', 'NEEDS_REVISION', reviews, candidates, context),
   ])
   assert.equal(decisions.filter((decision) => decision.status === 'fulfilled').length, 1)
-  assert.equal(audit.entries.length, 1)
-  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'SAFETY_CONCERN', reviews, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_OWNER_REVIEW_ALREADY_DECIDED')
-  assert.equal(audit.entries.length, 1)
+  assert.equal(audit.entries.length, 4)
+  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'SAFETY_CONCERN', reviews, candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_OWNER_REVIEW_ALREADY_DECIDED')
+  assert.equal(audit.entries.length, 4)
 })
 
 test('a corrupt audit tail fail-closes a terminal review before another decision append', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const reviews = new InMemoryImageOwnerReviewLedger(audit)
+  const { candidate, candidates } = await governedIssuedRun(audit)
   audit.entries.push({ event: {} as never, previousHash: null, hash: '0'.repeat(64) } as never)
-  const result = await configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, context)
-  const candidate = result.data.candidates[0]
-  assert.ok(candidate)
-  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
-  assert.equal(audit.entries.length, 1)
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(audit.entries.length, 4)
 })
 
 test('durable owner-review ledger commits one redacted receipt with its audit event and rolls back invalid state', async () => {
   const persistence = new TestGclPersistence()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), new PrismaHashChainAuditLog(persistence), new TestQuota(), now)
+  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const candidates = new PrismaImageCandidateLedger(persistence)
+  await issueSyntheticImageCandidates(result, candidates, context)
   const reviews = new PrismaImageOwnerReviewLedger(persistence)
-  const result = await configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, context)
   const candidate = result.data.candidates[0]
   assert.ok(candidate)
-  await ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, context)
-  assert.equal(persistence.records.filter((record) => record.moduleId === GCL_AUDIT_MODULE_ID).length, 1)
+  await ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, context)
+  assert.equal(persistence.records.filter((record) => record.moduleId === GCL_AUDIT_MODULE_ID).length, 4)
+  assert.equal(persistence.records.filter((record) => record.moduleId === GCL_IMAGE_CANDIDATE_MODULE_ID).length, 2)
   const receipts = persistence.records.filter((record) => record.moduleId === GCL_IMAGE_OWNER_REVIEW_MODULE_ID)
   assert.equal(receipts.length, 1)
   assert.equal(JSON.stringify(receipts[0]?.values).includes('child-friendly solar system poster'), false)
-  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker-two@example.test', 'NEEDS_REVISION', reviews, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_OWNER_REVIEW_ALREADY_DECIDED')
-  assert.equal(persistence.records.filter((record) => record.moduleId === GCL_AUDIT_MODULE_ID).length, 1)
+  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker-two@example.test', 'NEEDS_REVISION', reviews, candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_OWNER_REVIEW_ALREADY_DECIDED')
+  assert.equal(persistence.records.filter((record) => record.moduleId === GCL_AUDIT_MODULE_ID).length, 4)
 
   const corrupt = new TestGclPersistence()
+  const corruptRunner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), new PrismaHashChainAuditLog(corrupt), new TestQuota(), now)
+  const corruptResult = await corruptRunner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const corruptCandidates = new PrismaImageCandidateLedger(corrupt)
+  await issueSyntheticImageCandidates(corruptResult, corruptCandidates, context)
   corrupt.records.push({ id: 'bad-receipt', product: context.product, workspaceId: context.workspaceId, moduleId: GCL_IMAGE_OWNER_REVIEW_MODULE_ID, values: { unexpected: true }, createdAt: now() })
-  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', new PrismaImageOwnerReviewLedger(corrupt), context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_LEDGER_INVALID')
-  assert.equal(corrupt.records.filter((record) => record.moduleId === GCL_AUDIT_MODULE_ID).length, 0)
+  const corruptCandidate = corruptResult.data.candidates[0]
+  assert.ok(corruptCandidate)
+  await assert.rejects(() => ownerLikeSyntheticImage(corruptCandidate, true, 'checker@example.test', new PrismaImageOwnerReviewLedger(corrupt), corruptCandidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_LEDGER_INVALID')
+  assert.equal(corrupt.records.filter((record) => record.moduleId === GCL_AUDIT_MODULE_ID).length, 3)
 })
 
 test('candidate carries a redacted jarvis-creative-worker ComfyUI/SDXL shape but no executable dispatch path', async () => {

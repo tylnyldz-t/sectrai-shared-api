@@ -7,6 +7,9 @@ const ACTOR_LIMIT = 160
 export type RecordScope = { product: string; workspaceId: string; moduleId: string }
 export type RecordMutation = { values: Record<string, unknown>; status: string | null; createdBy?: string }
 
+/** GCL's audit, quota, and media ledgers are private service records, not product CRUD data. */
+export function isInternalGclModuleId(moduleId: unknown): boolean { return typeof moduleId === 'string' && moduleId.startsWith('gcl-') }
+
 export function scopeFrom(request: Request): RecordScope {
   const { product, workspaceId, moduleId } = request.params
   if (typeof product !== 'string' || typeof workspaceId !== 'string' || typeof moduleId !== 'string') throw Object.assign(new Error('INVALID_RECORD_SCOPE'), { status: 400 })
