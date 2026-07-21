@@ -15,11 +15,15 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v7' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v8' as const
 const SYNTHETIC_DOCUMENT_DATA_BOUNDARY = {
   evidenceSource: 'synthetic-fixture',
   inputShape: 'plain-own-data-only',
   rawDocumentContentAccepted: false,
+} as const
+const SYNTHETIC_DOCUMENT_MAKER_CHECKER_BOUNDARY = {
+  actorIdentity: 'ascii-case-insensitive-trimmed',
+  independentReviewerRequired: true,
 } as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
@@ -102,6 +106,11 @@ export type SyntheticDocumentReviewPacket = {
     evidenceSource: typeof SYNTHETIC_DOCUMENT_DATA_BOUNDARY.evidenceSource
     inputShape: typeof SYNTHETIC_DOCUMENT_DATA_BOUNDARY.inputShape
     rawDocumentContentAccepted: typeof SYNTHETIC_DOCUMENT_DATA_BOUNDARY.rawDocumentContentAccepted
+  }
+  /** Independent review compares validated actor identities, not display casing. */
+  makerCheckerBinding: {
+    actorIdentity: typeof SYNTHETIC_DOCUMENT_MAKER_CHECKER_BOUNDARY.actorIdentity
+    independentReviewerRequired: typeof SYNTHETIC_DOCUMENT_MAKER_CHECKER_BOUNDARY.independentReviewerRequired
   }
   /** Metadata-only freshness limit for the synthetic evidence reference. */
   evidenceBinding: {
@@ -222,6 +231,7 @@ function reviewPacketIntegrityMaterial(
   consentBinding: SyntheticDocumentReviewPacket['consentBinding'],
   governanceBinding: SyntheticDocumentReviewPacket['governanceBinding'],
   dataBoundaryBinding: SyntheticDocumentReviewPacket['dataBoundaryBinding'],
+  makerCheckerBinding: SyntheticDocumentReviewPacket['makerCheckerBinding'],
   evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
   reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): Record<string, unknown> {
@@ -240,6 +250,7 @@ function reviewPacketIntegrityMaterial(
     consentBinding,
     governanceBinding,
     dataBoundaryBinding,
+    makerCheckerBinding,
     evidenceBinding,
     reviewWindow,
   }
@@ -282,15 +293,17 @@ function reviewPacketFor(
   const consentBinding = { purpose: consent.purpose, policyVersionDigest: digest(consent.policyVersion), expiresAt: consent.expiresAt }
   const governanceBinding = { maxReviewAgeSeconds, maxEvidenceAgeSeconds }
   const dataBoundaryBinding = { ...SYNTHETIC_DOCUMENT_DATA_BOUNDARY }
+  const makerCheckerBinding = { ...SYNTHETIC_DOCUMENT_MAKER_CHECKER_BOUNDARY }
   const evidenceBinding = evidenceBindingFor(proposal.evidence, issuedAt, maxEvidenceAgeSeconds)
   const reviewWindow = { issuedAt: issuedAt.toISOString(), reviewBy: reviewByFor(issuedAt, consent.expiresAt, evidenceBinding.expiresAt, maxReviewAgeSeconds).toISOString() }
   return {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
-    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, evidenceBinding, reviewWindow))),
+    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, evidenceBinding, reviewWindow))),
     scopeBinding,
     consentBinding,
     governanceBinding,
     dataBoundaryBinding,
+    makerCheckerBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -370,6 +383,9 @@ function reviewActor(reviewer: unknown): string {
   return normalized
 }
 
+/** Actor IDs are ASCII-only at this boundary, so locale-free lowercasing is stable. */
+function actorIdentity(actor: string): string { return actor.toLowerCase() }
+
 function reviewedEvidence(value: unknown): SyntheticDocumentProposal['evidence'] {
   if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_EVIDENCE')
   exactKeys(value, ['evidenceId', 'sha256', 'mediaType', 'byteLength', 'capturedAt', 'rawContentStored'], 'UNEXPECTED_DOCUMENT_PROPOSAL_EVIDENCE_FIELD')
@@ -435,6 +451,13 @@ function reviewedDataBoundaryBinding(value: unknown): SyntheticDocumentReviewPac
   exactKeys(value, ['evidenceSource', 'inputShape', 'rawDocumentContentAccepted'], 'UNEXPECTED_DOCUMENT_REVIEW_DATA_BOUNDARY_BINDING_FIELD')
   if (value.evidenceSource !== SYNTHETIC_DOCUMENT_DATA_BOUNDARY.evidenceSource || value.inputShape !== SYNTHETIC_DOCUMENT_DATA_BOUNDARY.inputShape || value.rawDocumentContentAccepted !== false) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_DATA_BOUNDARY_BINDING')
   return { ...SYNTHETIC_DOCUMENT_DATA_BOUNDARY }
+}
+
+function reviewedMakerCheckerBinding(value: unknown): SyntheticDocumentReviewPacket['makerCheckerBinding'] {
+  if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_MAKER_CHECKER_BINDING')
+  exactKeys(value, ['actorIdentity', 'independentReviewerRequired'], 'UNEXPECTED_DOCUMENT_REVIEW_MAKER_CHECKER_BINDING_FIELD')
+  if (value.actorIdentity !== SYNTHETIC_DOCUMENT_MAKER_CHECKER_BOUNDARY.actorIdentity || value.independentReviewerRequired !== true) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_MAKER_CHECKER_BINDING')
+  return { ...SYNTHETIC_DOCUMENT_MAKER_CHECKER_BOUNDARY }
 }
 
 function reviewedEvidenceBinding(
@@ -520,7 +543,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const mesaEvidenceHandoff: SyntheticDocumentProposal['mesaEvidenceHandoff'] = { state: 'BLOCKED_PENDING_INDEPENDENT_OWNER_REVIEW', referenceOnly: true, rawContentIncluded: false, sent: false }
 
   if (!isRecord(proposal.reviewPacket)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET')
-  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
+  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'makerCheckerBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
   if (proposal.reviewPacket.version !== SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
   if (!isRecord(proposal.reviewPacket.scopeBinding)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_SCOPE')
   exactKeys(proposal.reviewPacket.scopeBinding, ['productDigest', 'workspaceDigest'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_SCOPE_FIELD')
@@ -531,6 +554,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const consentBinding = reviewedConsentBinding(proposal.reviewPacket.consentBinding, reviewedAt)
   const governanceBinding = reviewedGovernanceBinding(proposal.reviewPacket.governanceBinding)
   const dataBoundaryBinding = reviewedDataBoundaryBinding(proposal.reviewPacket.dataBoundaryBinding)
+  const makerCheckerBinding = reviewedMakerCheckerBinding(proposal.reviewPacket.makerCheckerBinding)
   const evidenceBinding = reviewedEvidenceBinding(proposal.reviewPacket.evidenceBinding, evidence, governanceBinding, reviewedAt)
   const reviewWindow = reviewedReviewWindow(proposal.reviewPacket.reviewWindow, reviewedAt)
   validateReviewPacketTimeline(consentBinding, governanceBinding, evidenceBinding, reviewWindow)
@@ -541,6 +565,7 @@ function validateSyntheticDocumentProposalForReviewAt(
     consentBinding,
     governanceBinding,
     dataBoundaryBinding,
+    makerCheckerBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -550,7 +575,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   }
   if (proposal.reviewPacket.state !== reviewPacket.state || proposal.reviewPacket.rawDocumentContentIncluded !== false || proposal.reviewPacket.automaticApply !== false || proposal.reviewPacket.automaticPublication !== false || productDigest !== digest(scoped.product) || workspaceDigest !== digest(scoped.workspaceId)) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_SCOPE_MISMATCH')
   const normalized: SyntheticDocumentProposal = { proposalId, syntheticUri: proposal.syntheticUri, preparedBy, mode: LIVE_DISABLED, extraction: 'SYNTHETIC_PROPOSAL_ONLY_NOT_OCR', evidence, fields, fieldsDigest, ownerReview, reviewPacket, mesaEvidenceHandoff }
-  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.makerCheckerBinding, reviewPacket.evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
   return normalized
 }
 
@@ -645,7 +670,7 @@ export async function independentlyReviewSyntheticDocumentProposal(proposal: Syn
   if (decision !== 'approved' && decision !== 'rejected') throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_DECISION')
   const reviewedAt = reviewNow(context)
   const normalizedProposal = validateSyntheticDocumentProposalForReviewAt(proposal, context, reviewedAt)
-  if (normalizedReviewer === normalizedProposal.preparedBy) throw new MakerCheckerError('DOCUMENT_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
+  if (actorIdentity(normalizedReviewer) === actorIdentity(normalizedProposal.preparedBy)) throw new MakerCheckerError('DOCUMENT_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
   const occurredAt = reviewedAt.toISOString()
   const audit = await auditLog.append({
     type: 'connector.document.owner_reviewed', connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, actor: normalizedReviewer,
