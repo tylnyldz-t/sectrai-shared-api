@@ -161,7 +161,16 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
     const artifact = await artifacts.propose({ product: scope.product, workspaceId: scope.workspaceId, actor, connectorId, proposal: result.artifact, runAuditHash: result.provenance.auditHash })
     const artifactAudit = await auditLog.append({
       type: 'translation.artifact.created', connectorId, product: scope.product, workspaceId: scope.workspaceId, actor, ...artifactAuditContext,
-      detail: { artifactId: artifact.id, kind: artifact.kind, contentHash: artifact.contentHash, approvalState: artifact.approvalState, runAuditHash: artifact.runAuditHash, autoPublish: false },
+      detail: {
+        artifactId: artifact.id,
+        kind: artifact.kind,
+        contentHash: artifact.contentHash,
+        approvalState: artifact.approvalState,
+        reviewDigest: artifact.reviewDigest,
+        reviewExpiresAt: artifact.reviewExpiresAt,
+        runAuditHash: artifact.runAuditHash,
+        autoPublish: false,
+      },
     })
     return response.json({ result, artifact: { ...artifact, auditHash: artifactAudit.hash } })
   }))
@@ -192,7 +201,16 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
     const artifactAudit = await auditLog.append({
       type: decision.decision === 'approved' ? 'translation.artifact.approved' : 'translation.artifact.rejected', connectorId: artifact.connectorId,
       product: scope.product, workspaceId: scope.workspaceId, actor, ...artifactAuditContext,
-      detail: { artifactId: artifact.id, kind: artifact.kind, contentHash: artifact.contentHash, approvalState: artifact.approvalState, runAuditHash: artifact.runAuditHash, autoPublish: false },
+      detail: {
+        artifactId: artifact.id,
+        kind: artifact.kind,
+        contentHash: artifact.contentHash,
+        approvalState: artifact.approvalState,
+        reviewDigest: artifact.reviewDigest,
+        reviewExpiresAt: artifact.reviewExpiresAt,
+        runAuditHash: artifact.runAuditHash,
+        autoPublish: false,
+      },
     })
     return response.json({ artifact, auditHash: artifactAudit.hash })
   }))

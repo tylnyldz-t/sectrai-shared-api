@@ -1,4 +1,4 @@
-import { CostCapError, ConnectorUnavailableError, OwnerGateError, ScopeError } from './errors.js'
+import { CostCapError, ConnectorUnavailableError, GclError, OwnerGateError, ScopeError } from './errors.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export type RunConnectorRequest = {
@@ -65,10 +65,12 @@ export class GovernedConnectorRunner {
       })
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
     } catch (error) {
+      // Provider/runtime errors must never place raw fixture data in durable audit.
+      const errorCode = error instanceof GclError ? error.code : 'connector_run_failed'
       await this.auditLog.append({
         type: 'connector.run.failed', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
         scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(),
-        detail: { requestedAuditHash: requestedAudit.hash, error: error instanceof Error ? error.message : 'UNKNOWN_ERROR' },
+        detail: { requestedAuditHash: requestedAudit.hash, error: errorCode },
       })
       throw error
     }

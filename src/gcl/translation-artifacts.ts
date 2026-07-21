@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
-import { appendAuditEvent } from './audit.js'
+import { appendAuditEvent, requireSuccessfulRunAudit } from './audit.js'
 import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorUnavailableError, MakerCheckerError } from './errors.js'
 import type { ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
 
@@ -173,6 +173,12 @@ export class PrismaTranslationArtifactStore {
     return this.prisma.$transaction(async (transaction) => {
       const proposal = translationArtifactProposal(input.connectorId, input.proposal)
       if (!proposal || !AUDIT_SHA256.test(input.runAuditHash)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_PROPOSAL_INVALID')
+      await requireSuccessfulRunAudit(transaction, {
+        product: input.product,
+        workspaceId: input.workspaceId,
+        connectorId: input.connectorId,
+        runAuditHash: input.runAuditHash,
+      })
       const pending = { connectorId: input.connectorId, ...proposal, runAuditHash: input.runAuditHash }
       const record = await transaction.record.create({
         data: {
