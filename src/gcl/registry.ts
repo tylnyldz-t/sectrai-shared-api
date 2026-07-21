@@ -1,6 +1,12 @@
 import { CostCapError, ConnectorUnavailableError, GclError, OwnerGateError, ScopeError } from './errors.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
+const ACTOR_ID = /^[a-zA-Z0-9:_@. -]{1,160}$/
+
+function canonicalActor(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() === value && Boolean(value) && ACTOR_ID.test(value)
+}
+
 export type RunConnectorRequest = {
   connectorId: string
   input: unknown
@@ -36,6 +42,7 @@ export class GovernedConnectorRunner {
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
     const connector = this.registry.get(request.connectorId)
     if (!request.ownerApproved) throw new OwnerGateError()
+    if (!canonicalActor(request.actor)) throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
     if (!Number.isSafeInteger(request.costCapCents) || request.costCapCents < 1) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
     if (!Number.isSafeInteger(request.requestedItems) || request.requestedItems < 1) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
     if (request.scopes.length === 0 || request.scopes.some((scope) => !connector.scopes.includes(scope))) throw new ScopeError()

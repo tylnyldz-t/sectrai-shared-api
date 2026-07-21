@@ -6,7 +6,7 @@ import { createApp } from '../src/app.js'
 import { hashAuditEvent, InMemoryHashChainAuditLog, PrismaHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorUnavailableError } from '../src/gcl/errors.js'
 import type { RunConnectorRequest } from '../src/gcl/registry.js'
-import { InMemoryTranslationArtifactStore, PrismaTranslationArtifactStore } from '../src/gcl/translation-artifacts.js'
+import { InMemoryTranslationArtifactStore, PrismaTranslationArtifactStore, translationArtifactReviewDigest } from '../src/gcl/translation-artifacts.js'
 import type { ConnectorAuditEvent, ConnectorResult } from '../src/gcl/types.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
@@ -45,10 +45,11 @@ function runResult(): ConnectorResult {
   }
 }
 
-async function running(): Promise<{ server: Server; base: string; audit: InMemoryHashChainAuditLog } | null> {
+async function running(): Promise<{ server: Server; base: string; audit: InMemoryHashChainAuditLog; runnerCalls: () => number } | null> {
   const audit = new InMemoryHashChainAuditLog()
   const artifacts = new InMemoryTranslationArtifactStore(audit)
-  const runner = { async run(_: RunConnectorRequest): Promise<ConnectorResult> { return runResult() } }
+  let calls = 0
+  const runner = { async run(_: RunConnectorRequest): Promise<ConnectorResult> { calls += 1; return runResult() } }
   const app = createApp({
     prisma: {} as PrismaClient,
     now,
@@ -72,7 +73,7 @@ async function running(): Promise<{ server: Server; base: string; audit: InMemor
   }
   const address = server.address()
   if (!address || typeof address === 'string') return null
-  return { server, audit, base: `http://127.0.0.1:${address.port}/api/products/${product}/workspaces/${workspaceId}/gcl` }
+  return { server, audit, runnerCalls: () => calls, base: `http://127.0.0.1:${address.port}/api/products/${product}/workspaces/${workspaceId}/gcl` }
 }
 
 async function close(server: Server): Promise<void> {
@@ -126,6 +127,37 @@ test('approval HTTP route rejects missing or mismatched review bindings before a
     assert.equal((await approved.json() as { artifact: { approvalState: string } }).artifact.approvalState, 'approved')
     assert.equal(service.audit.entries.length, 2)
     assert.equal(JSON.stringify(service.audit.entries).includes('must never be stored'), false)
+  } finally {
+    await close(service.server)
+    if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+    else process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = oldProductKey
+  }
+})
+
+test('HTTP connector route rejects a blank owner actor before the runner, artifact, or audit can run', async (context) => {
+  const oldProductKey = process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+  process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = productKey
+  const service = await running()
+  if (!service) {
+    if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+    else process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = oldProductKey
+    return context.skip('sandbox disallows loopback listeners')
+  }
+  try {
+    const response = await fetch(`${service.base}/connectors/translation-text-synthetic/runs`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-sectrai-product-key': productKey,
+        'x-sectrai-owner-token': ownerToken,
+        'x-sectrai-owner-actor': '   ',
+      },
+      body: JSON.stringify({ input: { synthetic: true }, scopes: ['translation:text'], costCapCents: 25, requestedItems: 1 }),
+    })
+    assert.equal(response.status, 422)
+    assert.equal((await response.json() as { error: string }).error, 'INVALID_OWNER_ACTOR')
+    assert.equal(service.runnerCalls(), 0)
+    assert.equal(service.audit.entries.length, 0)
   } finally {
     await close(service.server)
     if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
@@ -279,6 +311,32 @@ test('durable proposals bind the maker, request limits, and exact metadata envel
   await assert.rejects(() => artifacts.proposeAndAudit(input), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_RUN_AUDIT_ALREADY_BOUND')
   assert.equal(artifactCreates, 1)
   assert.equal(auditCreates, 1)
+})
+
+test('durable artifact reads fail closed when the row status or maker envelope disagrees with valid metadata', async () => {
+  const proposal = runResult().artifact!
+  const pending = {
+    connectorId: 'translation-text-synthetic',
+    ...proposal,
+    runAuditHash: 'd'.repeat(64),
+  }
+  const values = { ...pending, reviewDigest: translationArtifactReviewDigest(pending) }
+  const baseRecord = {
+    id: 'translation-artifact-envelope',
+    product,
+    workspaceId,
+    values,
+    createdAt: now(),
+  }
+
+  for (const mismatch of [
+    { status: 'approved', createdBy: 'maker@example.test' },
+    { status: 'pending-checker-approval', createdBy: '   ' },
+  ]) {
+    const prisma = { record: { findFirst: async () => ({ ...baseRecord, ...mismatch }) } }
+    const artifacts = new PrismaTranslationArtifactStore(prisma as never)
+    await assert.rejects(() => artifacts.get(product, workspaceId, baseRecord.id), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_STORAGE_INVALID')
+  }
 })
 
 test('durable audit fails closed on a hash-valid success event whose bound result carries a raw fixture field', async () => {

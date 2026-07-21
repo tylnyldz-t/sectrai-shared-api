@@ -101,6 +101,7 @@ test('owner, cost, item, personal-data, locale, and synthetic-descriptor failure
   const request = { connectorId: SPEECH_TRANSLATION_CONNECTOR_ID, input: speechInput(), ...context, scopes: ['translation:speech'] }
 
   await assert.rejects(() => runner.run({ ...request, ownerApproved: false }), (error: unknown) => error instanceof OwnerGateError)
+  await assert.rejects(() => runner.run({ ...request, actor: '   ' }), (error: unknown) => error instanceof OwnerGateError && error.message === 'OWNER_ACTOR_REQUIRED')
   await assert.rejects(() => runner.run({ ...request, costCapCents: 26 }), (error: unknown) => error instanceof CostCapError)
   await assert.rejects(() => runner.run({ ...request, requestedItems: 2 }), (error: unknown) => error instanceof CostCapError && error.message === 'TRANSLATION_SINGLE_ARTIFACT_REQUIRED')
   await assert.rejects(() => runner.run({ ...request, input: { ...speechInput(), sourceAudio: { ...speechInput().sourceAudio, sourceRef: 'https://provider.example/audio.wav' } } }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_SYNTHETIC_TRANSLATION_AUDIO_DESCRIPTOR')
@@ -223,25 +224,27 @@ test('durable artifact decisions use compare-and-set with an audit row so simult
     moduleId: 'gcl-translation-artifacts', createdAt: now(), createdBy: context.actor,
   }
   const auditRows: Array<{ values: unknown }> = []
+  const recordStore = {
+    findFirst: async () => ({ ...record, values: { ...values }, status }),
+    findMany: async () => auditRows.map((row) => ({ ...row })),
+    updateMany: async (argument: { where: { status?: string }; data: { status: string; values: Record<string, unknown> } }) => {
+      await Promise.resolve()
+      if (argument.where.status !== status) return { count: 0 }
+      status = argument.data.status
+      values = { ...argument.data.values }
+      return { count: 1 }
+    },
+    create: async (argument: { data: { values: unknown } }) => {
+      auditRows.push({ values: argument.data.values })
+      return {}
+    },
+  }
   const durablePrisma = {
     $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({
       $executeRaw: async () => 1,
-      record: {
-        findFirst: async () => ({ ...record, values: { ...values }, status }),
-        findMany: async () => auditRows.map((row) => ({ ...row })),
-        updateMany: async (argument: { where: { status?: string }; data: { status: string; values: Record<string, unknown> } }) => {
-          await Promise.resolve()
-          if (argument.where.status !== status) return { count: 0 }
-          status = argument.data.status
-          values = { ...argument.data.values }
-          return { count: 1 }
-        },
-        create: async (argument: { data: { values: unknown } }) => {
-          auditRows.push({ values: argument.data.values })
-          return {}
-        },
-      },
+      record: recordStore,
     }),
+    record: recordStore,
   }
   const artifacts = new PrismaTranslationArtifactStore(durablePrisma as never)
   assert.equal('propose' in PrismaTranslationArtifactStore.prototype, false)

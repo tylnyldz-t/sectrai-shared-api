@@ -166,6 +166,23 @@ storage. In the durable Prisma store, artifact creation and a successful
 compare-and-set decision each share one database transaction with their audit
 row; an audit failure rolls back that metadata mutation.
 
+## Durable mutation boundary
+
+The production artifact store exposes only `proposeAndAudit` and
+`decideAndAudit`; there is no durable metadata-only `propose` or `decide`
+write path that can bypass its corresponding audit event. The HTTP routes use
+these atomic operations exclusively. The in-memory store retains direct helper
+methods only as a test seam; when it is used through the application it also
+requires an audit log and restores its prior in-memory state if audit append
+fails.
+
+An artifact row is valid only when its database `status` exactly matches the
+metadata `approvalState`, and its maker identity is a nonblank canonical owner
+actor. A blank owner actor is rejected before the connector runner, quota,
+artifact, or audit can execute. A status/maker mismatch in durable storage is
+treated as `TRANSLATION_ARTIFACT_STORAGE_INVALID`, never as a recoverable
+artifact.
+
 ## ADOS boundary checklist
 
 - Product/workspace scope is retained; this module makes no cross-product DB
@@ -176,7 +193,8 @@ row; an audit failure rolls back that metadata mutation.
 - Maker and checker are separated; the exact metadata digest and TTL bind a
   decision; terminal artifact decisions are compare-and-set; audit is a
   fail-closed, exact-schema, per-product/workspace SHA-256 chain with a
-  verified, maker-and-envelope-bound run-provenance link; no migration is
-  introduced by this module.
+  verified, maker-and-envelope-bound run-provenance link; each durable mutation
+  is inseparable from its audit row and validates its status/maker envelope; no
+  migration is introduced by this module.
 - `LIVE_DISABLED` synthetic tests and contracts do not authorize production,
   real-data ingestion, real translation, sending, publishing, or launch.

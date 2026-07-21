@@ -37,6 +37,10 @@ function canonicalTimestamp(value: unknown): value is string {
   return !Number.isNaN(timestamp.valueOf()) && timestamp.toISOString() === value
 }
 
+function canonicalActor(value: unknown): value is string {
+  return typeof value === 'string' && value.trim() === value && Boolean(value) && ACTOR_ID.test(value)
+}
+
 function safeInteger(value: unknown, maximum: number): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0 && value <= maximum
 }
@@ -110,7 +114,7 @@ function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
     || !CONNECTOR_ID.test(value.connectorId as string)
     || typeof value.product !== 'string' || !PRODUCT_ID.test(value.product)
     || typeof value.workspaceId !== 'string' || !WORKSPACE_ID.test(value.workspaceId)
-    || typeof value.actor !== 'string' || !ACTOR_ID.test(value.actor)
+    || !canonicalActor(value.actor)
     || !scopes(value.scopes)
     || !safeInteger(value.costCapCents, 10_000_000)
     || !safeInteger(value.requestedItems, 100_000)
