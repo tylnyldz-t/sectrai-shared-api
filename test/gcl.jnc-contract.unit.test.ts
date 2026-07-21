@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { hashAuditEvent, InMemoryHashChainAuditLog, verifiedAuditChainHead } from '../src/gcl/audit.js'
-import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError, SyntheticReviewIntegrityError } from '../src/gcl/errors.js'
+import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError, SyntheticResultIntegrityError, SyntheticReviewIntegrityError } from '../src/gcl/errors.js'
 import { gameEngineConnectorFromEnvironment, SyntheticGameEngineConnector, type GameEngineBuildInput, type GameEngineBuildPlan } from '../src/gcl/game-engine.js'
 import { ownerGateError } from '../src/gcl/owner-gate.js'
-import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, isCanonicalJsonData, syntheticPlanSha256, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
+import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, isCanonicalJsonData, syntheticPlanSha256, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
 import { InMemoryDailyConnectorQuota } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner, type RunConnectorRequest } from '../src/gcl/registry.js'
 import { createSyntheticReviewReceipt, verifiesSyntheticReviewReceipt } from '../src/gcl/review-receipt.js'
@@ -383,4 +383,56 @@ test('audit persistence unavailability prevents adapter execution and quota rese
   await assert.rejects(governed.run(request({ connectorId: connector.id })), /AUDIT_STORE_UNAVAILABLE/)
   assert.equal(adapterRuns, 0)
   assert.equal(quota.reservations.length, 0)
+})
+
+test('the final result boundary rejects a frozen outer-plan graft after quota and records a stable failure', async () => {
+  const genuine = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
+    { prompt: 'A local synthetic 3D proposal' }, directContext(),
+  )
+  const graftedData = deepFreeze({
+    ...genuine.data,
+    artifact: { ...genuine.data.artifact, publicationState: 'PUBLISHED' },
+  })
+  const connector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return { data: graftedData, provenance: genuine.provenance, confidence: 0 } },
+  }
+  const governed = runner(connector)
+  await assert.rejects(governed.run.run(request()), SyntheticResultIntegrityError)
+  assert.equal(governed.quota.reservations.length, 1)
+  assert.equal(governed.audit.entries.length, 2)
+  assert.equal(governed.audit.entries[0]?.event.type, 'connector.run.requested')
+  assert.equal(governed.audit.entries[1]?.event.type, 'connector.run.failed')
+  assert.equal(governed.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+  assert.equal(verifiedAuditChainHead(governed.audit.entries), governed.audit.entries[1]?.hash)
+})
+
+test('the final result boundary does not invoke accessor-backed result fields or accept nonzero confidence', async () => {
+  const genuine = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
+    { prompt: 'A local synthetic 3D proposal' }, directContext(),
+  )
+  let accessorReads = 0
+  const accessorResult: Record<string, unknown> = { provenance: genuine.provenance, confidence: 0 }
+  Object.defineProperty(accessorResult, 'data', {
+    enumerable: true,
+    get() { accessorReads += 1; return genuine.data },
+  })
+  const accessorConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return accessorResult as unknown as ConnectorResult },
+  }
+  const accessorRun = runner(accessorConnector)
+  await assert.rejects(accessorRun.run.run(request()), SyntheticResultIntegrityError)
+  assert.equal(accessorReads, 0)
+  assert.equal(accessorRun.quota.reservations.length, 1)
+  assert.equal(accessorRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+
+  const confidenceConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return { data: genuine.data, provenance: genuine.provenance, confidence: 1 } },
+  }
+  const confidenceRun = runner(confidenceConnector)
+  await assert.rejects(confidenceRun.run.run(request()), SyntheticResultIntegrityError)
+  assert.equal(confidenceRun.quota.reservations.length, 1)
+  assert.equal(confidenceRun.audit.entries[1]?.event.type, 'connector.run.failed')
 })
