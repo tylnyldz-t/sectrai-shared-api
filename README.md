@@ -8,7 +8,8 @@ plan shape only: `LIVE_DISABLED` is mandatory, no provider credential, graph
 execution, Docker/loopback client, or network adapter exists, and a separate
 owner checker plus a replay-protected terminal review ledger is required before
 a still-unpublished liked artifact or a non-publishable rejection receipt can
-exist. A successful governed run must first receive a durable, redacted
+exist. Candidates have a bounded, digest-bound review deadline: expiry blocks
+both issuance and any terminal decision. A successful governed run must first receive a durable, redacted
 candidate-issuance receipt whose candidate-set digest is bound to the success
 audit event; generic CRUD never exposes the reserved `gcl-*`
 system records. The ledgers reuse existing Records and add no migration. See

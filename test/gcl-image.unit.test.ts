@@ -72,7 +72,7 @@ class TestGclPersistence implements GclPersistence {
 }
 
 function configuredConnector(): SyntheticImageTtiConnector {
-  return new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2 })
+  return new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300 })
 }
 
 async function governedIssuedRun(audit: InMemoryHashChainAuditLog, input: { prompt: string; negativePrompt?: string } = { prompt: 'A child-friendly solar system poster' }) {
@@ -92,8 +92,15 @@ test('GM3 image adapter is synthetic-only and fails closed until governance limi
 })
 
 test('GM3 image adapter rejects every non-LIVE_DISABLED mode before it can generate a candidate', async () => {
-  const connector = new SyntheticImageTtiConnector({ liveMode: 'true', maxCostCapCents: 20, maxItems: 2 })
+  const connector = new SyntheticImageTtiConnector({ liveMode: 'true', maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300 })
   await assert.rejects(() => connector.run({ prompt: 'A friendly blue robot reading a book' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_LIVE_DISABLED')
+})
+
+test('GM3 image adapter fails closed without a bounded owner-review TTL', async () => {
+  const missing = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2 })
+  await assert.rejects(() => missing.run({ prompt: 'A friendly blue robot reading a book' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_TTL_NOT_CONFIGURED')
+  const overlong = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 86_401 })
+  await assert.rejects(() => overlong.run({ prompt: 'A friendly blue robot reading a book' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_TTL_NOT_CONFIGURED')
 })
 
 test('family-unsafe image requests are rejected in preflight without audit or quota reservation', async () => {
@@ -123,6 +130,7 @@ test('an injected family-safety hook is mandatory before audit or quota reservat
     liveMode: LIVE_DISABLED,
     maxCostCapCents: 20,
     maxItems: 2,
+    ownerReviewTtlSeconds: 300,
     familySafetyFilter: {
       id: 'owner-family-policy-test',
       assess: () => { policyCalls += 1; return { allowed: false, reason: 'OWNER_POLICY_DENIED' } },
@@ -143,6 +151,7 @@ test('malformed safety hooks and free-form policy reasons fail closed without le
     liveMode: LIVE_DISABLED,
     maxCostCapCents: 20,
     maxItems: 2,
+    ownerReviewTtlSeconds: 300,
     familySafetyFilter: { id: privateText, assess: () => ({ allowed: true }) },
   })
   await assert.rejects(() => invalidFilter.run({ prompt: 'A friendly blue robot reading a book' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_FAMILY_SAFETY_FILTER_INVALID')
@@ -153,6 +162,7 @@ test('malformed safety hooks and free-form policy reasons fail closed without le
     liveMode: LIVE_DISABLED,
     maxCostCapCents: 20,
     maxItems: 2,
+    ownerReviewTtlSeconds: 300,
     familySafetyFilter: { id: 'test-policy', assess: () => ({ allowed: false, reason: `DENIED:${privateText}` }) },
   })
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([unsafeReason]), audit, quota, now)
@@ -185,6 +195,7 @@ test('GM3 run requires owner gate, cost cap, scope, safe identity, quota, audit 
   assert.deepEqual(result.data.candidates[0]?.scope, { product: context.product, workspaceId: context.workspaceId, correlationId: context.correlationId })
   assert.equal(result.data.candidates[0]?.ownerReview.visibility, 'owner-only')
   assert.equal(result.data.candidates[0]?.ownerReview.publication, 'blocked')
+  assert.equal(result.data.candidates[0]?.ownerReview.reviewExpiresAt, '2026-07-22T12:05:00.000Z')
   assert.equal(result.data.candidates[0]?.previewDataUri.startsWith('data:image/svg+xml;base64,'), true)
   assert.equal(result.data.automaticPublication, false)
   assert.equal(result.data.nextAction, 'INDEPENDENT_OWNER_LIKE_REQUIRED')
@@ -256,9 +267,35 @@ test('owner review rejects malformed, cross-scope, or already-decided candidates
   const decided = structuredClone(candidate)
   decided.ownerReview.status = 'liked'
   await assert.rejects(() => ownerLikeSyntheticImage(decided, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_NOT_PENDING_OWNER_REVIEW')
+  const extendedExpiry = structuredClone(candidate)
+  extendedExpiry.ownerReview.reviewExpiresAt = '2026-07-22T13:00:00.000Z'
+  await assert.rejects(() => ownerLikeSyntheticImage(extendedExpiry, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
   const extraData = structuredClone(candidate) as Record<string, unknown>
   extraData.prompt = 'PRIVATE-OWNER-PROMPT-ONLY'
   await assert.rejects(() => ownerLikeSyntheticImage(extraData as never, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
+  assert.equal(audit.entries.length, 3)
+})
+
+test('expired candidates cannot be issued or terminally reviewed, including at the exact deadline', async () => {
+  const issuedAt = () => new Date('2026-07-22T12:00:00.000Z')
+  const deadline = () => new Date('2026-07-22T12:01:00.000Z')
+  const connector = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 60 })
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, new TestQuota(), issuedAt)
+  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  assert.equal(candidate.ownerReview.reviewExpiresAt, '2026-07-22T12:01:00.000Z')
+
+  const unissued = new InMemoryImageCandidateLedger(audit)
+  await assert.rejects(() => issueSyntheticImageCandidates(result, unissued, { ...context, now: deadline }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_OWNER_REVIEW_EXPIRED')
+  assert.equal(audit.entries.length, 2)
+
+  const candidates = new InMemoryImageCandidateLedger(audit)
+  await issueSyntheticImageCandidates(result, candidates, { ...context, now: issuedAt })
+  const reviews = new InMemoryImageOwnerReviewLedger(audit)
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, { ...context, now: deadline }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_OWNER_REVIEW_EXPIRED')
+  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'NEEDS_REVISION', reviews, candidates, { ...context, now: deadline }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_OWNER_REVIEW_EXPIRED')
   assert.equal(audit.entries.length, 3)
 })
 
@@ -304,7 +341,7 @@ test('accessor-shaped input and family-safety hooks fail closed without executin
   let filterGetterRead = false
   const filter = { assess: () => ({ allowed: true }) }
   Object.defineProperty(filter, 'id', { enumerable: true, get: () => { filterGetterRead = true; return 'should-not-be-read' } })
-  const connector = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, familySafetyFilter: filter as never })
+  const connector = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300, familySafetyFilter: filter as never })
   await assert.rejects(() => connector.run({ prompt: 'A child-friendly solar system poster' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_FAMILY_SAFETY_FILTER_INVALID')
   assert.equal(filterGetterRead, false)
 })
@@ -403,17 +440,21 @@ test('candidate carries a redacted jarvis-creative-worker ComfyUI/SDXL shape but
 })
 
 test('environment construction has no credential fields and accepts only explicit synthetic mode', async () => {
-  const configured = syntheticImageTtiConnectorFromEnvironment({ GCL_IMAGE_LIVE_MODE: LIVE_DISABLED, GCL_IMAGE_MAX_COST_CENTS: '20', GCL_IMAGE_MAX_ITEMS: '2' })
+  const configured = syntheticImageTtiConnectorFromEnvironment({ GCL_IMAGE_LIVE_MODE: LIVE_DISABLED, GCL_IMAGE_MAX_COST_CENTS: '20', GCL_IMAGE_MAX_ITEMS: '2', GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS: '300' })
   const result = await configured.run({ prompt: 'A child-friendly solar system poster' }, context)
   assert.equal(result.data.mode, LIVE_DISABLED)
 
-  const invalid = syntheticImageTtiConnectorFromEnvironment({ GCL_IMAGE_LIVE_MODE: 'LIVE_ENABLED', GCL_IMAGE_MAX_COST_CENTS: '20', GCL_IMAGE_MAX_ITEMS: '2' })
+  const invalid = syntheticImageTtiConnectorFromEnvironment({ GCL_IMAGE_LIVE_MODE: 'LIVE_ENABLED', GCL_IMAGE_MAX_COST_CENTS: '20', GCL_IMAGE_MAX_ITEMS: '2', GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS: '300' })
   await assert.rejects(() => invalid.run({ prompt: 'A child-friendly solar system poster' }, context), ConnectorUnavailableError)
+
+  const invalidTtl = syntheticImageTtiConnectorFromEnvironment({ GCL_IMAGE_LIVE_MODE: LIVE_DISABLED, GCL_IMAGE_MAX_COST_CENTS: '20', GCL_IMAGE_MAX_ITEMS: '2', GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS: '59' })
+  await assert.rejects(() => invalidTtl.run({ prompt: 'A child-friendly solar system poster' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_TTL_NOT_CONFIGURED')
 })
 
 test('direct connector use also rejects malformed context and unexpected input fields', async () => {
   await assert.rejects(() => configuredConnector().run({ prompt: 'A child-friendly solar system poster', providerKey: 'not-accepted' } as never, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_IMAGE_TTI_FIELD')
   await assert.rejects(() => configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, { ...context, correlationId: 'unsafe/correlation-id' }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_TTI_CONTEXT')
+  await assert.rejects(() => configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, { ...context, now: () => new Date('not-a-date') }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_TTI_CONTEXT')
 })
 
 test('GCL audit, quota, review, and candidate records stay outside generic product CRUD', () => {

@@ -12,6 +12,8 @@ export const IMAGE_CANDIDATE_SET_AUDIT_FIELD = 'syntheticCandidateSetDigest'
 
 const IMAGE_SCOPE = 'image:generate'
 const MAX_PROMPT_LENGTH = 1000
+const MIN_OWNER_REVIEW_TTL_SECONDS = 60
+const MAX_OWNER_REVIEW_TTL_SECONDS = 86_400
 const OWNER_ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 const FILTER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
@@ -55,6 +57,8 @@ export type OwnerReview = {
   visibility: 'owner-only'
   publication: 'blocked'
   required: true
+  /** Canonical UTC deadline; no issuance or terminal decision survives it. */
+  reviewExpiresAt: string
 }
 
 export type ImageRejectionReason = 'NOT_SUITABLE' | 'SAFETY_CONCERN' | 'NEEDS_REVISION'
@@ -145,11 +149,18 @@ export type SyntheticImageTtiConnectorConfig = {
   liveMode?: string
   maxCostCapCents?: number
   maxItems?: number
+  /** Bounded policy TTL for the independent owner review. */
+  ownerReviewTtlSeconds?: number
   familySafetyFilter?: FamilySafetyFilter
 }
 
 function positiveInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
+}
+
+function ownerReviewTtlSeconds(value: unknown): number | null {
+  const seconds = positiveInteger(value)
+  return seconds && seconds >= MIN_OWNER_REVIEW_TTL_SECONDS && seconds <= MAX_OWNER_REVIEW_TTL_SECONDS ? seconds : null
 }
 
 function environmentPositiveInteger(value: string | undefined): number | undefined {
@@ -159,6 +170,29 @@ function environmentPositiveInteger(value: string | undefined): number | undefin
 }
 
 function isImageSize(value: unknown): value is ImageSize { return value === 512 || value === 1024 }
+
+function canonicalTimestamp(value: unknown): value is string {
+  if (typeof value !== 'string') return false
+  const parsed = new Date(value)
+  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value
+}
+
+function currentDate(now: () => Date, error: string): Date {
+  try {
+    const value = now()
+    if (!(value instanceof Date) || Number.isNaN(value.getTime())) throw new ConnectorInputError(error)
+    return value
+  } catch (errorValue) {
+    if (errorValue instanceof ConnectorInputError) throw errorValue
+    throw new ConnectorInputError(error)
+  }
+}
+
+function reviewExpiresAt(issuedAt: Date, ttlSeconds: number, error: string): string {
+  const expiresAt = new Date(issuedAt.getTime() + ttlSeconds * 1_000)
+  if (Number.isNaN(expiresAt.getTime())) throw new ConnectorInputError(error)
+  return expiresAt.toISOString()
+}
 
 function hasControlCharacter(value: string): boolean {
   return /\p{C}/u.test(value)
@@ -285,8 +319,8 @@ function creativeWorkerPlan(input: Required<TextToImageInput>, promptDigest: str
   }
 }
 
-function candidateId(scope: ImageCandidateScope, actor: string, promptDigest: string, negativePromptDigest: string | undefined, width: ImageSize, height: ImageSize, index: number): string {
-  return `synthetic-image-${digest(JSON.stringify({ connectorId: IMAGE_TTI_CONNECTOR_ID, product: scope.product, workspaceId: scope.workspaceId, correlationId: scope.correlationId, actor, promptDigest, negativePromptDigest, width, height, index })).slice(0, 20)}`
+function candidateId(scope: ImageCandidateScope, actor: string, promptDigest: string, negativePromptDigest: string | undefined, width: ImageSize, height: ImageSize, reviewExpiresAtValue: string, index: number): string {
+  return `synthetic-image-${digest(JSON.stringify({ connectorId: IMAGE_TTI_CONNECTOR_ID, product: scope.product, workspaceId: scope.workspaceId, correlationId: scope.correlationId, actor, promptDigest, negativePromptDigest, width, height, reviewExpiresAt: reviewExpiresAtValue, index })).slice(0, 20)}`
 }
 
 /**
@@ -303,33 +337,38 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
 
   constructor(private readonly config: SyntheticImageTtiConnectorConfig = {}) {}
 
-  private configured(ctx: ConnectorRunContext): { filter: FamilySafetyFilter } {
+  private configured(ctx: ConnectorRunContext): { filter: FamilySafetyFilter; ownerReviewTtlSeconds: number } {
     if ((this.config.liveMode ?? LIVE_DISABLED) !== LIVE_DISABLED) throw new ConnectorUnavailableError('IMAGE_TTI_LIVE_DISABLED')
     if (!isSafeIdentifier(ctx.product) || !isSafeIdentifier(ctx.workspaceId) || !isSafeIdentifier(ctx.actor) || !isSafeIdentifier(ctx.correlationId) || typeof ctx.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_TTI_CONTEXT')
     const maxCostCapCents = positiveInteger(this.config.maxCostCapCents)
     const maxItems = positiveInteger(this.config.maxItems)
+    const reviewTtl = ownerReviewTtlSeconds(this.config.ownerReviewTtlSeconds)
     if (!maxCostCapCents || !maxItems) throw new ConnectorUnavailableError('IMAGE_TTI_GOVERNANCE_LIMITS_NOT_CONFIGURED')
+    if (!reviewTtl) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_TTL_NOT_CONFIGURED')
     if (!positiveInteger(ctx.costCapCents) || !positiveInteger(ctx.requestedItems)) throw new CostCapError('INVALID_IMAGE_TTI_GOVERNANCE_REQUEST')
     if (ctx.costCapCents > maxCostCapCents) throw new CostCapError()
     if (ctx.requestedItems > maxItems) throw new CostCapError('CONNECTOR_ITEM_CAP_EXCEEDED')
-    return { filter: this.config.familySafetyFilter ?? defaultFamilySafetyFilter }
+    return { filter: this.config.familySafetyFilter ?? defaultFamilySafetyFilter, ownerReviewTtlSeconds: reviewTtl }
   }
 
   preflight(input: TextToImageInput, ctx: ConnectorRunContext): void {
     const { filter } = this.configured(ctx)
+    currentDate(ctx.now, 'INVALID_IMAGE_TTI_CONTEXT')
     safetyAssessment(filter, imageInput(input))
   }
 
   async run(input: TextToImageInput, ctx: ConnectorRunContext): Promise<ConnectorResult<TextToImageData>> {
-    const { filter } = this.configured(ctx)
+    const { filter, ownerReviewTtlSeconds: reviewTtl } = this.configured(ctx)
     const normalized = imageInput(input)
     safetyAssessment(filter, normalized)
-    const generatedAt = ctx.now().toISOString()
+    const generatedDate = currentDate(ctx.now, 'INVALID_IMAGE_TTI_CONTEXT')
+    const generatedAt = generatedDate.toISOString()
+    const expiresAt = reviewExpiresAt(generatedDate, reviewTtl, 'INVALID_IMAGE_TTI_CONTEXT')
     const promptDigest = digest(normalized.prompt)
     const plan = creativeWorkerPlan(normalized, promptDigest)
     const candidates = Array.from({ length: ctx.requestedItems }, (_, index): SyntheticImageCandidate => {
       const scope = { product: ctx.product, workspaceId: ctx.workspaceId, correlationId: ctx.correlationId }
-      const id = candidateId(scope, ctx.actor, promptDigest, plan.negativePromptDigest, normalized.width, normalized.height, index)
+      const id = candidateId(scope, ctx.actor, promptDigest, plan.negativePromptDigest, normalized.width, normalized.height, expiresAt, index)
       return {
         candidateId: id,
         candidateIndex: index,
@@ -344,7 +383,7 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
         syntheticUri: `synthetic://gcl/${this.id}/${id}`,
         safety: { filterId: filter.id, classification: 'family-safe' },
         creativeWorkerPlan: plan,
-        ownerReview: { status: 'pending', visibility: 'owner-only', publication: 'blocked', required: true },
+        ownerReview: { status: 'pending', visibility: 'owner-only', publication: 'blocked', required: true, reviewExpiresAt: expiresAt },
       }
     })
     return {
@@ -391,7 +430,6 @@ function assertSyntheticCandidate(candidate: unknown): asserts candidate is Synt
   if (!hasExactKeys(value, candidateKeys)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   if (typeof value.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(value.candidateId) || typeof value.candidateIndex !== 'number' || !Number.isSafeInteger(value.candidateIndex) || value.candidateIndex < 0 || typeof value.promptDigest !== 'string' || !DIGEST_PATTERN.test(value.promptDigest) || (value.negativePromptDigest !== undefined && (typeof value.negativePromptDigest !== 'string' || !DIGEST_PATTERN.test(value.negativePromptDigest))) || !isSafeIdentifier(value.requestedBy)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   assertCandidateScope(value.scope, 'INVALID_IMAGE_REVIEW_CANDIDATE')
-  if (value.candidateId !== candidateId(value.scope, value.requestedBy, value.promptDigest, value.negativePromptDigest, value.width as ImageSize, value.height as ImageSize, value.candidateIndex)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   if (!isImageSize(value.width) || !isImageSize(value.height) || value.mediaType !== 'image/svg+xml' || value.syntheticUri !== `synthetic://gcl/${IMAGE_TTI_CONNECTOR_ID}/${value.candidateId}` || value.previewDataUri !== previewDataUri(value.candidateId, value.width, value.height)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
 
   const safety = plainRecord(value.safety)
@@ -409,9 +447,15 @@ function assertSyntheticCandidate(candidate: unknown): asserts candidate is Synt
   if (dispatch.performed !== false || dispatch.gate !== LIVE_DISABLED || dispatch.network !== 'not-attempted') throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
 
   const review = plainRecord(value.ownerReview)
-  if (!review || !hasExactKeys(review, ['status', 'visibility', 'publication', 'required'])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+  if (!review || !hasExactKeys(review, ['status', 'visibility', 'publication', 'required', 'reviewExpiresAt'])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   if (review.status !== 'pending') throw new ConnectorInputError('IMAGE_CANDIDATE_NOT_PENDING_OWNER_REVIEW')
-  if (review.visibility !== 'owner-only' || review.publication !== 'blocked' || review.required !== true) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+  if (review.visibility !== 'owner-only' || review.publication !== 'blocked' || review.required !== true || !canonicalTimestamp(review.reviewExpiresAt)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+  if (value.candidateId !== candidateId(value.scope, value.requestedBy, value.promptDigest, value.negativePromptDigest, value.width, value.height, review.reviewExpiresAt, value.candidateIndex)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+}
+
+function assertReviewNotExpired(candidate: SyntheticImageCandidate, occurredAt: Date): void {
+  const expiresAt = new Date(candidate.ownerReview.reviewExpiresAt)
+  if (occurredAt.getTime() >= expiresAt.getTime()) throw new ConnectorInputError('IMAGE_OWNER_REVIEW_EXPIRED')
 }
 
 /**
@@ -426,14 +470,14 @@ export async function issueSyntheticImageCandidates(runResult: ConnectorResult<T
   if (!data || data.mode !== LIVE_DISABLED || data.nextAction !== 'INDEPENDENT_OWNER_LIKE_REQUIRED' || data.automaticPublication !== false || !Array.isArray(data.candidates) || !provenance || provenance.connectorId !== IMAGE_TTI_CONNECTOR_ID || provenance.source !== 'synthetic-image-tti' || typeof provenance.auditHash !== 'string' || !DIGEST_PATTERN.test(provenance.auditHash)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
   if (!candidateLedger || typeof candidateLedger !== 'object' || typeof candidateLedger.appendIssuance !== 'function') throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
   if (!context || typeof context !== 'object' || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
-  const occurredAt = context.now()
-  if (!(occurredAt instanceof Date) || Number.isNaN(occurredAt.getTime())) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+  const occurredAt = currentDate(context.now, 'INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
   if (data.candidates.length < 1 || data.candidates.length > 32) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
 
   const candidates: SyntheticImageCandidate[] = []
   for (let index = 0; index < data.candidates.length; index += 1) {
     const candidate = data.candidates[index]
     assertSyntheticCandidate(candidate)
+    assertReviewNotExpired(candidate, occurredAt)
     if (candidate.candidateIndex !== index || candidate.requestedBy !== context.actor || candidate.scope.product !== context.product || candidate.scope.workspaceId !== context.workspaceId || candidate.scope.correlationId !== context.correlationId) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
     candidates.push(candidate)
   }
@@ -465,8 +509,8 @@ export async function issueSyntheticImageCandidates(runResult: ConnectorResult<T
 function assertOwnerReviewContext(candidate: SyntheticImageCandidate, context: ImageOwnerReviewContext): Date {
   if (!context || typeof context !== 'object' || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
   if (candidate.scope.product !== context.product || candidate.scope.workspaceId !== context.workspaceId || candidate.scope.correlationId !== context.correlationId) throw new ConnectorInputError('IMAGE_REVIEW_SCOPE_MISMATCH')
-  const occurredAt = context.now()
-  if (!(occurredAt instanceof Date) || Number.isNaN(occurredAt.getTime())) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+  const occurredAt = currentDate(context.now, 'INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+  assertReviewNotExpired(candidate, occurredAt)
   return occurredAt
 }
 
@@ -516,7 +560,7 @@ export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate
     mediaType: request.candidate.mediaType,
     previewDataUri: request.candidate.previewDataUri,
     syntheticUri: request.candidate.syntheticUri,
-    ownerReview: { status: 'liked', visibility: 'owner-only', publication: 'blocked', required: true, actor: request.actor, occurredAt: request.occurredAt.toISOString() },
+    ownerReview: { status: 'liked', visibility: 'owner-only', publication: 'blocked', required: true, reviewExpiresAt: request.candidate.ownerReview.reviewExpiresAt, actor: request.actor, occurredAt: request.occurredAt.toISOString() },
     publication: 'blocked',
     auditHash: audit.hash,
     issuanceAuditHash: issuance.issuanceAuditHash,
@@ -540,7 +584,7 @@ export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandida
   return {
     reviewId,
     candidateId: request.candidate.candidateId,
-    ownerReview: { status: 'rejected', visibility: 'owner-only', publication: 'blocked', required: true, actor: request.actor, occurredAt: request.occurredAt.toISOString(), reason },
+    ownerReview: { status: 'rejected', visibility: 'owner-only', publication: 'blocked', required: true, reviewExpiresAt: request.candidate.ownerReview.reviewExpiresAt, actor: request.actor, occurredAt: request.occurredAt.toISOString(), reason },
     publication: 'blocked',
     auditHash: audit.hash,
     issuanceAuditHash: issuance.issuanceAuditHash,
@@ -553,6 +597,7 @@ export function syntheticImageTtiConnectorFromEnvironment(environment: NodeJS.Pr
     liveMode: environment.GCL_IMAGE_LIVE_MODE,
     maxCostCapCents: environmentPositiveInteger(environment.GCL_IMAGE_MAX_COST_CENTS),
     maxItems: environmentPositiveInteger(environment.GCL_IMAGE_MAX_ITEMS),
+    ownerReviewTtlSeconds: environmentPositiveInteger(environment.GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS),
     ...overrides,
   })
 }

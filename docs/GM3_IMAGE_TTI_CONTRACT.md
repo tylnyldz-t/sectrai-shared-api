@@ -18,8 +18,9 @@ only accepted mode.
    correlation ID, an allowed scope, positive cost cap, and positive requested
    item count.
 2. `SyntheticImageTtiConnector` requires `GCL_IMAGE_LIVE_MODE=LIVE_DISABLED`,
-   `GCL_IMAGE_MAX_COST_CENTS`, and `GCL_IMAGE_MAX_ITEMS`; missing or malformed
-   limits reject the request.
+   `GCL_IMAGE_MAX_COST_CENTS`, `GCL_IMAGE_MAX_ITEMS`, and
+   `GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS`; missing or malformed limits reject the
+   request. The review TTL is bounded from 60 seconds through 24 hours.
 3. The synchronous `FamilySafetyFilter` hook runs in preflight before audit or
    quota reservation. The included baseline filter is deliberately conservative
    and is not a production moderation policy.
@@ -36,9 +37,10 @@ only accepted mode.
    one redacted, `publication: blocked` fingerprint receipt per candidate
    through `PrismaImageCandidateLedger`. A structurally valid candidate from a
    different run cannot borrow the success audit hash. Direct connector output
-   is deliberately not issuable. This is an issuance/provenance guard, not
-   actor authentication; the host still authenticates the caller that records
-   it.
+   is deliberately not issuable. An issuance at or after the candidate's
+   canonical `reviewExpiresAt` is rejected. This is an issuance/provenance and
+   bounded-lifetime guard, not actor authentication; the host still
+   authenticates the caller that records it.
 6. Each candidate is `owner-only`, `pending`, and `publication: blocked`.
    It records its maker and originating product/workspace/correlation scope.
    Only a different owner checker may call
@@ -52,7 +54,8 @@ only accepted mode.
    A rejection returns a terminal review receipt, not an artifact URI or image
    preview, and remains `publication: blocked`. The supplied review ledger
    accepts exactly one terminal decision per product/workspace/correlation/
-   candidate tuple.
+   candidate tuple. A terminal decision at or after `reviewExpiresAt` is
+   rejected before the issuance proof or review-audit append.
 
 Before either terminal decision, the module fail-closes unless the candidate
 has the exact local SVG preview, synthetic URI, non-executable plan shape,
@@ -63,10 +66,11 @@ it is an integrity check, not an authentication signature. Its full redacted
 shape must additionally match a prior candidate receipt tied to the governed
 run success audit hash and its candidate-set digest. Cross-workspace or
 correlation review, altered preview, URI, safety metadata, or plan, an
-unissued candidate, extra candidate fields (including a raw prompt), malformed
-audit log, and attempted self approval are rejected before a decision audit
-append. `PrismaImageCandidateLedger` and `PrismaImageOwnerReviewLedger` reuse
-existing Records; each writes with its audit event under the existing
+unissued or expired candidate, a changed `reviewExpiresAt`, extra candidate
+fields (including a raw prompt), malformed audit log, and attempted self
+approval are rejected before a decision audit append.
+`PrismaImageCandidateLedger` and `PrismaImageOwnerReviewLedger` reuse existing
+Records; each writes with its audit event under the existing
 per-workspace audit lock. A duplicate or opposite decision is rejected before
 either write. The host is still
 responsible for authenticating its actors before it grants owner approval,
@@ -98,6 +102,7 @@ module does not expose an HTTP route or manage credentials.
 GCL_IMAGE_LIVE_MODE=LIVE_DISABLED
 GCL_IMAGE_MAX_COST_CENTS=25
 GCL_IMAGE_MAX_ITEMS=2
+GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS=900
 GCL_IMAGE_DAILY_RUN_QUOTA=10
 GCL_IMAGE_DAILY_ITEM_QUOTA=20
 ```
@@ -107,6 +112,10 @@ setting, or live flag is accepted. Supplying any `GCL_IMAGE_LIVE_MODE` value
 other than `LIVE_DISABLED` closes the connector. Prompt data is never returned
 in the candidate, plan, provenance, or audit detail: only SHA-256 digests are
 kept and all owner-supplied text is declared `data-only`, never instructions.
+The review TTL is required and bounded to 60–86,400 seconds. The generated
+canonical expiry timestamp is part of the candidate's ID and redacted
+fingerprint, so neither a caller nor a stored receipt can extend it without
+breaking issuance proof.
 
 This contract does not authorize a real provider, a local GPU worker, a model
 installation, a migration, or public publishing. Each remains a separate owner
@@ -130,7 +139,9 @@ decision and must be implemented behind its own bounded approval path.
   hash and matching redacted candidate-set digest, stores candidate IDs plus
   fingerprints/hashes only, and rejects direct connector output, a changed
   redacted candidate field, a candidate set from another run, duplicate
-  issuance, or concurrent issuance replay.
+  issuance, concurrent issuance replay, or an expired candidate. Owner like
+  and rejection checks use the same strict deadline and reject the exact expiry
+  instant before a receipt or audit event can be added.
 - The durable candidate and review ledgers serialize on the audit lock. A
   replay, concurrent opposite decision, malformed receipt, malformed audit
   record, a self-consistent audit hash with a broken predecessor, or unissued
