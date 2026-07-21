@@ -41,13 +41,15 @@ only accepted mode.
 
 Before either terminal decision, the module fail-closes unless the candidate
 has the exact local SVG preview, synthetic URI, non-executable plan shape,
-digest linkage, pending owner-review state, and matching source scope that the
-synthetic adapter emits. Cross-workspace/correlation review, altered preview
-or URI, extra candidate fields (including a raw prompt), malformed audit log,
-and attempted self approval are rejected before an audit append. The host is
-still responsible for authenticating its actors and durably persisting the
-terminal receipt/replay state; this module has no HTTP route, database
-migration, or publishing path.
+digest linkage, bounded candidate index, pending owner-review state, and
+matching source scope that the synthetic adapter emits. The candidate ID binds
+those redacted fields, preventing an accidental scope/actor/preview mix-up;
+it is an integrity check, not an authentication signature. Cross-workspace or
+correlation review, altered preview or URI, extra candidate fields (including
+a raw prompt), malformed audit log, and attempted self approval are rejected
+before an audit append. The host is still responsible for authenticating its
+actors and durably persisting the terminal receipt/replay state; this module
+has no HTTP route, database migration, or publishing path.
 
 The candidate's `creativeWorkerPlan` is intentionally **not** an executable
 Creative Worker manifest: it has no raw prompt or negative prompt, no actual

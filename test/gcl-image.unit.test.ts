@@ -117,6 +117,7 @@ test('GM3 run requires owner gate, cost cap, scope, safe identity, quota, audit 
   assert.equal(result.data.mode, LIVE_DISABLED)
   assert.equal(result.data.candidates.length, 2)
   assert.equal(result.data.candidates[0]?.ownerReview.status, 'pending')
+  assert.equal(result.data.candidates[0]?.candidateIndex, 0)
   assert.deepEqual(result.data.candidates[0]?.scope, { product: context.product, workspaceId: context.workspaceId, correlationId: context.correlationId })
   assert.equal(result.data.candidates[0]?.ownerReview.visibility, 'owner-only')
   assert.equal(result.data.candidates[0]?.ownerReview.publication, 'blocked')
@@ -177,6 +178,9 @@ test('owner review rejects malformed, cross-scope, or already-decided candidates
   const malformedUri = structuredClone(candidate)
   malformedUri.syntheticUri = 'https://provider.example/image.png'
   await assert.rejects(() => ownerLikeSyntheticImage(malformedUri, true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
+  const movedScope = structuredClone(candidate)
+  movedScope.scope.workspaceId = 'other-workspace'
+  await assert.rejects(() => ownerLikeSyntheticImage(movedScope, true, 'checker@example.test', audit, { ...context, workspaceId: 'other-workspace' }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
   const decided = structuredClone(candidate)
   decided.ownerReview.status = 'liked'
   await assert.rejects(() => ownerLikeSyntheticImage(decided, true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_NOT_PENDING_OWNER_REVIEW')
