@@ -38,8 +38,9 @@ only accepted mode.
    through `PrismaImageCandidateLedger`. A structurally valid candidate from a
    different run cannot borrow the success audit hash. Direct connector output
    is deliberately not issuable. An issuance at or after the candidate's
-   canonical `reviewExpiresAt` is rejected. This is an issuance/provenance and
-   bounded-lifetime guard, not actor authentication; the host still
+   canonical `reviewExpiresAt`, or one timestamped before the bound successful
+   run, is rejected. This is an issuance/provenance and bounded-lifetime guard,
+   not actor authentication; the host still
    authenticates the caller that records it.
 6. Each candidate is `owner-only`, `pending`, and `publication: blocked`.
    It records its maker and originating product/workspace/correlation scope.
@@ -55,7 +56,8 @@ only accepted mode.
    preview, and remains `publication: blocked`. The supplied review ledger
    accepts exactly one terminal decision per product/workspace/correlation/
    candidate tuple. A terminal decision at or after `reviewExpiresAt` is
-   rejected before the issuance proof or review-audit append.
+   rejected before the issuance proof or review-audit append. A decision whose
+   event time predates its durable issuance is also rejected.
 
 Before either terminal decision, the module fail-closes unless the candidate
 has the exact local SVG preview, synthetic URI, non-executable plan shape,
@@ -77,6 +79,11 @@ responsible for authenticating its actors before it grants owner approval,
 records issuance, or calls a decision function. This module has no image HTTP
 route, database migration, or publishing path; generic product CRUD returns
 `404` for all reserved `gcl-*` system modules.
+
+Candidate receipts are strict `gcl-image-candidate-v1` records. A receipt that
+predates this package and therefore lacks `issuanceOccurredAt` is deliberately
+unusable; the module does not backfill or migrate it. This is a fail-closed
+integrity decision, not a production migration path.
 
 The candidate's `creativeWorkerPlan` is intentionally **not** an executable
 Creative Worker manifest: it has no raw prompt or negative prompt, no actual
@@ -115,7 +122,9 @@ kept and all owner-supplied text is declared `data-only`, never instructions.
 The review TTL is required and bounded to 60–86,400 seconds. The generated
 canonical expiry timestamp is part of the candidate's ID and redacted
 fingerprint, so neither a caller nor a stored receipt can extend it without
-breaking issuance proof.
+breaking issuance proof. A single run is also capped at 32 candidates, exactly
+the maximum receipt set the issuance ledger accepts; valid governed output is
+therefore always issuable.
 
 This contract does not authorize a real provider, a local GPU worker, a model
 installation, a migration, or public publishing. Each remains a separate owner
@@ -142,6 +151,11 @@ decision and must be implemented behind its own bounded approval path.
   issuance, concurrent issuance replay, or an expired candidate. Owner like
   and rejection checks use the same strict deadline and reject the exact expiry
   instant before a receipt or audit event can be added.
+- Issuance events must be timestamped at or after their bound successful run,
+  and terminal decisions must be timestamped at or after durable issuance.
+  The receipt preserves the canonical issuance event time and rechecks it
+  against the audit chain before it is used. Malformed, extra, or backdated
+  candidate-ledger proof data fails closed before a decision audit append.
 - The durable candidate and review ledgers serialize on the audit lock. A
   replay, concurrent opposite decision, malformed receipt, malformed audit
   record, a self-consistent audit hash with a broken predecessor, or unissued

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, FamilySafetyError, OwnerGateError } from './errors.js'
-import type { ImageCandidateIssuanceEvent, ImageCandidateLedger } from './image-candidate-ledger.js'
+import type { ImageCandidateIssuanceEvent, ImageCandidateIssuanceProof, ImageCandidateLedger } from './image-candidate-ledger.js'
 import type { ImageOwnerReviewDecisionEvent, ImageOwnerReviewLedger } from './image-review-ledger.js'
 import type { Connector, ConnectorResult, ConnectorRunContext } from './types.js'
 
@@ -14,6 +14,8 @@ const IMAGE_SCOPE = 'image:generate'
 const MAX_PROMPT_LENGTH = 1000
 const MIN_OWNER_REVIEW_TTL_SECONDS = 60
 const MAX_OWNER_REVIEW_TTL_SECONDS = 86_400
+/** Matches the issuance ledger's bounded receipt set; a run must be issuable. */
+export const MAX_SYNTHETIC_IMAGE_CANDIDATES = 32
 const OWNER_ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 const FILTER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
@@ -343,7 +345,7 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
     const maxCostCapCents = positiveInteger(this.config.maxCostCapCents)
     const maxItems = positiveInteger(this.config.maxItems)
     const reviewTtl = ownerReviewTtlSeconds(this.config.ownerReviewTtlSeconds)
-    if (!maxCostCapCents || !maxItems) throw new ConnectorUnavailableError('IMAGE_TTI_GOVERNANCE_LIMITS_NOT_CONFIGURED')
+    if (!maxCostCapCents || !maxItems || maxItems > MAX_SYNTHETIC_IMAGE_CANDIDATES) throw new ConnectorUnavailableError('IMAGE_TTI_GOVERNANCE_LIMITS_NOT_CONFIGURED')
     if (!reviewTtl) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_TTL_NOT_CONFIGURED')
     if (!positiveInteger(ctx.costCapCents) || !positiveInteger(ctx.requestedItems)) throw new CostCapError('INVALID_IMAGE_TTI_GOVERNANCE_REQUEST')
     if (ctx.costCapCents > maxCostCapCents) throw new CostCapError()
@@ -527,6 +529,16 @@ function assertCandidateLedger(candidateLedger: unknown): asserts candidateLedge
   if (!candidateLedger || typeof candidateLedger !== 'object' || typeof (candidateLedger as ImageCandidateLedger).assertIssued !== 'function') throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
 }
 
+/** Treat a malformed ledger proof as unavailable rather than trusting caller-supplied lineage. */
+function assertIssuanceProof(value: unknown): asserts value is ImageCandidateIssuanceProof {
+  const proof = plainRecord(value)
+  if (!proof || !hasExactKeys(proof, ['issuanceAuditHash', 'runAuditHash', 'issuanceOccurredAt']) || typeof proof.issuanceAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.issuanceAuditHash) || typeof proof.runAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.runAuditHash) || !canonicalTimestamp(proof.issuanceOccurredAt)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
+}
+
+function assertReviewNotBeforeIssuance(occurredAt: Date, issuance: { issuanceOccurredAt: string }): void {
+  if (occurredAt.getTime() < new Date(issuance.issuanceOccurredAt).getTime()) throw new ConnectorInputError('IMAGE_OWNER_REVIEW_BEFORE_CANDIDATE_ISSUANCE')
+}
+
 function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected', candidate: SyntheticImageCandidate, actor: string, occurredAt: Date, context: ImageOwnerReviewContext, issuance: { issuanceAuditHash: string; runAuditHash: string }, detail: Record<string, unknown>): ImageOwnerReviewDecisionEvent {
   return {
     type,
@@ -552,6 +564,8 @@ export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate
   const request = assertOwnerReviewRequest(candidate, ownerApproved, actor, reviewLedger, context)
   assertCandidateLedger(candidateLedger)
   const issuance = await candidateLedger.assertIssued(request.candidate)
+  assertIssuanceProof(issuance)
+  assertReviewNotBeforeIssuance(request.occurredAt, issuance)
   const artifactId = `owner-liked-${candidate.candidateId}`
   const audit = await reviewLedger.appendDecision(reviewAuditEvent('connector.artifact.owner_liked', request.candidate, request.actor, request.occurredAt, context, issuance, { artifactId, ownerReview: 'liked' }))
   return {
@@ -579,6 +593,8 @@ export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandida
   assertCandidateLedger(candidateLedger)
   if (reason !== 'NOT_SUITABLE' && reason !== 'SAFETY_CONCERN' && reason !== 'NEEDS_REVISION') throw new ConnectorInputError('INVALID_IMAGE_REJECTION_REASON')
   const issuance = await candidateLedger.assertIssued(request.candidate)
+  assertIssuanceProof(issuance)
+  assertReviewNotBeforeIssuance(request.occurredAt, issuance)
   const reviewId = `owner-rejected-${request.candidate.candidateId}`
   const audit = await reviewLedger.appendDecision(reviewAuditEvent('connector.artifact.owner_rejected', request.candidate, request.actor, request.occurredAt, context, issuance, { reviewId, ownerReview: 'rejected', reason }))
   return {

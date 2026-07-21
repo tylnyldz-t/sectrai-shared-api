@@ -103,6 +103,11 @@ test('GM3 image adapter fails closed without a bounded owner-review TTL', async 
   await assert.rejects(() => overlong.run({ prompt: 'A friendly blue robot reading a book' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_TTL_NOT_CONFIGURED')
 })
 
+test('GM3 refuses a configured run size that the bounded issuance ledger cannot represent', async () => {
+  const unissuable = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 33, ownerReviewTtlSeconds: 300 })
+  await assert.rejects(() => unissuable.run({ prompt: 'A friendly blue robot reading a book' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_GOVERNANCE_LIMITS_NOT_CONFIGURED')
+})
+
 test('family-unsafe image requests are rejected in preflight without audit or quota reservation', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
@@ -299,6 +304,23 @@ test('expired candidates cannot be issued or terminally reviewed, including at t
   assert.equal(audit.entries.length, 3)
 })
 
+test('candidate issuance and terminal review cannot be backdated across the governed lineage', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
+  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const earlier = () => new Date('2026-07-22T11:59:59.999Z')
+  const candidates = new InMemoryImageCandidateLedger(audit)
+  await assert.rejects(() => issueSyntheticImageCandidates(result, candidates, { ...context, now: earlier }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_ISSUANCE_BEFORE_RUN_SUCCESS')
+  assert.equal(audit.entries.length, 2)
+
+  await issueSyntheticImageCandidates(result, candidates, context)
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  const reviews = new InMemoryImageOwnerReviewLedger(audit)
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, { ...context, now: earlier }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_OWNER_REVIEW_BEFORE_CANDIDATE_ISSUANCE')
+  assert.equal(audit.entries.length, 3)
+})
+
 test('candidate issuance rejects direct output, binds the full redacted candidate, and is replay-safe', async () => {
   const directLedger = new InMemoryImageCandidateLedger(new InMemoryHashChainAuditLog())
   const direct = await configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, context)
@@ -344,6 +366,18 @@ test('accessor-shaped input and family-safety hooks fail closed without executin
   const connector = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300, familySafetyFilter: filter as never })
   await assert.rejects(() => connector.run({ prompt: 'A child-friendly solar system poster' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_FAMILY_SAFETY_FILTER_INVALID')
   assert.equal(filterGetterRead, false)
+})
+
+test('owner review rejects a malformed candidate-ledger proof before adding its audit event', async () => {
+  const result = await configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, context)
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  const audit = new InMemoryHashChainAuditLog()
+  const malformedProofLedger = {
+    assertIssued: async () => ({ issuanceAuditHash: 'a'.repeat(64), runAuditHash: 'b'.repeat(64), issuanceOccurredAt: now().toISOString(), extra: true }),
+  }
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', new InMemoryImageOwnerReviewLedger(audit), malformedProofLedger as never, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_CANDIDATE_LEDGER_INVALID')
+  assert.equal(audit.entries.length, 0)
 })
 
 test('terminal owner-review ledger permits one decision only, including a concurrent opposite decision', async () => {
@@ -424,6 +458,21 @@ test('durable owner-review ledger commits one redacted receipt with its audit ev
   assert.ok(corruptCandidate)
   await assert.rejects(() => ownerLikeSyntheticImage(corruptCandidate, true, 'checker@example.test', new PrismaImageOwnerReviewLedger(corrupt), corruptCandidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_LEDGER_INVALID')
   assert.equal(corrupt.records.filter((record) => record.moduleId === GCL_AUDIT_MODULE_ID).length, 3)
+})
+
+test('durable candidate receipts fail closed when their issuance timestamp no longer matches the audit event', async () => {
+  const persistence = new TestGclPersistence()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), new PrismaHashChainAuditLog(persistence), new TestQuota(), now)
+  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const candidates = new PrismaImageCandidateLedger(persistence)
+  await issueSyntheticImageCandidates(result, candidates, context)
+  const stored = persistence.records.find((record) => record.moduleId === GCL_IMAGE_CANDIDATE_MODULE_ID)
+  assert.ok(stored)
+  ;(stored.values as { issuanceOccurredAt: string }).issuanceOccurredAt = '2026-07-22T11:59:59.999Z'
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', new PrismaImageOwnerReviewLedger(persistence), candidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_CANDIDATE_LEDGER_INVALID')
+  assert.equal(persistence.records.filter((record) => record.moduleId === GCL_AUDIT_MODULE_ID).length, 3)
 })
 
 test('candidate carries a redacted jarvis-creative-worker ComfyUI/SDXL shape but no executable dispatch path', async () => {

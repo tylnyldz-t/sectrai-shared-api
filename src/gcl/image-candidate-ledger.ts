@@ -1,6 +1,6 @@
 import { appendAuditEvent, GCL_AUDIT_MODULE_ID, verifyAuditChain } from './audit.js'
 import { ConnectorInputError, ConnectorUnavailableError } from './errors.js'
-import { IMAGE_CANDIDATE_SET_AUDIT_FIELD, imageCandidateFingerprint } from './image.js'
+import { IMAGE_CANDIDATE_SET_AUDIT_FIELD, MAX_SYNTHETIC_IMAGE_CANDIDATES, imageCandidateFingerprint } from './image.js'
 import type { SyntheticImageCandidate } from './image.js'
 import type { GclPersistence } from './persistence.js'
 import type { ConnectorAuditEvent } from './types.js'
@@ -12,7 +12,6 @@ const IDENTIFIER_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 const CANDIDATE_ID_PATTERN = /^synthetic-image-[a-f0-9]{20}$/
 const HASH_PATTERN = /^[a-f0-9]{64}$/
 const IMAGE_SCOPE = 'image:generate'
-const MAX_ISSUED_CANDIDATES = 32
 
 export type ImageCandidateIssuanceEntry = {
   candidateId: string
@@ -33,6 +32,8 @@ export type ImageCandidateIssuanceEvent = ConnectorAuditEvent & {
 export type ImageCandidateIssuanceProof = {
   issuanceAuditHash: string
   runAuditHash: string
+  /** Canonical event time; terminal reviews cannot predate durable issuance. */
+  issuanceOccurredAt: string
 }
 
 /**
@@ -53,6 +54,7 @@ type StoredCandidateReceipt = {
   publication: 'blocked'
   runAuditHash: string
   issuanceAuditHash: string
+  issuanceOccurredAt: string
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -89,7 +91,7 @@ function candidateSetDigest(entries: readonly ImageCandidateIssuanceEntry[]): st
 }
 
 function issuanceEntries(value: unknown): ImageCandidateIssuanceEntry[] | null {
-  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_ISSUED_CANDIDATES || value.some((entry) => !plainRecord(entry))) return null
+  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_SYNTHETIC_IMAGE_CANDIDATES || value.some((entry) => !plainRecord(entry))) return null
   const entries = value.map((entry) => entry as Record<string, unknown>)
   if (entries.some((entry) => !exactKeys(entry, ['candidateId', 'fingerprint']) || typeof entry.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(entry.candidateId) || !safeHash(entry.fingerprint))) return null
   const candidateIds = entries.map((entry) => entry.candidateId as string)
@@ -111,8 +113,8 @@ function assertImageCandidateIssuanceEvent(event: unknown): asserts event is Ima
 
 function storedReceipt(value: unknown): StoredCandidateReceipt | null {
   const receipt = plainRecord(value)
-  if (!receipt || !exactKeys(receipt, ['schema', 'candidateId', 'correlationId', 'fingerprint', 'publication', 'runAuditHash', 'issuanceAuditHash'])) return null
-  if (receipt.schema !== 'gcl-image-candidate-v1' || typeof receipt.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(receipt.candidateId) || !safeIdentifier(receipt.correlationId) || !safeHash(receipt.fingerprint) || receipt.publication !== 'blocked' || !safeHash(receipt.runAuditHash) || !safeHash(receipt.issuanceAuditHash)) return null
+  if (!receipt || !exactKeys(receipt, ['schema', 'candidateId', 'correlationId', 'fingerprint', 'publication', 'runAuditHash', 'issuanceAuditHash', 'issuanceOccurredAt'])) return null
+  if (receipt.schema !== 'gcl-image-candidate-v1' || typeof receipt.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(receipt.candidateId) || !safeIdentifier(receipt.correlationId) || !safeHash(receipt.fingerprint) || receipt.publication !== 'blocked' || !safeHash(receipt.runAuditHash) || !safeHash(receipt.issuanceAuditHash) || !canonicalTimestamp(receipt.issuanceOccurredAt)) return null
   return receipt as StoredCandidateReceipt
 }
 
@@ -125,6 +127,7 @@ function receiptFor(event: ImageCandidateIssuanceEvent, entry: ImageCandidateIss
     publication: 'blocked',
     runAuditHash: event.detail.runAuditHash,
     issuanceAuditHash,
+    issuanceOccurredAt: event.occurredAt,
   }
 }
 
@@ -133,7 +136,7 @@ function receiptForCandidate(candidate: SyntheticImageCandidate): Pick<StoredCan
 }
 
 function proofFor(receipt: StoredCandidateReceipt): ImageCandidateIssuanceProof {
-  return { issuanceAuditHash: receipt.issuanceAuditHash, runAuditHash: receipt.runAuditHash }
+  return { issuanceAuditHash: receipt.issuanceAuditHash, runAuditHash: receipt.runAuditHash, issuanceOccurredAt: receipt.issuanceOccurredAt }
 }
 
 function isSourceRunSuccess(record: { event: ConnectorAuditEvent; hash: string }, event: ImageCandidateIssuanceEvent): boolean {
@@ -145,13 +148,22 @@ function isSourceRunSuccess(record: { event: ConnectorAuditEvent; hash: string }
     && record.event.workspaceId === event.workspaceId
     && record.event.actor === event.actor
     && record.event.correlationId === event.correlationId
+    && Array.isArray(record.event.scopes)
+    && record.event.scopes.length === 1
+    && record.event.scopes[0] === IMAGE_SCOPE
+    && typeof record.event.costCapCents === 'number'
+    && Number.isSafeInteger(record.event.costCapCents)
+    && record.event.costCapCents > 0
     && record.event.requestedItems === event.detail.candidateCount
+    && canonicalTimestamp(record.event.occurredAt)
     && detail?.[IMAGE_CANDIDATE_SET_AUDIT_FIELD] === event.detail.candidateSetDigest
 }
 
 function assertSourceRunAudit(records: readonly unknown[], event: ImageCandidateIssuanceEvent): void {
   const auditRecords = verifyAuditChain(records)
-  if (!auditRecords.some((record) => isSourceRunSuccess(record, event))) throw new ConnectorInputError('IMAGE_CANDIDATE_RUN_AUDIT_NOT_FOUND')
+  const source = auditRecords.find((record) => isSourceRunSuccess(record, event))
+  if (!source) throw new ConnectorInputError('IMAGE_CANDIDATE_RUN_AUDIT_NOT_FOUND')
+  if (new Date(event.occurredAt).getTime() < new Date(source.event.occurredAt).getTime()) throw new ConnectorInputError('IMAGE_CANDIDATE_ISSUANCE_BEFORE_RUN_SUCCESS')
 }
 
 /** A receipt is usable only if its matching issuance event and source run remain in the verified chain. */
@@ -162,8 +174,8 @@ function assertReceiptAudit(records: readonly unknown[], receipt: StoredCandidat
   try { assertImageCandidateIssuanceEvent(issuance.event) } catch { throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID') }
   const event = issuance.event as ImageCandidateIssuanceEvent
   const entry = event.detail.candidates.find((item) => item.candidateId === receipt.candidateId && item.fingerprint === receipt.fingerprint)
-  if (!entry || event.correlationId !== receipt.correlationId || event.detail.runAuditHash !== receipt.runAuditHash) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
-  if (!auditRecords.some((record) => isSourceRunSuccess(record, event))) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
+  const source = auditRecords.find((record) => isSourceRunSuccess(record, event))
+  if (!entry || event.correlationId !== receipt.correlationId || event.detail.runAuditHash !== receipt.runAuditHash || receipt.issuanceOccurredAt !== event.occurredAt || !source || new Date(receipt.issuanceOccurredAt).getTime() < new Date(source.event.occurredAt).getTime()) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
 }
 
 /** Durable, redacted candidate-issuance store. It is always publication-blocked. */
