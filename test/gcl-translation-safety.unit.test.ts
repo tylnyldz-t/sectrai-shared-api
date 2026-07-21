@@ -333,10 +333,38 @@ test('durable artifact reads fail closed when the row status or maker envelope d
     { status: 'approved', createdBy: 'maker@example.test' },
     { status: 'pending-checker-approval', createdBy: '   ' },
   ]) {
-    const prisma = { record: { findFirst: async () => ({ ...baseRecord, ...mismatch }) } }
+    const record = { findFirst: async () => ({ ...baseRecord, ...mismatch }) }
+    const prisma = { $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({ record }), record }
     const artifacts = new PrismaTranslationArtifactStore(prisma as never)
     await assert.rejects(() => artifacts.get(product, workspaceId, baseRecord.id), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_STORAGE_INVALID')
   }
+})
+
+test('durable artifact reads and decisions reject a metadata-valid row whose audit lifecycle is missing', async () => {
+  const proposal = runResult().artifact!
+  const pending = { connectorId: 'translation-text-synthetic', ...proposal, runAuditHash: 'd'.repeat(64) }
+  const values = { ...pending, reviewDigest: translationArtifactReviewDigest(pending) }
+  const record = {
+    id: 'translation-artifact-without-lifecycle', product, workspaceId, values,
+    status: 'pending-checker-approval', createdAt: now(), createdBy: 'maker@example.test',
+  }
+  let updateCalls = 0
+  const recordStore = {
+    findFirst: async () => record,
+    findMany: async () => [],
+    updateMany: async () => { updateCalls += 1; return { count: 1 } },
+  }
+  const prisma = {
+    $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({ $executeRaw: async () => 1, record: recordStore }),
+    record: recordStore,
+  }
+  const artifacts = new PrismaTranslationArtifactStore(prisma as never)
+  await assert.rejects(() => artifacts.get(product, workspaceId, record.id), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+  await assert.rejects(() => artifacts.decideAndAudit({
+    product, workspaceId, id: record.id, actor: 'checker@example.test', decision: 'approved', reviewDigest: values.reviewDigest, now: now(),
+    audit: { scopes: ['translation:artifact:approve'], costCapCents: 0, requestedItems: 0, occurredAt: now().toISOString() },
+  }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+  assert.equal(updateCalls, 0)
 })
 
 test('durable audit fails closed on a hash-valid success event whose bound result carries a raw fixture field', async () => {

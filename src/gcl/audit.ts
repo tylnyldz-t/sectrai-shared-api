@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import { ConnectorUnavailableError } from './errors.js'
+import type { TranslationArtifactRecord } from './translation-artifacts.js'
 import type { AuditLog, ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
 
 export const GCL_AUDIT_MODULE_ID = 'gcl-audit'
@@ -81,6 +82,20 @@ function sameArtifactProposal(left: TranslationArtifactProposal, right: Translat
     && left.autoPublish === right.autoPublish
     && left.reviewPolicyVersion === right.reviewPolicyVersion
     && left.reviewExpiresAt === right.reviewExpiresAt
+}
+
+function proposalFromArtifact(artifact: TranslationArtifactRecord): TranslationArtifactProposal {
+  return {
+    kind: artifact.kind,
+    contentHash: artifact.contentHash,
+    mediaType: artifact.mediaType,
+    source: artifact.source,
+    synthetic: true,
+    approvalState: 'pending-checker-approval',
+    autoPublish: false,
+    reviewPolicyVersion: artifact.reviewPolicyVersion,
+    reviewExpiresAt: artifact.reviewExpiresAt,
+  }
 }
 
 function artifactDetail(value: unknown, state: 'pending-checker-approval' | 'approved' | 'rejected'): boolean {
@@ -170,6 +185,103 @@ async function validatedAuditEntries(transaction: Prisma.TransactionClient, prod
     previousHash = value.hash
   }
   return entries
+}
+
+function sameScopes(left: readonly string[], right: readonly string[]): boolean {
+  return left.length === right.length && left.every((scope, index) => scope === right[index])
+}
+
+function artifactEventMatches(event: ConnectorAuditEvent, artifact: TranslationArtifactRecord, state: 'pending-checker-approval' | 'approved' | 'rejected'): boolean {
+  const detail = event.detail
+  return event.connectorId === artifact.connectorId
+    && event.product === artifact.product
+    && event.workspaceId === artifact.workspaceId
+    && artifactDetail(detail, state)
+    && detail.artifactId === artifact.id
+    && detail.kind === artifact.kind
+    && detail.contentHash === artifact.contentHash
+    && detail.mediaType === artifact.mediaType
+    && detail.source === artifact.source
+    && detail.synthetic === true
+    && detail.approvalState === state
+    && detail.reviewPolicyVersion === artifact.reviewPolicyVersion
+    && detail.reviewDigest === artifact.reviewDigest
+    && detail.reviewExpiresAt === artifact.reviewExpiresAt
+    && detail.runAuditHash === artifact.runAuditHash
+    && detail.autoPublish === false
+}
+
+/**
+ * A stored artifact is readable or decidable only when the same verified audit
+ * chain proves its full lifecycle. This protects the read boundary from a
+ * metadata-shaped row inserted outside the atomic mutation APIs.
+ */
+export async function requireTranslationArtifactLifecycleAudit(transaction: Prisma.TransactionClient, artifact: TranslationArtifactRecord): Promise<void> {
+  const entries = await validatedAuditEntries(transaction, artifact.product, artifact.workspaceId)
+  const succeededIndex = entries.findIndex((entry) => entry.hash === artifact.runAuditHash)
+  const succeeded = entries[succeededIndex]
+  const requestedAuditHash = succeeded?.event.detail.requestedAuditHash
+  const requestedIndex = typeof requestedAuditHash === 'string' ? entries.findIndex((entry) => entry.hash === requestedAuditHash) : -1
+  const requested = requestedIndex >= 0 ? entries[requestedIndex] : undefined
+  const proposal = proposalFromArtifact(artifact)
+  const succeededArtifact = succeeded?.event.detail.artifact
+
+  if (!succeeded || !requested || requested.event.type !== 'connector.run.requested'
+    || succeeded.event.type !== 'connector.run.succeeded'
+    || requestedIndex >= succeededIndex
+    || requested.event.connectorId !== artifact.connectorId
+    || succeeded.event.connectorId !== artifact.connectorId
+    || requested.event.product !== artifact.product
+    || succeeded.event.product !== artifact.product
+    || requested.event.workspaceId !== artifact.workspaceId
+    || succeeded.event.workspaceId !== artifact.workspaceId
+    || requested.event.actor !== artifact.createdBy
+    || succeeded.event.actor !== artifact.createdBy
+    || !sameScopes(requested.event.scopes, succeeded.event.scopes)
+    || requested.event.costCapCents !== succeeded.event.costCapCents
+    || requested.event.requestedItems !== succeeded.event.requestedItems
+    || !artifactProposalDetail(artifact.connectorId, succeededArtifact)
+    || !sameArtifactProposal(succeededArtifact, proposal)) {
+    throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+  }
+
+  const lifecycle = entries.map((entry, index) => ({ entry, index })).filter(({ entry }) => {
+    const detail = entry.event.detail
+    return entry.event.product === artifact.product
+      && entry.event.workspaceId === artifact.workspaceId
+      && isObject(detail)
+      && detail.artifactId === artifact.id
+  })
+  const created = lifecycle[0]
+  if (!created
+    || created.index <= succeededIndex
+    || created.entry.event.type !== 'translation.artifact.created'
+    || created.entry.event.actor !== artifact.createdBy
+    || !sameScopes(created.entry.event.scopes, succeeded.event.scopes)
+    || created.entry.event.costCapCents !== succeeded.event.costCapCents
+    || created.entry.event.requestedItems !== succeeded.event.requestedItems
+    || !artifactEventMatches(created.entry.event, artifact, 'pending-checker-approval')) {
+    throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+  }
+
+  if (artifact.approvalState === 'pending-checker-approval') {
+    if (lifecycle.length !== 1) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+    return
+  }
+
+  const expectedType = artifact.approvalState === 'approved' ? 'translation.artifact.approved' : 'translation.artifact.rejected'
+  const decision = lifecycle[1]
+  if (lifecycle.length !== 2
+    || !decision
+    || decision.index <= created.index
+    || decision.entry.event.type !== expectedType
+    || decision.entry.event.actor !== artifact.decidedBy
+    || !sameScopes(decision.entry.event.scopes, ['translation:artifact:approve'])
+    || decision.entry.event.costCapCents !== 0
+    || decision.entry.event.requestedItems !== 0
+    || !artifactEventMatches(decision.entry.event, artifact, artifact.approvalState)) {
+    throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+  }
 }
 
 /**

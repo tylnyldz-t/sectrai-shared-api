@@ -63,5 +63,6 @@ or `*_LIVE_ENABLED` setting.
 - `GCL_TRANSLATION_LIVE_ENABLED` is intentionally unsupported: if it exists at all, the connector is unavailable. A quota rejection after a request audit is recorded as a stable failure code; neither path reaches a provider or adapter fallback.
 - Successful runs create metadata-only proposals, bound to the successful run's maker, quota context, and safe hash-only envelope. The maker cannot approve or reject their own proposal; a distinct checker must echo the returned review digest before its configured review TTL expires. Approval never permits publication.
 - Durable proposal creation and checker decisions are each one transaction with their audit append; no audit-less production artifact mutation API exists. Blank actors and malformed status/maker storage envelopes fail closed.
+- Durable artifact reads and decisions also require a complete, ordered run → creation → optional single-decision audit lifecycle; metadata-shaped rows without that proof are unavailable.
 
 See [the interpreter contract](docs/GCL_TRANSLATION_CONTRACT.md) for the exact shapes and safety boundary.

@@ -151,6 +151,17 @@ must retain a canonical UTC decision time and checker identity; a pending
 artifact cannot carry either field. This is lifecycle integrity only: it never
 creates a publish, send, provider, media-byte, or live execution path.
 
+Every durable artifact read and decision replays the relevant verified audit
+chain before returning or mutating metadata. It must prove the same maker's
+requested → successful synthetic run, one matching `artifact.created` entry,
+and, for a terminal row, exactly one matching checker decision after creation.
+The creation event must retain the run's canonical scope and budget; a decision
+must use only `translation:artifact:approve` with zero cost/items. A
+metadata-shaped row with missing, duplicate, out-of-order, cross-maker, or
+mismatched lifecycle evidence is unavailable with
+`TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID`. This check does not expose
+fixture text or audio and does not add an execution or publication path.
+
 `GCL_TRANSLATION_REVIEW_TTL_MS` is required and must be a positive integer.
 The connector derives `reviewExpiresAt` from its synthetic run clock; it is not
 caller-controlled. A checker has to resubmit a newly generated synthetic

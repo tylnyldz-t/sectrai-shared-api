@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
-import { appendAuditEvent, requireSuccessfulRunAudit } from './audit.js'
+import { appendAuditEvent, requireSuccessfulRunAudit, requireTranslationArtifactLifecycleAudit } from './audit.js'
 import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorUnavailableError, MakerCheckerError } from './errors.js'
 import type { AuditLog, ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
 
@@ -236,11 +236,14 @@ export class PrismaTranslationArtifactStore {
   }
 
   async get(product: string, workspaceId: string, id: string): Promise<TranslationArtifactRecord | null> {
-    const record = await this.prisma.record.findFirst({ where: { id, product, workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID } })
-    if (!record) return null
-    const artifact = toRecord(record)
-    if (!artifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
-    return artifact
+    return this.prisma.$transaction(async (transaction) => {
+      const record = await transaction.record.findFirst({ where: { id, product, workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID } })
+      if (!record) return null
+      const artifact = toRecord(record)
+      if (!artifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
+      await requireTranslationArtifactLifecycleAudit(transaction, artifact)
+      return artifact
+    })
   }
 
   /** The compare-and-set decision and its audit row share one transaction. */
@@ -250,6 +253,7 @@ export class PrismaTranslationArtifactStore {
       if (!record) return { artifact: null }
       const artifact = toRecord(record)
       if (!artifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
+      await requireTranslationArtifactLifecycleAudit(transaction, artifact)
       if (artifact.approvalState !== 'pending-checker-approval') throw new ArtifactStateError()
       if (artifact.createdBy === input.actor) throw new MakerCheckerError()
       if (!constantTimeEqual(input.reviewDigest, artifact.reviewDigest)) throw new ArtifactReviewBindingError()

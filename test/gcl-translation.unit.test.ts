@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
+import { hashAuditEvent, InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
 import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import { InMemoryTranslationArtifactStore, PrismaTranslationArtifactStore, translationArtifactReviewDigest } from '../src/gcl/translation-artifacts.js'
 import { LIVE_DISABLED, SPEECH_TRANSLATION_CONNECTOR_ID, SYNTHETIC_TRANSLATION_ONLY, SyntheticSpeechTranslationConnector, SyntheticTextTranslationConnector, TEXT_TRANSLATION_CONNECTOR_ID, translationConnectorsFromEnvironment, type SpeechTranslationData, type SpeechTranslationInput, type TextTranslationData, type TextTranslationInput, type TranslationConnectorConfig } from '../src/gcl/translation.js'
-import type { Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
+import type { Connector, ConnectorAuditEvent, ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
 const context: ConnectorRunContext = {
@@ -246,8 +246,7 @@ test('checker must echo an unexpired review digest, and failed checks preserve t
 
 test('durable artifact decisions use compare-and-set with an audit row so simultaneous checkers cannot overwrite one another', async () => {
   let status = 'pending-checker-approval'
-  let values: Record<string, unknown> = {
-    connectorId: TEXT_TRANSLATION_CONNECTOR_ID,
+  const proposal = {
     kind: 'translated-text',
     contentHash: `sha256:${'c'.repeat(64)}`,
     mediaType: 'text/plain',
@@ -257,14 +256,47 @@ test('durable artifact decisions use compare-and-set with an audit row so simult
     autoPublish: false,
     reviewPolicyVersion: 'gcl-translation-synthetic-v1',
     reviewExpiresAt: '2026-07-22T12:01:00.000Z',
-    runAuditHash: 'd'.repeat(64),
   }
+  const requested: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: TEXT_TRANSLATION_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+  const requestedHash = hashAuditEvent(requested, null)
+  const succeeded: ConnectorAuditEvent = {
+    type: 'connector.run.succeeded', connectorId: TEXT_TRANSLATION_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: { requestedAuditHash: requestedHash, artifact: proposal },
+  }
+  const succeededHash = hashAuditEvent(succeeded, requestedHash)
+  let values: Record<string, unknown> = { connectorId: TEXT_TRANSLATION_CONNECTOR_ID, ...proposal, runAuditHash: succeededHash }
   values.reviewDigest = translationArtifactReviewDigest(values as Parameters<typeof translationArtifactReviewDigest>[0])
   const record = {
     id: 'translation-artifact-race', product: context.product, workspaceId: context.workspaceId,
     moduleId: 'gcl-translation-artifacts', createdAt: now(), createdBy: context.actor,
   }
-  const auditRows: Array<{ values: unknown }> = []
+  const created: ConnectorAuditEvent = {
+    type: 'translation.artifact.created', connectorId: TEXT_TRANSLATION_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: {
+      artifactId: record.id,
+      kind: proposal.kind,
+      contentHash: proposal.contentHash,
+      mediaType: proposal.mediaType,
+      source: proposal.source,
+      synthetic: true,
+      approvalState: 'pending-checker-approval',
+      reviewPolicyVersion: proposal.reviewPolicyVersion,
+      reviewDigest: values.reviewDigest as string,
+      reviewExpiresAt: proposal.reviewExpiresAt,
+      runAuditHash: succeededHash,
+      autoPublish: false,
+    },
+  }
+  const createdHash = hashAuditEvent(created, succeededHash)
+  const auditRows: Array<{ values: unknown }> = [
+    { values: { event: requested, previousHash: null, hash: requestedHash } },
+    { values: { event: succeeded, previousHash: requestedHash, hash: succeededHash } },
+    { values: { event: created, previousHash: succeededHash, hash: createdHash } },
+  ]
   const recordStore = {
     findFirst: async () => ({ ...record, values: { ...values }, status }),
     findMany: async () => auditRows.map((row) => ({ ...row })),
@@ -305,5 +337,5 @@ test('durable artifact decisions use compare-and-set with an audit row so simult
   assert.ok(final)
   assert.equal(final.approvalState === 'approved' || final.approvalState === 'rejected', true)
   assert.equal(final.decidedBy === 'checker-one@example.test' || final.decidedBy === 'checker-two@example.test', true)
-  assert.equal(auditRows.length, 1)
+  assert.equal(auditRows.length, 4)
 })
