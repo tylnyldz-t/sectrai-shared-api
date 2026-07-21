@@ -342,4 +342,4 @@ no extra review event, quota item, or local terminal entry.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4.
+`main`/production in D1/D2/D3/D4/D5.

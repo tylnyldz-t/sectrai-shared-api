@@ -859,6 +859,7 @@ export function validateSyntheticMarketReviewAuditTrailWitness(sourcePlan: unkno
   const trail = exactMarketObject(auditTrail, ['requestedRun', 'succeededRun', 'ownerReview'], 'UNEXPECTED_MARKET_AUDIT_TRAIL_FIELD')
   const requested = marketGovernedRunAuditEntry(trail.requestedRun, 'connector.run.requested')
   const succeeded = marketGovernedRunAuditEntry(trail.succeededRun, 'connector.run.succeeded')
+  const ownerReview = exactMarketObject(trail.ownerReview, ['event', 'previousHash', 'hash'], 'UNEXPECTED_MARKET_AUDIT_TRAIL_REVIEW_ENTRY_FIELD')
   const plan = validateSyntheticMarketPlanForReview(sourcePlan, context)
 
   if (requested.hash !== hashAuditEvent(requested.event, requested.previousHash) || succeeded.hash !== hashAuditEvent(succeeded.event, succeeded.previousHash)) {
@@ -874,7 +875,12 @@ export function validateSyntheticMarketReviewAuditTrailWitness(sourcePlan: unkno
     throw new ConnectorInputError('MARKET_AUDIT_TRAIL_TIME_INVALID')
   }
 
-  const reviewWitness = validateSyntheticMarketReviewAuditWitness(plan, value, trail.ownerReview, context)
+  const reviewWitness = validateSyntheticMarketReviewAuditWitness(plan, value, {
+    version: MARKET_REVIEW_AUDIT_WITNESS_VERSION,
+    event: ownerReview.event,
+    previousHash: ownerReview.previousHash,
+    hash: ownerReview.hash,
+  }, context)
   if (reviewWitness.previousHash !== succeeded.hash) throw new ConnectorInputError('MARKET_AUDIT_TRAIL_CHAIN_MISMATCH')
   if (new Date(succeeded.event.occurredAt).getTime() > new Date(reviewWitness.event.occurredAt).getTime()) {
     throw new ConnectorInputError('MARKET_AUDIT_TRAIL_TIME_INVALID')
