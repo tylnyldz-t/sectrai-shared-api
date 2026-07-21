@@ -257,6 +257,31 @@ durable retention nor the first predecessor. Its digest is mutation evidence,
 not a signature, credential, durable audit proof, replay guard, or execution
 token.
 
+## D7 — compact review-evidence manifest
+
+`createSyntheticMarketReviewEvidenceManifest(sourcePlan, reviewResult, trail,
+context)` independently rebuilds D3's review receipt and D6's audit-trail
+receipt, then produces the compact
+`synthetic-market-review-evidence-manifest-v1`. It contains only digests of
+the product/workspace, plan/review IDs, the two reconstructed evidence
+integrity digests, and fixed synthetic/no-action state. It deliberately omits
+the market request, origin/destination, transport mode, capacity units, maker
+and reviewer identities, decision, individual audit hashes, provider details,
+offer/price data, credentials, and every action capability.
+
+`validateSyntheticMarketReviewEvidenceManifest(sourcePlan, reviewResult,
+trail, manifest, context)` accepts only an exact own-data manifest, rebuilds
+the same D3/D6 evidence, recomputes the manifest ID and SHA-256 integrity, and
+compares the whole canonical form. Unknown, hidden, symbol, accessor,
+inherited, Proxy, credential-shaped, cross-workspace, or mutated values are
+rejected without evaluating getters or Proxy traps.
+
+D7 is a library-only, read-only minimization seam. It does not read or write
+storage, consume quota, append audit, add a route, contact a provider, send a
+handoff, reserve/book/publish, or authorize execution. Its unkeyed digest is
+mutation evidence only—not a signature, credential, durable audit proof,
+replay guard, authorization, or execution token.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -321,13 +346,14 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
 caller-held audit-witness link reconstruction, plus D5 caller-held
-requested/succeeded/owner-review continuity reconstruction and D6's minimized,
-context-bound rendering of that exact segment.
+requested/succeeded/owner-review continuity reconstruction, D6's minimized,
+context-bound rendering of that exact segment, and D7's compact binding of
+independently rebuilt D3 and D6 evidence.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -338,8 +364,11 @@ predecessor/hash drift, sequential/concurrent replay attempts, and D5
 discontinuous, semantically mismatched, time-inverted, hidden-field,
 accessor-shaped, and Proxy-shaped trail evidence. D6 additionally rejects
 mutated hashes/receipt IDs, credential-shaped, hidden, symbol, prototype,
-accessor, and Proxy-shaped receipt evidence. D3/D4/D5/D6 rejection produces
-no extra review event, quota item, or local terminal entry.
+accessor, and Proxy-shaped receipt evidence. D7 additionally rejects a
+substituted D3/D6 integrity digest, scope-binding or manifest-ID drift, and
+credential-shaped, hidden, symbol, accessor, and Proxy-shaped manifests.
+D3/D4/D5/D6/D7 rejection produces no extra review event, quota item, or local
+terminal entry.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -352,16 +381,17 @@ no extra review event, quota item, or local terminal entry.
    receipt without a write, and D4 rechecks one caller-held audit hash link
    without reading or writing audit storage. D5 rechecks only a caller-held
    requested/succeeded/review segment without a write or storage lookup; D6
-   can only minimize and recheck that same segment.
+   can only minimize and recheck that same segment; D7 can only bind the
+   rebuilt D3/D6 evidence into a still-smaller no-action manifest.
 5. Request content is explicitly data-only, never an instruction.
 6. Owner gate, `market:review`, and maker–checker separation are mandatory.
 7. The module has no network client, provider URL, credential/API-key field,
    scheduler, or automatic sync.
 8. Preflight, cost caps, independent grouped quotas, and the scoped SHA-256
-   audit chain bound every run; D5/D6 only check a caller-held three-event
-   segment and a minimized rendering of it.
-9. A review and its D3/D4/D5/D6 evidence cannot quote, reserve, book, publish,
-   hand off, notify, send, or trigger an automatic action.
+   audit chain bound every run; D5/D6/D7 only check a caller-held three-event
+   segment, a minimized rendering, and a further compact binding of it.
+9. A review and its D3/D4/D5/D6/D7 evidence cannot quote, reserve, book,
+   publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
 
@@ -370,4 +400,4 @@ no extra review event, quota item, or local terminal entry.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6.
+`main`/production in D1/D2/D3/D4/D5/D6/D7.

@@ -76,4 +76,7 @@ only, does not prove durable storage or a predecessor, and cannot authorize any
 action. D6 can derive and recheck only a minimized, digest-bound rendering of
 that same caller-held D5 segment. It performs no storage lookup or write and
 remains unkeyed mutation evidence, never a signature, credential, authorization,
-or execution capability.
+or execution capability. D7 can bind independently rebuilt D3 and D6 evidence
+into an even smaller, digest-only no-action manifest; it omits request, actor,
+decision, and audit-hash data, reads and writes no storage, and remains neither
+a signature, credential, authorization, nor execution capability.

@@ -49,9 +49,10 @@ Every registered connector is governed by these rules:
   canonically reconstruct the caller-held receipt for that decision; D4 can
   locally compare that receipt with one caller-held audit hash link; D5 can
   read-check only the caller-held requested/succeeded/review segment; D6 can
-  only minimize and recheck that same segment. None reads audit storage,
-  writes, or approves execution. All resulting evidence remains
-  `NOT_AUTHORIZED`.
+  only minimize and recheck that same segment; D7 can bind independently
+  rebuilt D3 and D6 evidence into a still-smaller no-action manifest. None
+  reads audit storage, writes, or approves execution. All resulting evidence
+  remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
   error. There is no local fallback, provider fallback, queue worker, or
@@ -132,8 +133,10 @@ hash-chain link. D5 checks only the internal continuity of one caller-held
 requested/succeeded/review segment; it does not prove its first predecessor or
 any durable retention. D6 can only render and recheck a minimized,
 digest-bound form of that same supplied segment; it adds no storage lookup or
-write. D3/D4/D5/D6 are local mutation checks, never signatures, credentials,
-approval workflows, or execution paths. The specific market
+write. D7 can bind independently rebuilt D3 and D6 evidence into a smaller,
+digest-only no-action manifest, also without storage access. D3/D4/D5/D6/D7
+are local mutation checks, never signatures, credentials, approval workflows,
+or execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
 
 ## Privacy, KVKK, and content boundary
