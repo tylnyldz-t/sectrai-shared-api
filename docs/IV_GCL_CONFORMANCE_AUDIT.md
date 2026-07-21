@@ -285,3 +285,85 @@ configuration; immutable source/blob pointers only; no inferred owner decision;
 camera maker–checker retained; audit gaps reported instead of filled in; no
 migration; proposal-only outputs; no JARVIS/JNC launch; and synthetic test
 evidence is never a deployment or live-enable decision.
+
+## D4 — next committed connector package
+
+D4 pins the next committed package after D3: RA OCR `1a16536`, RA image
+`3e4c5cf`, RA 3D/game `e850715`, RA market `6ab0345`, RFID `ee3627a`,
+translation `18a6188`, language education `5a16014`, and camera `1102d32`.
+Voice has no later committed connector package and remains D1 evidence. This
+is again an immutable local Git-object audit: the fixture resolves each
+commit, checks its connector and governance-runner blob hashes, then reads the
+connector/runner local `src/gcl` import closure through `git show`. It never
+imports a target connector or reads a mutable target worktree. In particular,
+the RFID worktree has later uncommitted changes; D4 is fixed to `ee3627a` and
+is unaffected by them.
+
+The only permitted non-local closure modules are `node:crypto` and
+`node:util`. The latter occurs in the D4 camera source only for in-process
+proxy rejection; it is not a transport, device, or provider capability. A
+missing repository, revision, blob, import-closure object, or any hash
+mismatch fails the audit. Run the complete immutable audit with:
+
+```bash
+npm run test:conformance
+```
+
+| Connector | D4 source-only change/evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D4 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Review packet v4 binds synthetic evidence capture/expiry; preflight and review reject stale, inconsistent, or overlong evidence windows | `requested` only | Pass | Nonconformant |
+| RA image | Candidate issuance now requires the matching governed `connector.run.succeeded` audit hash and retains redacted issuance lineage before independent review | `requested` only | Pass | Nonconformant |
+| RA 3D/game | Optional style/GPU fields are omitted rather than serialized as `undefined` in the immutable synthetic-plan shape | `requested` only | Pass | Nonconformant |
+| RA market | A hash-bound, scope-bound independent-review receipt revalidates `NOT_AUTHORIZED` execution controls; literal-false live setting remains required | `requested` only | Pass | Nonconformant |
+| RFID | Adds PSMS-SIM fixed anonymous aggregate-count fixtures and rejects accessor-shaped record/array fields; no reader, clock, sensor, identity, or individual event input exists | `requested`, `failed` | Pass | Conformant |
+| Translation | Audit rows are schema-gated; artifact storage requires a same-scope requested→succeeded run link and failure audit keeps only a stable error code | `requested` only | Pass | Nonconformant |
+| Language education | Adds a grammar-review fixture-reference connector and rejects symbol, accessor, inherited, and hidden input fields | `requested`, `failed` | Pass | Conformant |
+| Camera | Rejects proxy, accessor, non-enumerable, symbol, and hidden input fields before consent/review parsing | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` remains deliberately narrow: it means the pinned source satisfies
+the IV synthetic governance envelope only. It is not approval to configure a
+provider, use an API key, capture a camera/RFID input, connect a device, launch
+JARVIS/JNC, reserve/book/publish, write production data, or send an output.
+
+### D4 negative and edge evidence
+
+- Runtime-escape scanning now strips comments before inspection, then rejects
+  every `globalThis`/`global`/`window` access and every retained direct egress
+  identifier (`fetch`, `XMLHttpRequest`, `WebSocket`, `axios`, `undici`, and
+  `node-fetch`). This also denies aliases such as `const request = fetch` or a
+  computed global property such as `globalThis['fe' + 'tch']`.
+- The fixture rejects computed environment access (`process['env']`, optional
+  forms, and arbitrary computed names), direct or bracketed credential-like
+  names, plus `Reflect.get`/bracketed `Reflect['get']` and
+  `Object.getOwnPropertyDescriptor` attempts to recover a global or environment
+  capability. The normal explicit synthetic limit settings remain allowed.
+- Existing D3 checks remain: dynamic import/require/evaluation, non-local
+  imports other than the two explicit in-process modules, endpoint literals,
+  subprocess/worker primitives, automatic publication, and a relative import
+  that escapes `src/gcl` all fail closed.
+- Owner rejection remains statically required before connector preflight,
+  requested-audit reservation, or quota consumption. The audit keeps the
+  quota classification conservative: OCR, image, 3D/game, market, and
+  translation consume quota before their protected `try`; RFID, language
+  education, and camera consume it inside the lifecycle that appends a linked
+  `connector.run.failed` event.
+- The selected immutable D4 connector unit suites passed from temporary Git
+  archives: OCR, image, 3D/game, both market suites, RFID, translation,
+  language education, and camera (nine test files). Database integration,
+  migration, and external-provider tests were not run.
+
+### D4 remediation and ADOS boundary
+
+RA OCR, image, 3D/game, market, and translation still need protected quota
+reservation (or an equivalent linked failed-audit path) and a behavioural
+rejecting-quota fixture before certification. The D1 Apify live-opt-in blocker
+is unchanged and outside D4.
+
+All ten ADOS rules remain enforced: product data planes are not joined;
+inputs/outputs stay minimized and synthetic; missing configuration denies by
+default; exact record validation blocks hidden data paths; owner and
+maker–checker gates are retained; audit-chain gaps are reported rather than
+invented; no migration is introduced; every artifact remains proposal-only;
+no JARVIS/JNC job is launched; and source/test evidence is never a live-enable
+or deployment decision. D4 loaded no credential, contacted no provider or
+network endpoint, sent nothing, and made no `main`/prod write.

@@ -130,7 +130,7 @@ function assertNoRuntimeEscape(source: string, name: string): void {
   assert.doesNotMatch(code, /\b(?:import|require|createRequire|eval|Function)\s*(?:\?\.)?\s*\(|\bmodule\s*(?:\.|\?\.)\s*require\s*\(/, `${name} must not dynamically load or evaluate a runtime module`)
   assert.doesNotMatch(code, /\b(?:globalThis|global|window)\b/, `${name} must not access a global runtime capability`)
   assert.doesNotMatch(code, /\b(?:fetch|XMLHttpRequest|WebSocket|axios|undici|node-fetch)\b/, `${name} must not retain an egress capability by direct or aliased access`)
-  assert.doesNotMatch(code, /\bReflect\s*(?:\.|\[\s*['"`]get['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not reflectively obtain a runtime or environment capability`)
+  assert.doesNotMatch(code, /\bReflect\s*(?:\.\s*get|\[\s*['"`]get['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not reflectively obtain a runtime or environment capability`)
   assert.doesNotMatch(code, /\bObject\s*\.\s*getOwnPropertyDescriptor\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not obtain a runtime or environment capability by descriptor`)
   assert.doesNotMatch(code, /\b(?:process|environment)\s*(?:\?\.)?\s*\[/, `${name} must not use computed environment access`)
   assert.doesNotMatch(code, /(?:process\s*(?:\.|\?\.)\s*env|environment)\s*(?:\?\.)?\s*\[\s*['"`][^'"`]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|BEARER)[^'"`]*['"`]\s*\]/i, `${name} must not read a credential-like environment variable by bracket access`)
@@ -235,7 +235,7 @@ test('D4 fail-closed safety checks reject aliased globals, computed environment 
     "const childProcess = module?.require('node:child_process')",
     "const adapter = import /* deferred */ ('node:https')",
     "const runtime = Function('return process')()",
-  ]) assert.throws(() => assertNoRuntimeEscape(source, 'D4 negative probe'), undefined, source)
+  ]) assert.throws(() => assertNoRuntimeEscape(source, `D4 negative probe: ${source}`))
   assert.throws(() => assertAllowedImports("import { request } from 'node:https'", 'D4 negative probe'))
   assert.throws(() => localGclImportPaths('src/gcl/connector.ts', "import '../auth.js'"))
 })
