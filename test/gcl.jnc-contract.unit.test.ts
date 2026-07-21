@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { hashAuditEvent, InMemoryHashChainAuditLog, verifiedAuditChainHead } from '../src/gcl/audit.js'
-import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
+import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError, SyntheticReviewIntegrityError } from '../src/gcl/errors.js'
 import { gameEngineConnectorFromEnvironment, SyntheticGameEngineConnector, type GameEngineBuildInput, type GameEngineBuildPlan } from '../src/gcl/game-engine.js'
 import { ownerGateError } from '../src/gcl/owner-gate.js'
+import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
 import { InMemoryDailyConnectorQuota } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner, type RunConnectorRequest } from '../src/gcl/registry.js'
+import { createSyntheticReviewReceipt, verifiesSyntheticReviewReceipt } from '../src/gcl/review-receipt.js'
 import { LIVE_DISABLED } from '../src/gcl/safety.js'
 import { syntheticThreeDConnectorsFromEnvironment, SyntheticImageTextToThreeDConnector, SyntheticTextToThreeDConnector, type SyntheticThreeDConnectorConfig, type SyntheticThreeDResult } from '../src/gcl/three-d.js'
 import type { Connector, ConnectorResult } from '../src/gcl/types.js'
@@ -53,8 +55,13 @@ test('GM5 returns only a synthetic proposal, an unleased GPU contract card, and 
   assert.equal(result.data.integrity.contract, 'gcl.synthetic-plan-integrity.v1')
   assert.match(result.data.integrity.payloadSha256, /^[a-f0-9]{64}$/)
   assert.equal(result.data.integrity.mutation, 'DEEP_FROZEN')
+  assert.equal(verifiesSyntheticReviewReceipt(result.data.reviewReceipt), true)
+  assert.equal(result.data.reviewReceipt.scope.workspaceId, 'gm-workspace')
+  assert.equal(result.data.reviewReceipt.execution, 'NOT_EXECUTED')
+  assert.equal(result.data.reviewReceipt.externalEffects.network, 'DISABLED_NO_TRANSPORT')
   assert.equal(Object.isFrozen(result.data), true)
   assert.equal(Object.isFrozen(result.data.artifact), true)
+  assert.equal(Object.isFrozen(result.data.reviewReceipt.externalEffects), true)
   assert.match(result.data.artifact.syntheticUri, /^synthetic:\/\/gcl-3d\/text-to-3d\//)
   assert.equal(result.data.gpuResourceCard.mode, 'CONTRACT_ONLY')
   assert.equal(result.data.gpuResourceCard.transport, 'NONE')
@@ -92,6 +99,25 @@ test('GM5 proposal ids are scope-bound, canonical across input key order, and im
   assert.notEqual(first.data.integrity.payloadSha256, otherScope.data.integrity.payloadSha256)
   assert.throws(() => { (first.data.artifact as { publicationState: string }).publicationState = 'PUBLISHED' }, TypeError)
   assert.equal(first.data.artifact.publicationState, 'NOT_PUBLISHED')
+})
+
+test('synthetic review receipts are scope-bound, verify their plan digest, and fail closed on corruption', () => {
+  const payload = { connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, artifact: 'synthetic-only' }
+  const integrity = createSyntheticPlanIntegrity(payload)
+  const receipt = createSyntheticReviewReceipt({ connectorId: 'text-to-3d', scope: payload.scope, planIntegrity: integrity })
+
+  assert.equal(verifiesSyntheticPlanIntegrity(integrity, payload), true)
+  assert.equal(verifiesSyntheticPlanIntegrity(integrity, { ...payload, artifact: 'not-synthetic' }), false)
+  assert.throws(() => assertSyntheticPlanIntegrity(integrity, { ...payload, artifact: 'not-synthetic' }), SyntheticReviewIntegrityError)
+  assert.equal(verifiesSyntheticReviewReceipt(receipt), true)
+  assert.equal(receipt.execution, 'NOT_EXECUTED')
+  assert.equal(receipt.externalEffects.network, 'DISABLED_NO_TRANSPORT')
+  assert.equal(receipt.externalEffects.process, 'DISABLED_NO_LAUNCHER')
+  assert.equal(receipt.externalEffects.artifactWrite, 'DISABLED_NO_FILE')
+  assert.equal(receipt.externalEffects.publication, 'DISABLED_NOT_PUBLISHED')
+  assert.equal(verifiesSyntheticReviewReceipt({ ...receipt, scope: { ...receipt.scope, workspaceId: 'other-workspace' } }), false)
+  assert.equal(verifiesSyntheticReviewReceipt({ ...receipt, externalEffects: { ...receipt.externalEffects, network: 'SENT' } }), false)
+  assert.equal(verifiesSyntheticReviewReceipt({ ...receipt, extra: 'not-allowed' }), false)
 })
 
 test('GM5 image-plus-text accepts only an immutable local reference and closes before audit for a URL', async () => {
@@ -132,6 +158,9 @@ test('GM6 maps premium Unreal and Blender plans to JNC pilot contracts without s
   const unreal = await governed.run.run(gameRequest(premiumUnreal)) as ConnectorResult<GameEngineBuildPlan>
   assert.equal(unreal.data.execution, 'SYNTHETIC_PLAN_ONLY_NOT_EXECUTED')
   assert.equal(unreal.data.integrity.mutation, 'DEEP_FROZEN')
+  assert.equal(verifiesSyntheticReviewReceipt(unreal.data.reviewReceipt), true)
+  assert.equal(unreal.data.reviewReceipt.execution, 'NOT_EXECUTED')
+  assert.equal(unreal.data.reviewReceipt.externalEffects.publication, 'DISABLED_NOT_PUBLISHED')
   assert.equal(Object.isFrozen(unreal.data.pipeline), true)
   assert.equal(unreal.data.gpuResourceCard?.mode, 'CONTRACT_ONLY')
   assert.equal(unreal.data.gpuResourceCard?.transport, 'NONE')
@@ -207,6 +236,19 @@ test('corrupt audit links are rejected instead of silently becoming a new chain 
   ]), AuditChainError)
   assert.throws(() => verifiedAuditChainHead([{ event: firstEvent, previousHash: null, hash: '0'.repeat(64) }]), AuditChainError)
   assert.throws(() => verifiedAuditChainHead([{ event: {}, previousHash: null, hash: firstHash }]), AuditChainError)
+  assert.throws(() => verifiedAuditChainHead([{ event: firstEvent, previousHash: null, hash: firstHash, ignored: true }]), AuditChainError)
+  const unlinkedTerminal = { ...secondEvent, detail: { requestedAuditHash: 'f'.repeat(64) } }
+  assert.throws(() => verifiedAuditChainHead([
+    { event: firstEvent, previousHash: null, hash: firstHash },
+    { event: unlinkedTerminal, previousHash: firstHash, hash: hashAuditEvent(unlinkedTerminal, firstHash) },
+  ]), AuditChainError)
+  const duplicateTerminal = { ...secondEvent, type: 'connector.run.failed' as const, detail: { requestedAuditHash: firstHash, error: 'SYNTHETIC_FAILURE' } }
+  const duplicateTerminalHash = hashAuditEvent(duplicateTerminal, secondHash)
+  assert.throws(() => verifiedAuditChainHead([
+    { event: firstEvent, previousHash: null, hash: firstHash },
+    { event: secondEvent, previousHash: firstHash, hash: secondHash },
+    { event: duplicateTerminal, previousHash: secondHash, hash: duplicateTerminalHash },
+  ]), AuditChainError)
 })
 
 test('direct runner calls reject malformed governance context before audit or quota reservation', async () => {

@@ -100,7 +100,8 @@ export function verifiedAuditChainHead(values: readonly unknown[]): string | nul
       requestedEvents.set(candidate.hash, candidate.event)
     } else {
       const requestedAuditHash = candidate.event.detail.requestedAuditHash
-      const requested = typeof requestedAuditHash === 'string' ? requestedEvents.get(requestedAuditHash) : undefined
+      if (typeof requestedAuditHash !== 'string') throw new AuditChainError()
+      const requested = requestedEvents.get(requestedAuditHash)
       if (!requested || terminalRequests.has(requestedAuditHash) ||
         requested.connectorId !== candidate.event.connectorId || requested.product !== candidate.event.product ||
         requested.workspaceId !== candidate.event.workspaceId || requested.actor !== candidate.event.actor ||

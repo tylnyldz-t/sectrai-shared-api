@@ -1,4 +1,4 @@
-import { ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError } from './errors.js'
+import { ConnectorInputError, ConnectorUnavailableError, CostCapError, GclError, OwnerGateError, ScopeError } from './errors.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export type RunConnectorRequest = {
@@ -20,6 +20,11 @@ const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 
 function validContext(request: RunConnectorRequest): boolean {
   return PRODUCT_PATTERN.test(request.product) && WORKSPACE_PATTERN.test(request.workspaceId) && ACTOR_PATTERN.test(request.actor)
+}
+
+/** Audit error details are stable codes, never an adapter's arbitrary message. */
+function auditFailureCode(error: unknown): string {
+  return error instanceof GclError ? error.code : 'connector_run_failed'
 }
 
 export class ConnectorRegistry {
@@ -90,7 +95,7 @@ export class GovernedConnectorRunner {
         type: 'connector.run.failed', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId,
         actor: context.actor, scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,
         occurredAt: this.now().toISOString(),
-        detail: { requestedAuditHash: requestedAudit.hash, error: error instanceof Error ? error.message : 'UNKNOWN_ERROR' },
+        detail: { requestedAuditHash: requestedAudit.hash, error: auditFailureCode(error) },
       })
       throw error
     }

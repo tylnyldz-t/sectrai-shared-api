@@ -30,6 +30,16 @@ Every GM5/GM6 `data` result is a recursively frozen review snapshot. It carries
 canonical JSON data only. The digest is a review-correlation value, not a
 credential, signature, or execution authorisation.
 
+Each result also carries a deterministic
+`gcl.synthetic-review-receipt.v1`. The receipt binds the connector, exact
+product/workspace scope, and plan digest to four immutable negative controls:
+no transport, no process launcher, no artifact-file write, and no publication.
+`verifiesSyntheticPlanIntegrity` and `verifiesSyntheticReviewReceipt` can be
+used by a review consumer before displaying a snapshot; their asserting forms
+fail closed with `503 synthetic_review_integrity_invalid` when either value is
+malformed or altered. A receipt is still not a signature, a message to JNC, or
+an approval to execute anything.
+
 GM5 synthetic artifact IDs and integrity hashes include the product and
 workspace scope. The same validated input therefore produces a stable proposal
 inside one scope but cannot be correlated through the same synthetic artifact
@@ -44,6 +54,12 @@ new chain root. This is a fail-closed consistency control, not a signed
 tamper-proof ledger: a separately designed signing/attestation system would be
 required to defend against a privileged database writer who can recompute
 hashes.
+
+Audit verification also accepts only the exact stored record and event fields.
+Every `succeeded` or `failed` event must link once to a preceding compatible
+`requested` event in the same chain; dangling, cross-context, duplicate, or
+extra-field terminal events are corrupt. An interrupted request may remain
+unresolved, but it cannot be replaced with a new root.
 
 ## Connector mapping
 

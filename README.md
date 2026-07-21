@@ -58,4 +58,6 @@ engine plans. Their JNC Blender/Unreal mapping is contract-only: no provider,
 GPU, Blender, Unreal, shell, credential, or publication path exists. See
 [`docs/GM5_GM6_JNC_SYNTHETIC_CONTRACT.md`](docs/GM5_GM6_JNC_SYNTHETIC_CONTRACT.md).
 GM5/GM6 outputs are immutable, scope-bound synthetic review snapshots; a
-broken GCL audit chain fails closed rather than being silently restarted.
+broken GCL audit chain fails closed rather than being silently restarted. Each
+snapshot additionally includes a deterministic review receipt that records no
+transport, process, artifact write, or publication capability.
