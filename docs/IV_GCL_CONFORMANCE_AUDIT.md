@@ -72,3 +72,70 @@ following are complete in their owning branches:
 This audit intentionally did not alter production configuration, credentials,
 providers, databases, or any `main`/prod target.  It establishes the current
 conformance state and the exact blockers; it is not live-provider approval.
+
+## D1 — next connector package
+
+This follow-up audited the local, immutable Git snapshots for the next
+package: RA voice `80a1cc6`, RA OCR `f6f28d7`, RA image `4d0806b`, RA
+3D/game `7e5b947`, RA market `1b53141`, RFID `7b14d54`, translation
+`43541af`, language education `2635230`, and camera `0c166df`.
+
+The audit fixture is deliberately source-only.  It uses local `git show` to
+pin each connector and its runner blob, and does not import a connector,
+read an `.env` file, contact a provider, or open a network socket.  Run it
+with:
+
+```bash
+npm run test:conformance
+```
+
+It is fail-closed: if one of the audited local Git objects is absent, the
+fixture fails rather than treating the source as conformant.  The target
+packages' own synthetic unit suites were also run with Node's `tsx` loader;
+their database integration tests were intentionally not run because they
+require `DATABASE_URL` and are outside this source-only audit.
+
+| Connector | Snapshot safety boundary | Owner/preflight | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D1 result |
+| --- | --- | --- | --- | --- | --- |
+| RA voice | synthetic descriptors only; no client or provider URL | Pass | `requested` only | Pass | Nonconformant |
+| RA OCR | masked synthetic evidence only; no raw image/client | Pass | `requested` only | Pass | Nonconformant |
+| RA image | synthetic review candidate; no Comfy dispatch | Pass | `requested` only | Pass | Nonconformant |
+| RA 3D/game | contract-only JNC hand-off; no transport/process launch | Pass | `requested` only | Pass | Nonconformant |
+| RA market | proposal-only; a true live flag is hard-denied | Pass | `requested` only | Pass | Nonconformant |
+| RFID | PSMS-TAG-SIM only; no reader, tag, or network input | Pass | `requested` only | Pass | Nonconformant |
+| Translation | synthetic text/audio references only | Pass | `requested` only | Pass | Nonconformant |
+| Language education | family-safe synthetic references; no audio or learner profile | Pass | `requested` only | Pass | Nonconformant |
+| Camera | consent-bound fixtures; no media/device/identity path | Pass, including maker–checker denial | `requested`, `failed` | Pass; a true live flag is hard-denied | Conformant |
+
+### D1 negative and edge evidence
+
+- The fixture asserts that every connector source declares `LIVE_DISABLED`,
+  contains neither an HTTP client nor a provider URL, and that the only two
+  `*_LIVE_ENABLED` environment surfaces (market and camera) immediately
+  reject a true value.  All other snapshots expose no such environment
+  surface.
+- The quota-rejection edge is intentionally tested as an audit classification:
+  a runner is conformant only when `await quota.consume(...)` is inside the
+  `try` whose `catch` appends `connector.run.failed`, after the `requested`
+  event.  The first eight D1 runners put quota consumption before that `try`;
+  camera puts it inside.  This prevents the report from claiming a failed
+  event that the source cannot append.
+- Existing package tests cover their local input/preflight boundaries.  In
+  particular, camera's unit suite covers revoked/mismatched consent,
+  maker–checker self-approval, an unknown connector, a true live flag, and a
+  quota rejection.  No test used a credential, real provider, real device,
+  migration, production database, or send/publish operation.
+
+### D1 remediation and ADOS boundary
+
+The first eight packages must move quota reservation into the protected
+`try` (or append an equivalent linked `connector.run.failed` event) and add a
+behavioural rejecting-quota fixture before GCL certification.  The original
+Apify L0 live opt-in remains a separate blocker from the first package.
+
+This D1 work keeps the ten ADOS rules intact: product data planes are not
+joined; missing gates deny by default; only source pointers/blob hashes cross
+the audit boundary; no owner decision is inferred; camera alone proves the
+maker–checker edge; audit-chain gaps are reported rather than hidden; no
+migration is introduced; all outputs remain proposal-only; no JARVIS job is
+started; and synthetic testing is not a launch decision.
