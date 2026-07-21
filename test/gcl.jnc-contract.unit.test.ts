@@ -238,6 +238,22 @@ test('GM6 maps premium Unreal and Blender plans to JNC pilot contracts without s
   }
 })
 
+test('GM6 keeps the economic Godot template as a non-executed, non-GPU plan', async () => {
+  const connector = new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 200, maxGpuMinutes: 30 })
+  const result = await runner(connector).run.run(gameRequest({
+    tier: 'economic', engine: 'godot', projectId: 'classroom-puzzle', brief: 'A small classroom puzzle prototype.', target: 'web',
+  }, 1)) as ConnectorResult<GameEngineBuildPlan>
+  assert.equal(result.data.execution, 'SYNTHETIC_PLAN_ONLY_NOT_EXECUTED')
+  assert.equal(result.data.pipeline[1]?.id, 'godot-headless-import')
+  assert.deepEqual(result.data.pipeline[1]?.commandTemplate, ['godot', '--headless', '--path', '<project-dir>', '--editor', '--quit'])
+  assert.equal(result.data.pipeline[2]?.id, 'godot-headless-export')
+  assert.equal('gpuResourceCard' in result.data, false)
+  assert.equal('jncPilotHandoff' in result.data, false)
+  assert.equal(result.data.publication.state, 'DISABLED_NOT_IMPLEMENTED')
+  assert.equal(result.provenance.source, 'synthetic-game-engine-plan')
+  assert.equal(result.provenance.untrustedContent.source, 'game-engine-input')
+})
+
 test('missing LIVE_DISABLED, owner approval, cost mismatches, and publication input fail closed before reservations', async () => {
   const disabled = runner(new SyntheticTextToThreeDConnector(threeDConfig({ liveMode: undefined })))
   await assert.rejects(disabled.run.run(request()), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'THREED_LIVE_DISABLED_REQUIRED')
@@ -435,4 +451,62 @@ test('the final result boundary does not invoke accessor-backed result fields or
   await assert.rejects(confidenceRun.run.run(request()), SyntheticResultIntegrityError)
   assert.equal(confidenceRun.quota.reservations.length, 1)
   assert.equal(confidenceRun.audit.entries[1]?.event.type, 'connector.run.failed')
+})
+
+test('the final result boundary rejects re-hashed publication escalation and provenance relabelling', async () => {
+  const genuineThreeD = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
+    { prompt: 'A local synthetic 3D proposal' }, directContext(),
+  )
+  const escalatedArtifact = { ...genuineThreeD.data.artifact, publicationState: 'PUBLISHED' }
+  const escalatedThreeDPayload = { ...genuineThreeD.data.reviewSnapshot.payload, artifact: escalatedArtifact }
+  const escalatedThreeDSnapshot = createSyntheticReviewSnapshot({
+    connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, payload: escalatedThreeDPayload,
+  })
+  const escalatedThreeDData = deepFreeze({
+    ...genuineThreeD.data,
+    artifact: escalatedArtifact,
+    integrity: escalatedThreeDSnapshot.integrity,
+    reviewReceipt: escalatedThreeDSnapshot.reviewReceipt,
+    reviewSnapshot: escalatedThreeDSnapshot,
+  }) as unknown as SyntheticThreeDResult
+  const escalatedThreeDConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return { data: escalatedThreeDData, provenance: genuineThreeD.provenance, confidence: 0 } },
+  }
+  const escalatedThreeDRun = runner(escalatedThreeDConnector)
+  await assert.rejects(escalatedThreeDRun.run.run(request()), SyntheticResultIntegrityError)
+  assert.equal(escalatedThreeDRun.quota.reservations.length, 1)
+  assert.equal(escalatedThreeDRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+
+  const relabelledConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return { data: genuineThreeD.data, provenance: { ...genuineThreeD.provenance, source: 'synthetic:relabeled' }, confidence: 0 } },
+  }
+  const relabelledRun = runner(relabelledConnector)
+  await assert.rejects(relabelledRun.run.run(request()), SyntheticResultIntegrityError)
+  assert.equal(relabelledRun.quota.reservations.length, 1)
+  assert.equal(relabelledRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+
+  const gameContext = directContext({ scopes: ['game:project:build'], costCapCents: 100, requestedItems: 12 })
+  const genuineGame = await new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 30 }).run(premiumUnreal, gameContext)
+  const escalatedPublication = { automatic: false, state: 'PUBLISHED' }
+  const escalatedGamePayload = { ...genuineGame.data.reviewSnapshot.payload, publication: escalatedPublication }
+  const escalatedGameSnapshot = createSyntheticReviewSnapshot({
+    connectorId: 'game-engine', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, payload: escalatedGamePayload,
+  })
+  const escalatedGameData = deepFreeze({
+    ...genuineGame.data,
+    publication: escalatedPublication,
+    integrity: escalatedGameSnapshot.integrity,
+    reviewReceipt: escalatedGameSnapshot.reviewReceipt,
+    reviewSnapshot: escalatedGameSnapshot,
+  }) as unknown as GameEngineBuildPlan
+  const escalatedGameConnector: Connector = {
+    id: 'game-engine', kind: 'game-engine', authKind: 'owner-approval', scopes: ['game:project:build'],
+    async run() { return { data: escalatedGameData, provenance: genuineGame.provenance, confidence: 0 } },
+  }
+  const escalatedGameRun = runner(escalatedGameConnector)
+  await assert.rejects(escalatedGameRun.run.run(gameRequest(premiumUnreal)), SyntheticResultIntegrityError)
+  assert.equal(escalatedGameRun.quota.reservations.length, 1)
+  assert.equal(escalatedGameRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
 })

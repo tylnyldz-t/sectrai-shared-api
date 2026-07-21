@@ -149,6 +149,28 @@ stable `failed` audit event and deliberately does not refund quota. No malformed
 result reaches the HTTP response, and no result validation performs network,
 process, file, or publication work.
 
+### D1 policy lock: a digest cannot authorize a capability
+
+The final boundary also applies a fixed synthetic-output policy after snapshot
+verification. This closes the distinction between a plan that is internally
+consistent and one that is safe to egress: a caller cannot build a new,
+otherwise-valid snapshot whose artifact says `PUBLISHED`, whose game plan has a
+non-disabled publication state, whose GPU card is dispatched, or whose JNC
+handoff has an execution-capable field. GM5 artifacts must retain the exact
+proposal-only, owner-review, not-published state and their matching
+`synthetic://` URI. GM6 must retain the documented non-executed pipeline,
+owner-evidence state, disabled publication, and the exact contract-only
+GPU/JNC forms.
+
+The policy also binds provenance to the snapshot input: GM5 must use its own
+`synthetic-3d:<connector>` source and no run ID; GM6 must use
+`synthetic-game-engine-plan`, `game-engine-input`, and the plan's build ID.
+This prevents a synthetic result from being relabelled as a different adapter
+or input source. These comparisons are local canonical-data checks only; they
+do not dereference a URI, start an engine, resolve an executable, or contact a
+provider. A newly calculated digest proves only that the altered data is
+self-consistent, never that it crosses this policy boundary.
+
 Premium GM6 reserves GPU-minute units: `requestedItems` must exactly equal
 `input.gpuMinutes`. GM5 reserves exactly one proposal item. Both outputs mark
 untrusted input as `UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`.
