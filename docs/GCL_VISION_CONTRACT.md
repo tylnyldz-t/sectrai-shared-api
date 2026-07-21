@@ -23,7 +23,7 @@ Every proposal remains `owner-only`, `pending`, `automaticApply: false`, and `au
 
 ## D1 — review-packet integrity boundary
 
-The proposal contains a `synthetic-document-review-packet-v1`. Before it appends a review audit event, the module validates all of the following again:
+The original proposal shape introduced `synthetic-document-review-packet-v1`. Before it appends a review audit event, the module validates all of the following again:
 
 - the product/workspace-derived proposal ID and synthetic URI, so a proposal cannot be reviewed in another scope;
 - evidence metadata only (no raw bytes or `rawContentStored: true`);
@@ -36,19 +36,27 @@ Any malformed, cross-scope, altered, raw-sensitive, or non-pending proposal fail
 
 ## D2 — consent-bound, time-valid review
 
-New proposals use `synthetic-document-review-packet-v2`. Its integrity material adds a consent binding with the fixed document-extraction purpose, the SHA-256 digest of the policy version, and the canonical consent expiry. Neither a consent token nor the policy text is put in the proposal or review audit.
+The v2 packet introduced a consent binding with the fixed document-extraction purpose, the SHA-256 digest of the policy version, and the canonical consent expiry. Neither a consent token nor the policy text is put in the proposal or review audit.
 
-At review time, the module uses the caller-supplied review clock once, rejects an invalid clock, and rejects expiry at the exact boundary (`expiresAt <= review time`) before writing an audit event. It also rejects legacy v1 packets, a missing/extra consent-binding field, an invalid consent purpose/digest/timestamp, and a consent-binding alteration whose packet checksum no longer matches. This means existing v1 packets are intentionally not reviewable under D2: they lack the review-time consent evidence, so the safe result is deny rather than grandfathering.
+At review time, the module uses the caller-supplied review clock once, rejects an invalid clock, and rejects expiry at the exact boundary (`expiresAt <= review time`) before writing an audit event. It rejects missing/extra consent-binding fields, invalid consent purpose/digest/timestamps, and a consent-binding alteration whose packet checksum no longer matches. Older packets deliberately remain non-reviewable as newer review-time evidence is added: deny is safer than grandfathering.
 
 D2 is not revocation lookup, replay protection, or durable approval state. The binding is still unkeyed and only protects the in-process packet from accidental change. A future durable, scoped host must enforce consent revocation and one-time decision semantics before it can make a review actionable; this module still only records a synthetic review audit event and never sends or applies evidence.
 
 ## D3 — bounded review-time window
 
-New proposals use `synthetic-document-review-packet-v3`. The packet adds integrity-bound `issuedAt` and `reviewBy` metadata. A controlled synthetic configuration must explicitly set `GCL_VISION_MAX_REVIEW_AGE_SECONDS`; it must be a positive integer no greater than one day. The actual deadline is the earlier of that interval and the consent expiry, so a proposal can never outlive its consent.
+The v3 packet added integrity-bound `issuedAt` and `reviewBy` metadata. A controlled synthetic configuration must explicitly set `GCL_VISION_MAX_REVIEW_AGE_SECONDS`; it must be a positive integer no greater than one day. The actual deadline is the earlier of that interval and the consent expiry, so a proposal can never outlive its consent.
 
-At review time the module denies a reviewer clock before issuance and denies the exact deadline boundary (`reviewBy <= review time`) before appending audit. It also rejects absent or extended review windows, non-canonical timestamps, zero/negative windows, windows longer than one day, extra window fields, and integrity changes. D3 intentionally rejects v1/v2 packets: they have no bounded issuance/deadline evidence, so deny is safer than grandfathering.
+At review time the module denies a reviewer clock before issuance and denies the exact deadline boundary (`reviewBy <= review time`) before appending audit. It also rejects absent or extended review windows, non-canonical timestamps, zero/negative windows, windows longer than one day, extra window fields, and integrity changes.
 
 D3 does not turn the packet into a signed token, durable review state, replay control, a retention store, or an apply/send authorization. It only limits the lifetime of an in-process synthetic review proposal; a future durable scoped host must independently enforce any one-time decision and retention policy.
+
+## D4 — evidence-freshness-bound review
+
+New proposals use `synthetic-document-review-packet-v4`. A controlled synthetic configuration must explicitly set `GCL_VISION_MAX_EVIDENCE_AGE_SECONDS`; it must be a positive integer no greater than one day. At proposal time, a synthetic evidence reference is rejected when its exact expiry boundary has already passed (`capturedAt + maximum age <= proposal time`).
+
+The v4 integrity material adds `evidenceBinding.capturedAt` and `evidenceBinding.expiresAt`. The capture time must exactly match the metadata-only evidence reference; no raw bytes, policy text, token, or credential is added. `reviewBy` is the earliest of the bounded review interval, consent expiry, and evidence expiry. At review time, expiry at the exact evidence boundary is denied before audit. The validator also rejects missing or extra binding fields, non-canonical/zero/negative/over-one-day windows, capture-time mismatch, a review deadline beyond evidence freshness, integrity changes, and all v1/v2/v3 packets.
+
+D4 limits only the in-process lifetime of synthetic evidence metadata. It is not revocation lookup, a signature, durable one-time decision state, a retention store, a send/apply authorization, or an OCR/provider capability. A future durable, scoped host must still resolve the proposal and enforce revocation and replay semantics before any separate action.
 
 ## Safe configuration
 
@@ -59,12 +67,13 @@ GCL_VISION_LIVE_MODE=LIVE_DISABLED
 GCL_VISION_MAX_COST_CENTS=20
 GCL_VISION_MAX_ITEMS=1
 GCL_VISION_MAX_REVIEW_AGE_SECONDS=3600
+GCL_VISION_MAX_EVIDENCE_AGE_SECONDS=3600
 GCL_VISION_DAILY_RUN_QUOTA=5
 GCL_VISION_DAILY_ITEM_QUOTA=5
 ```
 
-No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`. D1/D2/D3 add no persistence, review-state mutation, migration, credential, or network client.
+No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`. D1/D2/D3/D4 add no persistence, review-state mutation, migration, credential, or network client.
 
 ## ADOS controls
 
-The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. D1 additionally rejects review-packet tampering and cross-scope review before audit; D2 default-denies stale consent evidence; D3 default-denies a packet outside its bounded review window. It makes no migration, promotion, publication, or provider request.
+The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. D1 additionally rejects review-packet tampering and cross-scope review before audit; D2 default-denies stale consent evidence; D3 default-denies a packet outside its bounded review window; D4 default-denies stale synthetic evidence references. It makes no migration, promotion, publication, or provider request.

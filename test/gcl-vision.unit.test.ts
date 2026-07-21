@@ -32,8 +32,8 @@ class TestQuota implements ConnectorQuota {
   async consume(request: Parameters<ConnectorQuota['consume']>[0]): Promise<void> { this.requests.push({ connectorId: request.connectorId, requestedItems: request.requestedItems }) }
 }
 
-function configuredConnector(maxReviewAgeSeconds = 60): SyntheticVisionDocumentFieldExtractionConnector {
-  return new SyntheticVisionDocumentFieldExtractionConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 1, maxReviewAgeSeconds })
+function configuredConnector(maxReviewAgeSeconds = 60, maxEvidenceAgeSeconds = 300): SyntheticVisionDocumentFieldExtractionConnector {
+  return new SyntheticVisionDocumentFieldExtractionConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 1, maxReviewAgeSeconds, maxEvidenceAgeSeconds })
 }
 
 test('GM2 vision adapter is synthetic-only and has no provider client or default governance limits', async () => {
@@ -58,13 +58,14 @@ test('raw document content, missing consent, and malformed fixture data fail bef
   assert.equal(quota.requests.length, 0)
 })
 
-test('GM2 rejects boundary evidence, expired consent, duplicate fields, control characters, and blank makers before reservation', async () => {
+test('GM2 rejects stale or boundary evidence, expired consent, duplicate fields, control characters, and blank makers before reservation', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, quota, now)
   const request = { connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, ...context }
   await assert.rejects(() => runner.run({ ...request, input: { ...input, evidence: { ...input.evidence, byteLength: 0 } } }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_EVIDENCE_SIZE')
   await assert.rejects(() => runner.run({ ...request, input: { ...input, evidence: { ...input.evidence, capturedAt: '2026-07-22T12:00:00.001Z' } } }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_CAPTURE_TIME')
+  await assert.rejects(() => runner.run({ ...request, input: { ...input, evidence: { ...input.evidence, capturedAt: '2026-07-22T11:55:00.000Z' } } }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_EVIDENCE_STALE')
   await assert.rejects(() => runner.run({ ...request, input: { ...input, consent: { ...input.consent, expiresAt: '2026-07-22T12:00:00.000Z' } } }), (error: unknown) => error instanceof ConsentError && error.message === 'DOCUMENT_CONSENT_EXPIRED')
   await assert.rejects(() => runner.run({ ...request, input: { ...input, syntheticFields: [...input.syntheticFields, { field: 'containerId', value: 'duplicate' }] } }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_SYNTHETIC_DOCUMENT_FIELD')
   await assert.rejects(() => runner.run({ ...request, input: { ...input, syntheticFields: [{ field: 'containerId', value: 'unsafe\u0000value' }] } }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_SYNTHETIC_DOCUMENT_VALUE')
@@ -92,13 +93,15 @@ test('GM2 run requires owner gate, scope, cost cap, quota, consent, and creates 
   assert.equal(proposal.evidence.rawContentStored, false)
   assert.equal(proposal.ownerReview.status, 'pending')
   assert.equal(proposal.ownerReview.automaticApply, false)
-  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v3')
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v4')
   assert.match(proposal.reviewPacket.integrityDigest, /^[a-f0-9]{64}$/)
   assert.equal(proposal.reviewPacket.scopeBinding.productDigest.length, 64)
   assert.equal(proposal.reviewPacket.consentBinding.purpose, 'document-field-extraction')
   assert.match(proposal.reviewPacket.consentBinding.policyVersionDigest, /^[a-f0-9]{64}$/)
   assert.equal(proposal.reviewPacket.consentBinding.expiresAt, input.consent.expiresAt)
   assert.equal(JSON.stringify(proposal.reviewPacket).includes('kvkk-v1'), false)
+  assert.equal(proposal.reviewPacket.evidenceBinding.capturedAt, input.evidence.capturedAt)
+  assert.equal(proposal.reviewPacket.evidenceBinding.expiresAt, '2026-07-22T12:04:00.000Z')
   assert.equal(proposal.reviewPacket.reviewWindow.issuedAt, now().toISOString())
   assert.equal(proposal.reviewPacket.reviewWindow.reviewBy, '2026-07-22T12:01:00.000Z')
   assert.equal(proposal.reviewPacket.rawDocumentContentIncluded, false)
@@ -196,7 +199,7 @@ test('D2 consent binding remains enforced under D3 packets and rejects legacy or
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(malformedBindingExpiry, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_CONSENT_EXPIRY')
 
   const legacyPacket = clone()
-  legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v2' as never
+  legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v3' as never
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(legacyPacket, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
 
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', audit, { ...context, now: (() => new Date('invalid')) as typeof context.now }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_TIME')
@@ -234,16 +237,61 @@ test('D3 bounds review time and rejects an expired, pre-issued, malformed, overs
   assert.equal(quota.requests.length, 1)
 })
 
+test('D4 binds reviewability to fresh evidence and rejects stale, legacy, malformed, or extended evidence windows before audit append', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(300, 60)]), audit, quota, now)
+  const freshInput = { ...input, evidence: { ...input.evidence, capturedAt: '2026-07-22T11:59:30.000Z' } }
+  const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input: freshInput, ...context }) as ConnectorResult<DocumentFieldExtractionData>
+  const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
+
+  assert.equal(result.data.proposal.reviewPacket.evidenceBinding.capturedAt, freshInput.evidence.capturedAt)
+  assert.equal(result.data.proposal.reviewPacket.evidenceBinding.expiresAt, '2026-07-22T12:00:30.000Z')
+  assert.equal(result.data.proposal.reviewPacket.reviewWindow.reviewBy, '2026-07-22T12:00:30.000Z')
+
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', audit, { ...context, now: () => new Date('2026-07-22T12:00:30.000Z') }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_EVIDENCE_EXPIRED')
+
+  const missingBinding = clone()
+  delete (missingBinding.reviewPacket as { evidenceBinding?: unknown }).evidenceBinding
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(missingBinding, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_EVIDENCE_BINDING')
+
+  const extraBindingField = clone()
+  ;(extraBindingField.reviewPacket.evidenceBinding as { untrusted?: unknown }).untrusted = true
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(extraBindingField, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_DOCUMENT_REVIEW_EVIDENCE_BINDING_FIELD')
+
+  const captureMismatch = clone()
+  captureMismatch.reviewPacket.evidenceBinding.capturedAt = '2026-07-22T11:59:31.000Z'
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(captureMismatch, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_EVIDENCE_CAPTURE_MISMATCH')
+
+  const extendedEvidence = clone()
+  extendedEvidence.reviewPacket.evidenceBinding.expiresAt = '2026-07-22T12:00:45.000Z'
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(extendedEvidence, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+
+  const reviewBeyondEvidence = clone()
+  reviewBeyondEvidence.reviewPacket.reviewWindow.reviewBy = '2026-07-22T12:00:31.000Z'
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(reviewBeyondEvidence, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_WINDOW_EXCEEDS_EVIDENCE_FRESHNESS')
+
+  const legacyPacket = clone()
+  legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v3' as never
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(legacyPacket, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
+  assert.equal(audit.entries.length, 2)
+  assert.equal(quota.requests.length, 1)
+})
+
 test('environment construction has no credential input and accepts only explicit synthetic mode', async () => {
-  const configured = syntheticVisionDocumentFieldExtractionConnectorFromEnvironment({ GCL_VISION_LIVE_MODE: LIVE_DISABLED, GCL_VISION_MAX_COST_CENTS: '20', GCL_VISION_MAX_ITEMS: '1', GCL_VISION_MAX_REVIEW_AGE_SECONDS: '60' })
+  const configured = syntheticVisionDocumentFieldExtractionConnectorFromEnvironment({ GCL_VISION_LIVE_MODE: LIVE_DISABLED, GCL_VISION_MAX_COST_CENTS: '20', GCL_VISION_MAX_ITEMS: '1', GCL_VISION_MAX_REVIEW_AGE_SECONDS: '60', GCL_VISION_MAX_EVIDENCE_AGE_SECONDS: '300' })
   const result = await configured.run(input, context)
   assert.equal(result.data.mode, LIVE_DISABLED)
-  const invalid = syntheticVisionDocumentFieldExtractionConnectorFromEnvironment({ GCL_VISION_LIVE_MODE: 'LIVE_ENABLED', GCL_VISION_MAX_COST_CENTS: '20', GCL_VISION_MAX_ITEMS: '1', GCL_VISION_MAX_REVIEW_AGE_SECONDS: '60' })
+  const invalid = syntheticVisionDocumentFieldExtractionConnectorFromEnvironment({ GCL_VISION_LIVE_MODE: 'LIVE_ENABLED', GCL_VISION_MAX_COST_CENTS: '20', GCL_VISION_MAX_ITEMS: '1', GCL_VISION_MAX_REVIEW_AGE_SECONDS: '60', GCL_VISION_MAX_EVIDENCE_AGE_SECONDS: '300' })
   await assert.rejects(() => invalid.run(input, context), ConnectorUnavailableError)
-  const noReviewDeadline = syntheticVisionDocumentFieldExtractionConnectorFromEnvironment({ GCL_VISION_LIVE_MODE: LIVE_DISABLED, GCL_VISION_MAX_COST_CENTS: '20', GCL_VISION_MAX_ITEMS: '1' })
+  const noReviewDeadline = syntheticVisionDocumentFieldExtractionConnectorFromEnvironment({ GCL_VISION_LIVE_MODE: LIVE_DISABLED, GCL_VISION_MAX_COST_CENTS: '20', GCL_VISION_MAX_ITEMS: '1', GCL_VISION_MAX_EVIDENCE_AGE_SECONDS: '300' })
   await assert.rejects(() => noReviewDeadline.run(input, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'VISION_DOCUMENT_REVIEW_WINDOW_NOT_CONFIGURED')
-  const oversizedReviewDeadline = new SyntheticVisionDocumentFieldExtractionConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 1, maxReviewAgeSeconds: 86401 })
+  const noEvidenceFreshness = syntheticVisionDocumentFieldExtractionConnectorFromEnvironment({ GCL_VISION_LIVE_MODE: LIVE_DISABLED, GCL_VISION_MAX_COST_CENTS: '20', GCL_VISION_MAX_ITEMS: '1', GCL_VISION_MAX_REVIEW_AGE_SECONDS: '60' })
+  await assert.rejects(() => noEvidenceFreshness.run(input, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'VISION_DOCUMENT_EVIDENCE_FRESHNESS_NOT_CONFIGURED')
+  const oversizedReviewDeadline = new SyntheticVisionDocumentFieldExtractionConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 1, maxReviewAgeSeconds: 86401, maxEvidenceAgeSeconds: 300 })
   await assert.rejects(() => oversizedReviewDeadline.run(input, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'VISION_DOCUMENT_REVIEW_WINDOW_NOT_CONFIGURED')
+  const oversizedEvidenceFreshness = new SyntheticVisionDocumentFieldExtractionConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 1, maxReviewAgeSeconds: 60, maxEvidenceAgeSeconds: 86401 })
+  await assert.rejects(() => oversizedEvidenceFreshness.run(input, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'VISION_DOCUMENT_EVIDENCE_FRESHNESS_NOT_CONFIGURED')
 })
 
 test('daily GM2 quota configuration is positive-integer-only and fail-closed', () => {
