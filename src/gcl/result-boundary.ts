@@ -14,6 +14,7 @@ const GAME_DATA_BASE_KEYS = ['adapter', 'liveMode', 'integrity', 'reviewReceipt'
 const GAME_DATA_PREMIUM_KEYS = [...GAME_DATA_BASE_KEYS, 'gpuResourceCard', 'jncPilotHandoff'] as const
 const GPU_CARD_STOP_CONDITIONS = ['LIVE_DISABLED', 'AUTOSTART_DISABLED', 'NO_JNC_TRANSPORT', 'SEPARATE_OWNER_APPROVAL_REQUIRED'] as const
 const BLENDER_ARTIFACT_REQUIREMENTS = ['BLEND', 'GLB', 'ASSET_MANIFEST_JSON', 'VALIDATION_JSON'] as const
+const SHA256_PATTERN = /^[a-f0-9]{64}$/
 
 /**
  * Copies only own enumerable data descriptors. Getter-backed, inherited,
@@ -83,13 +84,13 @@ function deeplyFrozenCanonicalData(value: unknown, seen = new WeakSet<object>())
   }
 }
 
-function snapshotAndCoreData(data: DataRecord, connectorId: string): DataRecord | null {
+function snapshotAndCoreData(data: DataRecord, connectorId: string, submittedInputSha256: string): DataRecord | null {
   if (data.liveMode !== LIVE_DISABLED) return null
   if (!verifiesSyntheticReviewSnapshot(data.reviewSnapshot)) return null
   const snapshot = ownDataRecord(data.reviewSnapshot)
   if (!snapshot || !sameCanonicalData(data.integrity, snapshot.integrity) || !sameCanonicalData(data.reviewReceipt, snapshot.reviewReceipt)) return null
   const payload = ownDataRecord(snapshot.payload)
-  if (!payload || payload.connectorId !== connectorId) return null
+  if (!payload || payload.connectorId !== connectorId || payload.submittedInputSha256 !== submittedInputSha256) return null
   return payload
 }
 
@@ -158,9 +159,9 @@ function validThreeDArtifact(value: unknown, connectorId: string, payload: DataR
     artifact.reviewState === 'OWNER_REVIEW_REQUIRED' && artifact.publicationState === 'NOT_PUBLISHED')
 }
 
-function threeDResultMatchesSnapshot(data: DataRecord, connectorId: string): boolean {
+function threeDResultMatchesSnapshot(data: DataRecord, connectorId: string, submittedInputSha256: string): boolean {
   if (!exactKeys(data, THREE_D_DATA_KEYS) || data.connectorKind !== connectorId) return false
-  const payload = snapshotAndCoreData(data, connectorId)
+  const payload = snapshotAndCoreData(data, connectorId, submittedInputSha256)
   return Boolean(payload &&
     sameCanonicalData(data.artifact, payload.artifact) &&
     sameCanonicalData(data.gpuResourceCard, payload.gpuResourceCard) &&
@@ -197,10 +198,10 @@ function validGamePipeline(value: unknown, input: GameInputPolicy): boolean {
   return sameCanonicalData(value, expected)
 }
 
-function gameResultMatchesSnapshot(data: DataRecord, connectorId: string): boolean {
+function gameResultMatchesSnapshot(data: DataRecord, connectorId: string, submittedInputSha256: string): boolean {
   if (!exactOptionalKeys(data, GAME_DATA_BASE_KEYS, GAME_DATA_PREMIUM_KEYS) ||
     data.adapter !== 'SYNTHETIC' || data.execution !== 'SYNTHETIC_PLAN_ONLY_NOT_EXECUTED') return false
-  const payload = snapshotAndCoreData(data, connectorId)
+  const payload = snapshotAndCoreData(data, connectorId, submittedInputSha256)
   const input = payload ? gameInputPolicy(payload.input) : null
   if (!payload || !input || typeof data.buildId !== 'string' || !/^synthetic-game-[a-f0-9]{20}$/.test(data.buildId) ||
     !sameCanonicalData(data.buildId, payload.buildId) ||
@@ -224,12 +225,12 @@ function gameResultMatchesSnapshot(data: DataRecord, connectorId: string): boole
     (input.engine === 'unreal' ? validUnrealPilotHandoff(data.jncPilotHandoff) : validBlenderPilotHandoff(data.jncPilotHandoff))
 }
 
-function syntheticDataMatchesSnapshot(data: unknown, connectorId: string): data is DataRecord {
+function syntheticDataMatchesSnapshot(data: unknown, connectorId: string, submittedInputSha256: string): data is DataRecord {
   if (!deeplyFrozenCanonicalData(data)) return false
   const record = ownDataRecord(data)
   if (!record) return false
-  if (connectorId === 'text-to-3d' || connectorId === 'image-text-to-3d') return threeDResultMatchesSnapshot(record, connectorId)
-  if (connectorId === 'game-engine') return gameResultMatchesSnapshot(record, connectorId)
+  if (connectorId === 'text-to-3d' || connectorId === 'image-text-to-3d') return threeDResultMatchesSnapshot(record, connectorId, submittedInputSha256)
+  if (connectorId === 'game-engine') return gameResultMatchesSnapshot(record, connectorId, submittedInputSha256)
   return false
 }
 
@@ -290,9 +291,9 @@ function provenanceMatchesSnapshot(data: unknown, provenance: ConnectorResult['p
  * a fresh frozen envelope.
  * This has no I/O and cannot turn a plan into an execution path.
  */
-export function validatedSyntheticConnectorResult<TData = unknown>(value: unknown, connectorId: string): ConnectorResult<TData> {
+export function validatedSyntheticConnectorResult<TData = unknown>(value: unknown, connectorId: string, submittedInputSha256: string): ConnectorResult<TData> {
   const result = ownDataRecord(value)
-  if (!result || !exactKeys(result, RESULT_KEYS) || result.confidence !== 0 || !syntheticDataMatchesSnapshot(result.data, connectorId)) {
+  if (!SHA256_PATTERN.test(submittedInputSha256) || !result || !exactKeys(result, RESULT_KEYS) || result.confidence !== 0 || !syntheticDataMatchesSnapshot(result.data, connectorId, submittedInputSha256)) {
     throw new SyntheticResultIntegrityError()
   }
   const provenance = safeProvenance(result.provenance, connectorId)

@@ -74,6 +74,14 @@ export function syntheticPlanSha256(value: unknown): string {
   return createHash('sha256').update(canonicalJson(value)).digest('hex')
 }
 
+/**
+ * Takes a data-only snapshot without retaining caller-owned object references.
+ * This is a local canonical JSON copy, not a serializer for executable values.
+ */
+export function frozenCanonicalJsonCopy<T = unknown>(value: unknown): T {
+  return deepFreeze(JSON.parse(canonicalJson(value)) as T)
+}
+
 /** A non-throwing boundary check for data-only review payloads. */
 export function isCanonicalJsonData(value: unknown): boolean {
   try {

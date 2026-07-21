@@ -1,6 +1,6 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, type JncBlenderPilotHandoff, type JncGpuResourceCard, type JncUnrealPilotHandoff } from './jnc-pilot.js'
-import { deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { deepFreeze, frozenCanonicalJsonCopy, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
 import { validatedSyntheticConnectorResult } from './result-boundary.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
 import type { SyntheticReviewReceipt } from './review-receipt.js'
@@ -110,6 +110,15 @@ function inputFrom(value: unknown): GameEngineBuildInput {
   }
 }
 
+/** Isolate direct caller data before it reaches validation or a review plan. */
+function submittedInput(value: unknown): GameEngineBuildInput {
+  try {
+    return frozenCanonicalJsonCopy<GameEngineBuildInput>(value)
+  } catch {
+    throw new ConnectorInputError('GAME_ENGINE_INVALID_INPUT')
+  }
+}
+
 function buildId(input: GameEngineBuildInput, context: ConnectorRunContext): string {
   const digest = syntheticPlanSha256({ input, product: context.product, workspaceId: context.workspaceId, scopes: [...context.scopes].sort(), costCapCents: context.costCapCents, requestedItems: context.requestedItems })
   return `synthetic-game-${digest.slice(0, 20)}`
@@ -143,7 +152,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
   readonly id = 'game-engine'
   readonly kind = 'game-engine' as const
   readonly authKind = 'owner-approval' as const
-  readonly scopes = ['game:project:build'] as const
+  readonly scopes = Object.freeze(['game:project:build'] as const)
   private readonly jncPilotMapper: ContractOnlyJncPilotMapper
 
   private readonly config: GameEngineConnectorConfig
@@ -151,6 +160,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
   constructor(config: GameEngineConnectorConfig = {}) {
     this.config = connectorConfig(config)
     this.jncPilotMapper = new ContractOnlyJncPilotMapper()
+    Object.freeze(this)
   }
 
   private configured(context: ConnectorRunContext, input: GameEngineBuildInput): void {
@@ -166,12 +176,14 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
 
   preflight(value: GameEngineBuildInput, context: ConnectorRunContext): void {
     const validatedContext = validatedConnectorRunContext(context, this.scopes)
-    this.configured(validatedContext, inputFrom(value))
+    this.configured(validatedContext, inputFrom(submittedInput(value)))
   }
 
   async run(value: GameEngineBuildInput, context: ConnectorRunContext): Promise<ConnectorResult<GameEngineBuildPlan>> {
     const validatedContext = validatedConnectorRunContext(context, this.scopes)
-    const input = inputFrom(value)
+    const rawInput = submittedInput(value)
+    const submittedInputSha256 = syntheticPlanSha256(rawInput)
+    const input = inputFrom(rawInput)
     this.configured(validatedContext, input)
     const id = buildId(input, validatedContext)
     const premiumPlan = input.tier === 'premium'
@@ -190,6 +202,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
     const planPayload = {
       connectorId: this.id,
       scope: { product: validatedContext.product, workspaceId: validatedContext.workspaceId },
+      submittedInputSha256,
       input,
       buildId: id,
       pipeline: planPipeline,
@@ -224,7 +237,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
       data,
       provenance: { connectorId: this.id, source: 'synthetic-game-engine-plan', retrievedAt: validatedContext.now().toISOString(), runId: id, untrustedContent: isolatedContent(input) },
       confidence: 0,
-    }, this.id)
+    }, this.id, submittedInputSha256)
   }
 }
 

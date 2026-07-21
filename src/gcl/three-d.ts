@@ -1,6 +1,6 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, type GpuResourceRequest, type JncBlenderPilotHandoff, type JncGpuResourceCard } from './jnc-pilot.js'
-import { deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { deepFreeze, frozenCanonicalJsonCopy, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
 import { validatedSyntheticConnectorResult } from './result-boundary.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
 import type { SyntheticReviewReceipt } from './review-receipt.js'
@@ -165,6 +165,15 @@ function imageTextInput(value: unknown): ValidatedTextInput & { image: ImageAsse
   }
 }
 
+/** Isolate direct caller data before it reaches validation or a review plan. */
+function submittedInput<TInput>(value: unknown): TInput {
+  try {
+    return frozenCanonicalJsonCopy<TInput>(value)
+  } catch {
+    throw new ConnectorInputError()
+  }
+}
+
 function isolatedContent(source: string, value: unknown): IsolatedContent {
   return { source, value, handling: 'data-only', instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS' }
 }
@@ -179,7 +188,7 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
   abstract readonly connectorKind: SyntheticThreeDResult['connectorKind']
   readonly kind = 'media-3d' as const
   readonly authKind = 'owner-approval' as const
-  readonly scopes = ['3d:generate'] as const
+  readonly scopes = Object.freeze(['3d:generate'] as const)
   private readonly jncPilotMapper: ContractOnlyJncPilotMapper
 
   private readonly config: SyntheticThreeDConnectorConfig
@@ -203,13 +212,15 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
 
   preflight(input: TInput, context: ConnectorRunContext): void {
     const validatedContext = validatedConnectorRunContext(context, this.scopes)
-    this.validate(input)
+    this.validate(submittedInput<TInput>(input))
     this.configured(validatedContext)
   }
 
   async run(input: TInput, context: ConnectorRunContext): Promise<ConnectorResult<SyntheticThreeDResult>> {
     const validatedContext = validatedConnectorRunContext(context, this.scopes)
-    const validated = this.validate(input)
+    const rawInput = submittedInput<TInput>(input)
+    const submittedInputSha256 = syntheticPlanSha256(rawInput)
+    const validated = this.validate(rawInput)
     this.configured(validatedContext)
     const id = artifactId(this.connectorKind, validated, validatedContext)
     const source = `synthetic-3d:${this.connectorKind}`
@@ -227,6 +238,7 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
     const planPayload = {
       connectorId: this.id,
       scope: { product: validatedContext.product, workspaceId: validatedContext.workspaceId },
+      submittedInputSha256,
       input: validated,
       artifact,
       gpuResourceCard,
@@ -251,19 +263,27 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
       data,
       provenance: { connectorId: this.id, source, retrievedAt: validatedContext.now().toISOString(), untrustedContent: isolatedContent(source, validated) },
       confidence: 0,
-    }, this.id)
+    }, this.id, submittedInputSha256)
   }
 }
 
 export class SyntheticTextToThreeDConnector extends SyntheticThreeDConnector<TextToThreeDInput> {
   readonly id = 'text-to-3d' as const
   readonly connectorKind = 'text-to-3d' as const
+  constructor(config: SyntheticThreeDConnectorConfig = {}) {
+    super(config)
+    Object.freeze(this)
+  }
   protected validate(input: TextToThreeDInput): ValidatedTextInput { return textInput(input) }
 }
 
 export class SyntheticImageTextToThreeDConnector extends SyntheticThreeDConnector<ImageTextToThreeDInput> {
   readonly id = 'image-text-to-3d' as const
   readonly connectorKind = 'image-text-to-3d' as const
+  constructor(config: SyntheticThreeDConnectorConfig = {}) {
+    super(config)
+    Object.freeze(this)
+  }
   protected validate(input: ImageTextToThreeDInput): ValidatedTextInput { return imageTextInput(input) }
 }
 
