@@ -674,7 +674,7 @@ export class SyntheticVisionDocumentFieldExtractionConnector implements Connecto
     const proposalWithoutReviewPacket: Omit<SyntheticDocumentProposal, 'reviewPacket'> = {
       proposalId,
       syntheticUri: `synthetic://gcl/${this.id}/${proposalId}`,
-      preparedBy: context.actor,
+      preparedBy: reviewActor(context.actor),
       mode: LIVE_DISABLED,
       extraction: 'SYNTHETIC_PROPOSAL_ONLY_NOT_OCR',
       evidence: { evidenceId: normalized.evidence.evidenceId, sha256: normalized.evidence.sha256, mediaType: normalized.evidence.mediaType, byteLength: normalized.evidence.byteLength, capturedAt: normalized.evidence.capturedAt, rawContentStored: false },

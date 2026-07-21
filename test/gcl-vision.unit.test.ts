@@ -93,7 +93,7 @@ test('GM2 run requires owner gate, scope, cost cap, quota, consent, and creates 
   assert.equal(proposal.evidence.rawContentStored, false)
   assert.equal(proposal.ownerReview.status, 'pending')
   assert.equal(proposal.ownerReview.automaticApply, false)
-  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v8')
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v9')
   assert.match(proposal.reviewPacket.integrityDigest, /^[a-f0-9]{64}$/)
   assert.equal(proposal.reviewPacket.scopeBinding.productDigest.length, 64)
   assert.equal(proposal.reviewPacket.consentBinding.purpose, 'document-field-extraction')
@@ -103,6 +103,7 @@ test('GM2 run requires owner gate, scope, cost cap, quota, consent, and creates 
   assert.deepEqual(proposal.reviewPacket.governanceBinding, { maxReviewAgeSeconds: 60, maxEvidenceAgeSeconds: 300 })
   assert.deepEqual(proposal.reviewPacket.dataBoundaryBinding, { evidenceSource: 'synthetic-fixture', inputShape: 'plain-own-data-only', rawDocumentContentAccepted: false })
   assert.deepEqual(proposal.reviewPacket.makerCheckerBinding, { actorIdentity: 'ascii-case-insensitive-trimmed', independentReviewerRequired: true })
+  assert.deepEqual(proposal.reviewPacket.collectionBoundaryBinding, { collectionShape: 'array-prototype-dense-own-data-only', sparseOrInheritedElementsAccepted: false, accessorElementsAccepted: false })
   assert.equal(proposal.reviewPacket.evidenceBinding.capturedAt, input.evidence.capturedAt)
   assert.equal(proposal.reviewPacket.evidenceBinding.expiresAt, '2026-07-22T12:04:00.000Z')
   assert.equal(proposal.reviewPacket.reviewWindow.issuedAt, now().toISOString())
@@ -289,7 +290,7 @@ test('D5 requires a causally coherent review timeline and refuses review deadlin
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input: consentBoundInput, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
 
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v8')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v9')
   assert.equal(result.data.proposal.reviewPacket.reviewWindow.reviewBy, consentBoundInput.consent.expiresAt)
 
   const deadlineBeyondConsent = clone()
@@ -316,7 +317,7 @@ test('D6 derives exact review and evidence deadlines from integrity-bound synthe
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
 
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v8')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v9')
   assert.deepEqual(result.data.proposal.reviewPacket.governanceBinding, { maxReviewAgeSeconds: 60, maxEvidenceAgeSeconds: 300 })
 
   const missingBinding = clone()
@@ -374,7 +375,7 @@ test('D7 rejects inherited, hidden, or accessor-backed data and validates its pl
 
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v8')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v9')
   assert.deepEqual(result.data.proposal.reviewPacket.dataBoundaryBinding, { evidenceSource: 'synthetic-fixture', inputShape: 'plain-own-data-only', rawDocumentContentAccepted: false })
 
   const missingBinding = clone()
@@ -416,14 +417,14 @@ test('D7 rejects inherited, hidden, or accessor-backed data and validates its pl
   assert.equal(quota.requests.length, 1)
 })
 
-test('D8 binds canonical maker-checker identity and rejects case or whitespace aliases before audit append', async () => {
+test('D8 canonical maker-checker identity remains enforced under D9 packets', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
 
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v8')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v9')
   assert.deepEqual(result.data.proposal.reviewPacket.makerCheckerBinding, { actorIdentity: 'ascii-case-insensitive-trimmed', independentReviewerRequired: true })
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'MAKER@example.test', audit, context), (error: unknown) => error instanceof MakerCheckerError && error.message === 'DOCUMENT_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, ' maker@example.test ', audit, context), (error: unknown) => error instanceof MakerCheckerError && error.message === 'DOCUMENT_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
@@ -441,7 +442,79 @@ test('D8 binds canonical maker-checker identity and rejects case or whitespace a
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(wrongBinding, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_MAKER_CHECKER_BINDING')
 
   const legacyPacket = clone()
-  legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v7' as never
+  legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v8' as never
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(legacyPacket, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
+  assert.equal(audit.entries.length, 2)
+  assert.equal(quota.requests.length, 1)
+
+  const trimmedMakerAudit = new InMemoryHashChainAuditLog()
+  const trimmedMakerQuota = new TestQuota()
+  const trimmedMakerRunner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), trimmedMakerAudit, trimmedMakerQuota, now)
+  const trimmedMakerResult = await trimmedMakerRunner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context, actor: ' maker@example.test ' }) as ConnectorResult<DocumentFieldExtractionData>
+  assert.equal(trimmedMakerResult.data.proposal.preparedBy, 'maker@example.test')
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(trimmedMakerResult.data.proposal, 'approved', true, 'MAKER@example.test', trimmedMakerAudit, context), (error: unknown) => error instanceof MakerCheckerError && error.message === 'DOCUMENT_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
+  assert.equal(trimmedMakerAudit.entries.length, 2)
+  assert.equal(trimmedMakerQuota.requests.length, 1)
+})
+
+test('D9 rejects sparse, accessor-backed, or extended field arrays before their elements are read or an audit is appended', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
+
+  const sparseFields: unknown[] = []
+  sparseFields.length = input.syntheticFields.length
+  await assert.rejects(() => runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input: { ...input, syntheticFields: sparseFields as typeof input.syntheticFields }, ...context }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_SYNTHETIC_DOCUMENT_FIELDS')
+
+  const accessorFields = [...input.syntheticFields] as unknown as Record<string, unknown>
+  let accessorRead = false
+  Object.defineProperty(accessorFields, '0', {
+    enumerable: true,
+    get: () => {
+      accessorRead = true
+      throw new Error('ARRAY_ACCESSOR_MUST_NOT_RUN')
+    },
+  })
+  await assert.rejects(() => runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input: { ...input, syntheticFields: accessorFields as unknown as typeof input.syntheticFields }, ...context }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_SYNTHETIC_DOCUMENT_FIELDS')
+  assert.equal(accessorRead, false)
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+
+  const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
+  const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v9')
+  assert.deepEqual(result.data.proposal.reviewPacket.collectionBoundaryBinding, { collectionShape: 'array-prototype-dense-own-data-only', sparseOrInheritedElementsAccepted: false, accessorElementsAccepted: false })
+
+  const accessorProposal = clone()
+  let proposalAccessorRead = false
+  Object.defineProperty(accessorProposal.fields, '0', {
+    enumerable: true,
+    get: () => {
+      proposalAccessorRead = true
+      throw new Error('ARRAY_ACCESSOR_MUST_NOT_RUN')
+    },
+  })
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(accessorProposal, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_PROPOSAL_FIELDS')
+  assert.equal(proposalAccessorRead, false)
+
+  const extraArrayProperty = clone()
+  ;(extraArrayProperty.fields as unknown as Record<string, unknown>).untrusted = true
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(extraArrayProperty, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_PROPOSAL_FIELDS')
+
+  const missingBinding = clone()
+  delete (missingBinding.reviewPacket as { collectionBoundaryBinding?: unknown }).collectionBoundaryBinding
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(missingBinding, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_COLLECTION_BOUNDARY_BINDING')
+
+  const extraBindingField = clone()
+  ;(extraBindingField.reviewPacket.collectionBoundaryBinding as { extension?: unknown }).extension = 'forbidden'
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(extraBindingField, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_DOCUMENT_REVIEW_COLLECTION_BOUNDARY_BINDING_FIELD')
+
+  const wrongBinding = clone()
+  wrongBinding.reviewPacket.collectionBoundaryBinding.accessorElementsAccepted = true as never
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(wrongBinding, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_COLLECTION_BOUNDARY_BINDING')
+
+  const legacyPacket = clone()
+  legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v8' as never
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(legacyPacket, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
   assert.equal(audit.entries.length, 2)
   assert.equal(quota.requests.length, 1)
