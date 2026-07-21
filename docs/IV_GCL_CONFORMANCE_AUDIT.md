@@ -80,21 +80,23 @@ package: RA voice `80a1cc6`, RA OCR `f6f28d7`, RA image `4d0806b`, RA
 3D/game `7e5b947`, RA market `1b53141`, RFID `7b14d54`, translation
 `43541af`, language education `2635230`, and camera `0c166df`.
 
-The audit fixture is deliberately source-only.  It reads the nine local
-worktree snapshots, pins each connector and runner to its Git blob hash, and
-does not import a connector, read an `.env` file, contact a provider, or open
-a network socket.  Run it with:
+The audit fixture is deliberately source-only.  It reads each connector and
+runner with local `git show <pinned-commit>:<path>`, then verifies its Git blob
+hash; it never reads the mutable sibling worktree file.  It does not import a
+connector, read an `.env` file, contact a provider, or open a network socket.
+Run it with:
 
 ```bash
 npm run test:conformance
 ```
 
-It is fail-closed: if one of the audited local worktree snapshots is absent
-or differs from its recorded Git blob, the fixture fails rather than treating
-the source as conformant.  The target packages' own synthetic unit suites
-were also run with Node's `tsx` loader; their database integration tests were
-intentionally not run because they require `DATABASE_URL` and are outside
-this source-only audit.
+It is fail-closed: if an audited local repository, commit, source object, or
+recorded blob is absent or mismatched, the fixture fails rather than treating
+the source as conformant.  A sibling worktree can therefore legitimately move
+on to other work without changing this archived D1 evidence.  The target
+packages' own synthetic unit suites were also run with Node's `tsx` loader;
+their database integration tests were intentionally not run because they
+require `DATABASE_URL` and are outside this source-only audit.
 
 | Connector | Snapshot safety boundary | Owner/preflight | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D1 result |
 | --- | --- | --- | --- | --- | --- |
@@ -110,17 +112,26 @@ this source-only audit.
 
 ### D1 negative and edge evidence
 
-- The fixture asserts that every connector source declares `LIVE_DISABLED`,
-  contains no HTTP/egress client primitive, and that the only two
-  `*_LIVE_ENABLED` environment surfaces (market and camera) immediately
-  reject a true value.  All other snapshots expose no such environment
-  surface.
+- The fixture follows the local `src/gcl` import closure of each connector
+  and runner.  It asserts `LIVE_DISABLED`, no HTTP/egress primitive or provider
+  endpoint, no credential-like environment name, no subprocess/worker-launch
+  primitive, and no automatic-publication flag.  The SVG XML namespace is
+  explicitly excluded from the endpoint check because it is data syntax, not
+  a network target.
+- The only two `*_LIVE_ENABLED` environment surfaces (market and camera)
+  immediately reject a true value.  All other snapshots expose no such
+  environment surface.
+- The owner-denial edge is checked before preflight, requested-audit
+  reservation, and quota reservation in every pinned runner.  This confirms
+  a rejected owner cannot reach an adapter or consume quota; it does not infer
+  an owner decision from a fixture.
 - The quota-rejection edge is intentionally tested as an audit classification:
   a runner is conformant only when `await quota.consume(...)` is inside the
-  `try` whose `catch` appends `connector.run.failed`, after the `requested`
-  event.  The first eight D1 runners put quota consumption before that `try`;
-  camera puts it inside.  This prevents the report from claiming a failed
-  event that the source cannot append.
+  `try` whose `catch` appends a `connector.run.failed` event linked by
+  `requestedAuditHash`, after the `requested` event.  The first eight D1
+  runners put quota consumption before that `try`; camera puts it inside.
+  This prevents the report from claiming a failed event that the source
+  cannot append.
 - Existing package tests cover their local input/preflight boundaries.  In
   particular, camera's unit suite covers revoked/mismatched consent,
   maker–checker self-approval, an unknown connector, a true live flag, and a

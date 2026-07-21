@@ -63,8 +63,10 @@ function gitBlobId(source: string): string {
 function localGclImportPaths(relativePath: string, source: string): readonly string[] {
   const imports = new Set<string>()
   for (const match of source.matchAll(/\bfrom\s+['"](\.{1,2}\/[^'"]+)['"]/g)) {
-    const resolved = path.normalize(path.join(path.dirname(relativePath), match[1])).replace(/\.js$/, '.ts')
-    if (!resolved.startsWith(GCL_ROOT) || !resolved.endsWith('.ts')) throw new Error(`D1_AUDIT_GCL_BOUNDARY_ESCAPE:${relativePath}:${match[1]}`)
+    const importedPath = match[1]
+    if (!importedPath) continue
+    const resolved = path.normalize(path.join(path.dirname(relativePath), importedPath)).replace(/\.js$/, '.ts')
+    if (!resolved.startsWith(GCL_ROOT) || !resolved.endsWith('.ts')) throw new Error(`D1_AUDIT_GCL_BOUNDARY_ESCAPE:${relativePath}:${importedPath}`)
     imports.add(resolved)
   }
   return [...imports]
