@@ -452,6 +452,79 @@ test('direct GM5/GM6 calls cross the immutable synthetic egress boundary and rej
   assert.equal(invalidClockReads, 1)
 })
 
+test('runner isolates submitted input and context across preflight/run, then binds the result to that exact submission', async () => {
+  const submitted = { prompt: 'The owner submitted this exact synthetic proposal' }
+  const genuine = await new SyntheticTextToThreeDConnector(threeDConfig()).run(submitted, directContext())
+  const originalPrompt = submitted.prompt
+  let preflightInput: unknown
+  let runInput: unknown
+  const isolatedConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    preflight(input, context) {
+      preflightInput = input
+      assert.notEqual(input, submitted)
+      assert.equal(Object.isFrozen(input as object), true)
+      assert.equal(Object.isFrozen(context), true)
+      assert.equal(Object.isFrozen(context.scopes), true)
+      submitted.prompt = 'Caller-side mutation after the snapshot must not reach run'
+      assert.equal(Reflect.set(input as object, 'prompt', 'preflight mutation'), false)
+      assert.equal(Reflect.set(context as object, 'costCapCents', 1), false)
+    },
+    async run(input) {
+      runInput = input
+      assert.equal(input, preflightInput)
+      assert.equal((input as { prompt: string }).prompt, originalPrompt)
+      return genuine
+    },
+  }
+  const isolatedRun = runner(isolatedConnector)
+  const accepted = await isolatedRun.run.run(request({ input: submitted })) as ConnectorResult<SyntheticThreeDResult>
+  assert.equal(runInput, preflightInput)
+  assert.equal(accepted.data.artifact.reviewState, 'OWNER_REVIEW_REQUIRED')
+  assert.equal(isolatedRun.audit.entries[1]?.event.type, 'connector.run.succeeded')
+  assert.equal(isolatedRun.quota.reservations.length, 1)
+
+  const differentPlan = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
+    { prompt: 'A different but internally valid synthetic proposal' }, directContext(),
+  )
+  const mismatchedConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return differentPlan },
+  }
+  const mismatchedRun = runner(mismatchedConnector)
+  await assert.rejects(mismatchedRun.run.run(request({ input: { prompt: originalPrompt } })), SyntheticResultIntegrityError)
+  assert.equal(mismatchedRun.quota.reservations.length, 1)
+  assert.equal(mismatchedRun.audit.entries[1]?.event.type, 'connector.run.failed')
+  assert.equal(mismatchedRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+})
+
+test('registry admission seals connector metadata and rejects accessor-backed runner methods', () => {
+  const connector: Connector = {
+    id: 'registry-seal-proposal', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { throw new Error('NOT_RUN') },
+  }
+  const registry = new ConnectorRegistry([connector])
+  assert.equal(Object.isFrozen(connector), true)
+  assert.equal(Object.isFrozen(connector.scopes), true)
+  assert.equal(Reflect.set(connector as unknown as object, 'id', 'game-engine'), false)
+  assert.equal(Reflect.set(connector.scopes as unknown as object, '0', 'game:project:build'), false)
+  assert.equal(registry.get('registry-seal-proposal').id, 'registry-seal-proposal')
+
+  let runGetterReads = 0
+  const accessorConnector: Record<string, unknown> = {
+    id: 'accessor-proposal', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+  }
+  Object.defineProperty(accessorConnector, 'run', {
+    enumerable: true,
+    get() { runGetterReads += 1; return async () => { throw new Error('MUST_NOT_RUN') } },
+  })
+  assert.throws(
+    () => new ConnectorRegistry([accessorConnector as unknown as Connector]),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_INVALID_REGISTRATION',
+  )
+  assert.equal(runGetterReads, 0)
+})
+
 test('failed adapter messages are never copied into the durable audit chain', async () => {
   const untrustedMessage = `untrusted-adapter-message-${'x'.repeat(600)}`
   const connector: Connector = {

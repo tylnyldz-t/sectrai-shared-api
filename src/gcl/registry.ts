@@ -1,5 +1,5 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, GclError, OwnerGateError, ScopeError } from './errors.js'
-import { deepFreeze } from './plan-integrity.js'
+import { deepFreeze, frozenCanonicalJsonCopy, syntheticPlanSha256 } from './plan-integrity.js'
 import { validatedSyntheticConnectorResult } from './result-boundary.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
@@ -23,6 +23,14 @@ const RUN_REQUEST_KEYS = ['connectorId', 'input', 'product', 'workspaceId', 'act
 
 type DataRecord = Record<string, unknown>
 type ValidRunContext = DataRecord & { product: string; workspaceId: string; actor: string }
+type RegisteredConnector = {
+  readonly id: string
+  readonly kind: Connector['kind']
+  readonly authKind: Connector['authKind']
+  readonly scopes: readonly string[]
+  readonly preflight?: Connector['preflight']
+  readonly run: Connector['run']
+}
 
 /**
  * Governance fields may be supplied to the runner directly by future
@@ -67,6 +75,62 @@ function strictScopeArray(value: unknown): string[] | null {
   }
 }
 
+/** Resolve an own or prototype method without invoking an accessor. */
+function connectorMethod(value: object, name: 'run' | 'preflight'): Function | undefined | null {
+  try {
+    let current: object | null = value
+    while (current && current !== Object.prototype) {
+      const descriptor = Object.getOwnPropertyDescriptor(current, name)
+      if (descriptor) return 'value' in descriptor && typeof descriptor.value === 'function' ? descriptor.value : null
+      current = Object.getPrototypeOf(current)
+    }
+    return undefined
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Lock registry metadata and method references at admission. This keeps a
+ * later in-memory mutation from changing the connector that audit, quota, or
+ * the final egress boundary believes it is governing.
+ */
+function registerConnector(value: Connector): RegisteredConnector {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getOwnPropertySymbols(value).length > 0) {
+      throw new ConnectorUnavailableError('CONNECTOR_INVALID_REGISTRATION')
+    }
+    const field = (name: 'id' | 'kind' | 'authKind' | 'scopes'): unknown => {
+      const descriptor = Object.getOwnPropertyDescriptor(value, name)
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) throw new ConnectorUnavailableError('CONNECTOR_INVALID_REGISTRATION')
+      return descriptor.value
+    }
+    const id = field('id')
+    const kind = field('kind')
+    const authKind = field('authKind')
+    const scopes = strictScopeArray(field('scopes'))
+    const run = connectorMethod(value, 'run')
+    const preflight = connectorMethod(value, 'preflight')
+    if (typeof id !== 'string' || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(id) ||
+      (kind !== 'media-3d' && kind !== 'game-engine') || authKind !== 'owner-approval' ||
+      !scopes || scopes.some((scope) => !scope || scope.length > 120) || new Set(scopes).size !== scopes.length ||
+      !run || preflight === null) throw new ConnectorUnavailableError('CONNECTOR_INVALID_REGISTRATION')
+    Object.freeze(field('scopes') as object)
+    Object.freeze(value)
+    return Object.freeze({
+      id,
+      kind,
+      authKind,
+      scopes: Object.freeze([...scopes]),
+      ...(preflight ? { preflight: preflight.bind(value) as Connector['preflight'] } : {}),
+      run: run.bind(value) as Connector['run'],
+    })
+  } catch (error) {
+    if (error instanceof ConnectorUnavailableError) throw error
+    throw new ConnectorUnavailableError('CONNECTOR_INVALID_REGISTRATION')
+  }
+}
+
 function validContext(request: DataRecord): request is ValidRunContext {
   return typeof request.product === 'string' && PRODUCT_PATTERN.test(request.product) &&
     typeof request.workspaceId === 'string' && WORKSPACE_PATTERN.test(request.workspaceId) &&
@@ -79,16 +143,17 @@ function auditFailureCode(error: unknown): string {
 }
 
 export class ConnectorRegistry {
-  private readonly connectors = new Map<string, Connector>()
+  private readonly connectors = new Map<string, RegisteredConnector>()
 
   constructor(connectors: readonly Connector[]) {
     for (const connector of connectors) {
-      if (this.connectors.has(connector.id)) throw new Error(`DUPLICATE_CONNECTOR:${connector.id}`)
-      this.connectors.set(connector.id, connector)
+      const registered = registerConnector(connector)
+      if (this.connectors.has(registered.id)) throw new ConnectorUnavailableError('DUPLICATE_CONNECTOR')
+      this.connectors.set(registered.id, registered)
     }
   }
 
-  get(connectorId: string): Connector {
+  get(connectorId: string): RegisteredConnector {
     const connector = this.connectors.get(connectorId)
     if (!connector) throw new ConnectorUnavailableError('CONNECTOR_NOT_REGISTERED')
     return connector
@@ -118,18 +183,25 @@ export class GovernedConnectorRunner {
     const scopes = strictScopeArray(safeRequest.scopes)
     if (!scopes || scopes.some((scope) => !connector.scopes.includes(scope)) || new Set(scopes).size !== scopes.length) throw new ScopeError()
 
+    let input: unknown
+    try {
+      input = frozenCanonicalJsonCopy(safeRequest.input)
+    } catch {
+      throw new ConnectorInputError('CONNECTOR_INVALID_INPUT')
+    }
+    const submittedInputSha256 = syntheticPlanSha256(input)
     const occurredAt = this.now()
-    const context: ConnectorRunContext = {
+    const context = Object.freeze({
       product: safeRequest.product,
       workspaceId: safeRequest.workspaceId,
       actor: safeRequest.actor,
       ownerApproved: true,
-      scopes: scopes.sort(),
+      scopes: Object.freeze([...scopes].sort()),
       costCapCents: safeRequest.costCapCents,
       requestedItems: safeRequest.requestedItems,
       now: this.now,
-    }
-    await connector.preflight?.(safeRequest.input, context)
+    }) as ConnectorRunContext
+    await connector.preflight?.(input, context)
     const requestedAudit = await this.auditLog.append({
       type: 'connector.run.requested', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId,
       actor: context.actor, scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,
@@ -137,7 +209,7 @@ export class GovernedConnectorRunner {
     })
     await this.quota.consume({ ...context, connectorId: connector.id, occurredAt })
     try {
-      const result = validatedSyntheticConnectorResult(await connector.run(safeRequest.input, context), connector.id)
+      const result = validatedSyntheticConnectorResult(await connector.run(input, context), connector.id, submittedInputSha256)
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId,
         actor: context.actor, scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,

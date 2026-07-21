@@ -214,6 +214,34 @@ a direct caller receives a plan. This parity check performs no network call,
 process launch, artifact write, provider lookup, JNC dispatch, credential
 read, or publication action.
 
+### D1 submission snapshot and registry seal
+
+Before preflight, the governed runner makes a recursively frozen canonical-JSON
+copy of the submitted input. The identical copy is given to both `preflight`
+and `run`; it has no retained caller-owned references. The run context and its
+scope list are frozen as well. A preflight hook therefore cannot alter the
+approved cost, scope, input, or item count between validation and quota
+reservation. An attempt to mutate the frozen values fails before reservation
+when it occurs in preflight; a later failure remains conservatively accounted
+for by the existing audit/quota rule.
+
+The copied submission has a SHA-256 correlation value embedded in the
+integrity-bound review snapshot. At the final egress boundary the runner recomputes the same
+value from the frozen submission and requires an exact match. A connector
+cannot return a different, otherwise valid and re-hashed synthetic plan for a
+requested run. This digest identifies only data submitted to this synthetic
+connector; it is not a secret, an approval, a credential, or an execution
+authorization. Normalized prompt/default fields remain separately bound in the
+review snapshot and provenance checks described above.
+
+Connector registration also captures immutable own-data metadata and method
+references, freezes the registered connector and its scope list, and rejects
+accessor-backed `run`/`preflight` members. Audit, quota, and egress therefore
+keep the connector identity established at registration even if an internal
+caller retains an object reference. These are local object-boundary controls
+only. They add no network client, provider, filesystem write, process launcher,
+JNC dispatch, credential read, live mode, or publication path.
+
 ## Non-secret configuration
 
 `.env.example` shows only placeholders and governance limits. The owner-gate

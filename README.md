@@ -64,3 +64,6 @@ transport, process, artifact write, or publication capability.
 Before a GM5/GM6 result is returned, the runner also verifies the frozen output
 shape and its field-by-field binding to that review snapshot; malformed output
 fails closed and is never serialized.
+The runner separately snapshots each submitted connector input as frozen
+canonical JSON and binds that submission digest to the review snapshot, so a
+different valid synthetic plan cannot be substituted after preflight.
