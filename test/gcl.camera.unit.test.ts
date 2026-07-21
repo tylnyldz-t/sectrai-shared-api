@@ -6,7 +6,7 @@ import { ownerTokenMatches } from '../src/gcl/owner.js'
 import { cameraDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import type { ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
-import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, CAMERA_REVIEW_AUDIT_WITNESS_VERSION, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewAuditTrailWitness, validateCameraReviewAuditWitness, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
+import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION, CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, CAMERA_REVIEW_AUDIT_WITNESS_VERSION, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, createCameraReviewAuditTrailReceipt, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewAuditTrailReceipt, validateCameraReviewAuditTrailWitness, validateCameraReviewAuditWitness, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
 const context: ConnectorRunContext = {
@@ -453,6 +453,104 @@ test('D5 audit-trail witness matches the supplied requested/succeeded/review seg
   assert.equal(setup.audit.entries.length, 3)
 })
 
+test('D6 audit-trail receipt is minimized, context-bound, and rejects mutated or shaped evidence without writes', async () => {
+  const setup = runnerFor()
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
+  const requestedEntry = setup.audit.entries[0]
+  const succeededEntry = setup.audit.entries[1]
+  const ownerReviewEntry = setup.audit.entries[2]
+  assert.ok(requestedEntry)
+  assert.ok(succeededEntry)
+  assert.ok(ownerReviewEntry)
+  const trail = () => ({
+    requestedRun: structuredClone(requestedEntry),
+    succeededRun: structuredClone(succeededEntry),
+    ownerReview: structuredClone(ownerReviewEntry),
+  })
+  const receipt = () => createCameraReviewAuditTrailReceipt(result.data, reviewed, trail(), context)
+
+  const created = receipt()
+  assert.equal(created.version, CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION)
+  assert.equal(created.reviewId, reviewed.reviewId)
+  assert.equal(created.requestedAuditHash, requestedEntry.hash)
+  assert.equal(created.succeededAuditHash, succeededEntry.hash)
+  assert.equal(created.reviewAuditHash, reviewed.auditHash)
+  assert.equal(created.predecessorHash, null)
+  assert.equal(created.state, 'SYNTHETIC_REVIEW_AUDIT_TRAIL_RECEIPT_VERIFIED_NO_ACTION')
+  assert.equal(created.rawMediaIncluded, false)
+  assert.equal(created.automaticAction, false)
+  assert.equal(created.notification, 'NOT_SENT')
+  assert.equal(created.publication, 'NOT_PUBLISHED')
+  assert.equal(JSON.stringify(created).includes('synthetic-loading-dock-001'), false)
+  assert.equal(JSON.stringify(created).includes('reviewer@example.test'), false)
+  assert.deepEqual(validateCameraReviewAuditTrailReceipt(result.data, reviewed, trail(), structuredClone(created), context), created)
+
+  const alteredHash = structuredClone(created)
+  alteredHash.reviewAuditHash = '0'.repeat(64)
+  assert.throws(
+    () => validateCameraReviewAuditTrailReceipt(result.data, reviewed, trail(), alteredHash, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_AUDIT_TRAIL_RECEIPT_INTEGRITY_MISMATCH',
+  )
+
+  const alteredReceiptId = structuredClone(created)
+  alteredReceiptId.receiptId = 'synthetic-camera-review-audit-trail-receipt-000000000000000000000000'
+  assert.throws(
+    () => validateCameraReviewAuditTrailReceipt(result.data, reviewed, trail(), alteredReceiptId, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_AUDIT_TRAIL_RECEIPT_INTEGRITY_MISMATCH',
+  )
+
+  const rawShaped = structuredClone(created) as typeof created & { snapshot?: string }
+  rawShaped.snapshot = 'data:image/png;base64,not-accepted'
+  assert.throws(
+    () => validateCameraReviewAuditTrailReceipt(result.data, reviewed, trail(), rawShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_AUDIT_TRAIL_RECEIPT_FIELD',
+  )
+
+  const hiddenDevice = structuredClone(created)
+  Object.defineProperty(hiddenDevice, 'deviceAddress', { value: 'rtsp://not-accepted.example.test/stream', enumerable: false })
+  assert.throws(
+    () => validateCameraReviewAuditTrailReceipt(result.data, reviewed, trail(), hiddenDevice, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_AUDIT_TRAIL_RECEIPT_FIELD',
+  )
+
+  const symbolShaped = structuredClone(created)
+  Object.defineProperty(symbolShaped, Symbol('raw-media'), { value: 'not-accepted', enumerable: true })
+  assert.throws(
+    () => validateCameraReviewAuditTrailReceipt(result.data, reviewed, trail(), symbolShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_AUDIT_TRAIL_RECEIPT_FIELD',
+  )
+
+  const accessorShaped = structuredClone(created)
+  let accessorRead = false
+  Object.defineProperty(accessorShaped, 'integrityDigest', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validateCameraReviewAuditTrailReceipt(result.data, reviewed, trail(), accessorShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_AUDIT_TRAIL_RECEIPT_FIELD',
+  )
+  assert.equal(accessorRead, false)
+
+  let proxyTrapRead = false
+  const proxyShaped = new Proxy(structuredClone(created), {
+    get() { proxyTrapRead = true; throw new Error('PROXY_TRAP_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validateCameraReviewAuditTrailReceipt(result.data, reviewed, trail(), proxyShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_AUDIT_TRAIL_RECEIPT_FIELD',
+  )
+  assert.equal(proxyTrapRead, false)
+
+  assert.throws(
+    () => validateCameraReviewAuditTrailReceipt(result.data, reviewed, trail(), structuredClone(created), { ...context, workspaceId: 'another-workspace' }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_AUDIT_TRAIL_MISMATCH',
+  )
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
+})
+
 test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
   const setup = runnerFor()
   const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
@@ -516,6 +614,7 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /hidden, symbol, proxy, or accessor-shaped input fields/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6 witnesses/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 

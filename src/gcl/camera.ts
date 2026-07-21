@@ -32,7 +32,7 @@ export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.free
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'The governed run requires owner approval and separate request/check actors; review rejects the original maker.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIAL_INTERFACE', enforcement: 'The adapter has no camera SDK, network client, stream URL, credential, or provider configuration surface.' },
   { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment.' },
-  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipt, and D4/D5 witnesses record only an approved or rejected decision; action, notification, publication, and handoff remain not sent.' },
+  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6 witnesses record only an approved or rejected decision; action, notification, publication, and handoff remain not sent.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or camera connection is part of this connector.' },
 ])
 
@@ -801,6 +801,102 @@ export function validateCameraReviewAuditTrailWitness(sourceResult: unknown, rev
     notification: 'NOT_SENT',
     publication: 'NOT_PUBLISHED',
   }
+}
+
+function reviewAuditTrailReceiptIntegrityMaterial(receipt: Omit<CameraReviewAuditTrailReceipt, 'receiptId' | 'integrityDigest'>): Record<string, unknown> {
+  return {
+    version: receipt.version,
+    scopeBinding: receipt.scopeBinding,
+    reviewId: receipt.reviewId,
+    requestedAuditHash: receipt.requestedAuditHash,
+    succeededAuditHash: receipt.succeededAuditHash,
+    reviewAuditHash: receipt.reviewAuditHash,
+    predecessorHash: receipt.predecessorHash,
+    state: receipt.state,
+    rawMediaIncluded: receipt.rawMediaIncluded,
+    automaticAction: receipt.automaticAction,
+    notification: receipt.notification,
+    publication: receipt.publication,
+  }
+}
+
+function reviewAuditTrailReceiptFor(witness: CameraReviewAuditTrailWitness, context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): CameraReviewAuditTrailReceipt {
+  const scope = cameraReviewContext(context)
+  const material: Omit<CameraReviewAuditTrailReceipt, 'receiptId' | 'integrityDigest'> = {
+    version: CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION,
+    scopeBinding: { productDigest: digest(scope.product), workspaceDigest: digest(scope.workspaceId) },
+    reviewId: witness.reviewId,
+    requestedAuditHash: witness.requestedAuditHash,
+    succeededAuditHash: witness.succeededAuditHash,
+    reviewAuditHash: witness.reviewAuditHash,
+    predecessorHash: witness.predecessorHash,
+    state: 'SYNTHETIC_REVIEW_AUDIT_TRAIL_RECEIPT_VERIFIED_NO_ACTION',
+    rawMediaIncluded: false,
+    automaticAction: false,
+    notification: 'NOT_SENT',
+    publication: 'NOT_PUBLISHED',
+  }
+  const integrityDigest = digest(JSON.stringify(reviewAuditTrailReceiptIntegrityMaterial(material)))
+  return {
+    ...material,
+    receiptId: `synthetic-camera-review-audit-trail-receipt-${digest(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
+    integrityDigest,
+  }
+}
+
+function cameraReviewAuditTrailReceipt(value: unknown): CameraReviewAuditTrailReceipt {
+  const receipt = exactObject(value, ['version', 'receiptId', 'scopeBinding', 'reviewId', 'requestedAuditHash', 'succeededAuditHash', 'reviewAuditHash', 'predecessorHash', 'state', 'rawMediaIncluded', 'automaticAction', 'notification', 'publication', 'integrityDigest'], 'UNEXPECTED_CAMERA_AUDIT_TRAIL_RECEIPT_FIELD')
+  const scopeBinding = exactObject(receipt.scopeBinding, ['productDigest', 'workspaceDigest'], 'INVALID_CAMERA_AUDIT_TRAIL_RECEIPT_SCOPE')
+  const receiptId = requiredString(receipt.receiptId, 'INVALID_CAMERA_AUDIT_TRAIL_RECEIPT', 84)
+  const reviewId = requiredString(receipt.reviewId, 'INVALID_CAMERA_AUDIT_TRAIL_RECEIPT', 64)
+  const productDigest = requiredString(scopeBinding.productDigest, 'INVALID_CAMERA_AUDIT_TRAIL_RECEIPT_SCOPE', 64)
+  const workspaceDigest = requiredString(scopeBinding.workspaceDigest, 'INVALID_CAMERA_AUDIT_TRAIL_RECEIPT_SCOPE', 64)
+  const requestedAuditHash = requiredString(receipt.requestedAuditHash, 'INVALID_CAMERA_AUDIT_TRAIL_RECEIPT', 64)
+  const succeededAuditHash = requiredString(receipt.succeededAuditHash, 'INVALID_CAMERA_AUDIT_TRAIL_RECEIPT', 64)
+  const reviewAuditHash = requiredString(receipt.reviewAuditHash, 'INVALID_CAMERA_AUDIT_TRAIL_RECEIPT', 64)
+  const integrityDigest = requiredString(receipt.integrityDigest, 'INVALID_CAMERA_AUDIT_TRAIL_RECEIPT', 64)
+  const predecessorHash = receipt.predecessorHash
+  if (receipt.version !== CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION || !CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_ID_PATTERN.test(receiptId) || !CAMERA_REVIEW_ID_PATTERN.test(reviewId) || !SHA256_PATTERN.test(productDigest) || !SHA256_PATTERN.test(workspaceDigest) || !SHA256_PATTERN.test(requestedAuditHash) || !SHA256_PATTERN.test(succeededAuditHash) || !SHA256_PATTERN.test(reviewAuditHash) || !SHA256_PATTERN.test(integrityDigest) || (predecessorHash !== null && (typeof predecessorHash !== 'string' || !SHA256_PATTERN.test(predecessorHash))) || receipt.state !== 'SYNTHETIC_REVIEW_AUDIT_TRAIL_RECEIPT_VERIFIED_NO_ACTION' || receipt.rawMediaIncluded !== false || receipt.automaticAction !== false || receipt.notification !== 'NOT_SENT' || receipt.publication !== 'NOT_PUBLISHED') {
+    throw new ConnectorInputError('INVALID_CAMERA_AUDIT_TRAIL_RECEIPT')
+  }
+  return {
+    version: CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION,
+    receiptId,
+    scopeBinding: { productDigest, workspaceDigest },
+    reviewId,
+    requestedAuditHash,
+    succeededAuditHash,
+    reviewAuditHash,
+    predecessorHash,
+    state: 'SYNTHETIC_REVIEW_AUDIT_TRAIL_RECEIPT_VERIFIED_NO_ACTION',
+    rawMediaIncluded: false,
+    automaticAction: false,
+    notification: 'NOT_SENT',
+    publication: 'NOT_PUBLISHED',
+    integrityDigest,
+  }
+}
+
+/**
+ * D6 derives a minimized receipt only after the D5 segment is reconstructed.
+ * It is library-only and read-only: no storage read/write, quota use, route,
+ * actor authentication, notification, handoff, publication, or action occurs.
+ */
+export function createCameraReviewAuditTrailReceipt(sourceResult: unknown, reviewedResult: unknown, auditTrail: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'checkedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): CameraReviewAuditTrailReceipt {
+  return reviewAuditTrailReceiptFor(validateCameraReviewAuditTrailWitness(sourceResult, reviewedResult, auditTrail, context), context)
+}
+
+/**
+ * D6 rechecks a caller-supplied receipt by rebuilding D5's fixed witness.
+ * Its digest is deliberately unkeyed mutation evidence, never authorization.
+ */
+export function validateCameraReviewAuditTrailReceipt(sourceResult: unknown, reviewedResult: unknown, auditTrail: unknown, value: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'checkedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): CameraReviewAuditTrailReceipt {
+  const receipt = cameraReviewAuditTrailReceipt(value)
+  const expected = createCameraReviewAuditTrailReceipt(sourceResult, reviewedResult, auditTrail, context)
+  if (receipt.integrityDigest !== digest(JSON.stringify(reviewAuditTrailReceiptIntegrityMaterial(receipt))) || receipt.receiptId !== expected.receiptId || receipt.integrityDigest !== expected.integrityDigest) {
+    throw new ConnectorInputError('CAMERA_AUDIT_TRAIL_RECEIPT_INTEGRITY_MISMATCH')
+  }
+  return expected
 }
 
 /**
