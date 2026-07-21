@@ -112,7 +112,7 @@ function validGpuResourceCard(value: unknown): boolean {
   return Boolean(request && exactKeys(request, ['computeTier', 'estimatedVramMiB', 'maximumRuntimeSeconds', 'budgetEnvelopeRef']) &&
     (request.computeTier === 'economy' || request.computeTier === 'premium') &&
     (request.estimatedVramMiB === 'UNKNOWN' || typeof request.estimatedVramMiB === 'number' && Number.isSafeInteger(request.estimatedVramMiB) && request.estimatedVramMiB > 0) &&
-    typeof request.maximumRuntimeSeconds === 'number' && Number.isSafeInteger(request.maximumRuntimeSeconds) && request.maximumRuntimeSeconds > 0 &&
+    typeof request.maximumRuntimeSeconds === 'number' && Number.isSafeInteger(request.maximumRuntimeSeconds) && request.maximumRuntimeSeconds > 0 && request.maximumRuntimeSeconds <= 5_400 &&
     typeof request.budgetEnvelopeRef === 'string' && request.budgetEnvelopeRef.trim() === request.budgetEnvelopeRef && request.budgetEnvelopeRef.length > 0 && request.budgetEnvelopeRef.length <= 160)
 }
 
@@ -145,10 +145,14 @@ function validUnrealPilotHandoff(value: unknown): boolean {
     handoff.destination === 'INCOMING_STAGING_ONLY' && handoff.productionPromotion === 'DISABLED_OWNER_APPROVAL_REQUIRED')
 }
 
-function validThreeDArtifact(value: unknown, connectorId: string): boolean {
+function validThreeDArtifact(value: unknown, connectorId: string, payload: DataRecord): boolean {
   const artifact = ownDataRecord(value)
+  const scope = ownDataRecord(payload.scope)
+  const expectedArtifactId = scope && exactKeys(scope, ['product', 'workspaceId']) && typeof scope.product === 'string' && typeof scope.workspaceId === 'string'
+    ? `synthetic-3d-${connectorId}-${syntheticPlanSha256({ connectorKind: connectorId, input: payload.input, product: scope.product, workspaceId: scope.workspaceId }).slice(0, 24)}`
+    : null
   return Boolean(artifact && exactKeys(artifact, ['artifactId', 'syntheticUri', 'generation', 'outputFormat', 'lifecycle', 'reviewState', 'publicationState']) &&
-    typeof artifact.artifactId === 'string' && new RegExp(`^synthetic-3d-${connectorId}-[a-f0-9]{24}$`).test(artifact.artifactId) &&
+    typeof artifact.artifactId === 'string' && artifact.artifactId === expectedArtifactId &&
     artifact.syntheticUri === `synthetic://gcl-3d/${connectorId}/${artifact.artifactId}` && artifact.generation === 'SYNTHETIC_PROPOSAL_ONLY' &&
     (artifact.outputFormat === 'glb' || artifact.outputFormat === 'obj') && artifact.lifecycle === 'GENERATED_CANDIDATE_NOT_A_FILE' &&
     artifact.reviewState === 'OWNER_REVIEW_REQUIRED' && artifact.publicationState === 'NOT_PUBLISHED')
@@ -161,7 +165,7 @@ function threeDResultMatchesSnapshot(data: DataRecord, connectorId: string): boo
     sameCanonicalData(data.artifact, payload.artifact) &&
     sameCanonicalData(data.gpuResourceCard, payload.gpuResourceCard) &&
     sameCanonicalData(data.blenderPilotHandoff, payload.blenderPilotHandoff) &&
-    validThreeDArtifact(data.artifact, connectorId) && validGpuResourceCard(data.gpuResourceCard) && validBlenderPilotHandoff(data.blenderPilotHandoff))
+    validThreeDArtifact(data.artifact, connectorId, payload) && validGpuResourceCard(data.gpuResourceCard) && validBlenderPilotHandoff(data.blenderPilotHandoff))
 }
 
 type GameInputPolicy = { tier: 'economic' | 'premium'; engine: 'godot' | 'unreal' | 'blender'; target: 'desktop' | 'mobile' | 'web'; gpuMinutes?: number }
