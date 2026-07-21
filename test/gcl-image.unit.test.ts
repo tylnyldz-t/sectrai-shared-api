@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { GCL_AUDIT_MODULE_ID, InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
+import { GCL_AUDIT_MODULE_ID, InMemoryHashChainAuditLog, PrismaHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, FamilySafetyError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
-import { LIVE_DISABLED, SyntheticImageTtiConnector, ownerLikeSyntheticImage, ownerRejectSyntheticImage, syntheticImageTtiConnectorFromEnvironment } from '../src/gcl/image.js'
+import { LIVE_DISABLED, SyntheticImageTtiConnector, issueSyntheticImageCandidates, ownerLikeSyntheticImage, ownerRejectSyntheticImage, syntheticImageTtiConnectorFromEnvironment } from '../src/gcl/image.js'
+import { GCL_IMAGE_CANDIDATE_MODULE_ID, InMemoryImageCandidateLedger, PrismaImageCandidateLedger } from '../src/gcl/image-candidate-ledger.js'
 import { GCL_IMAGE_OWNER_REVIEW_MODULE_ID, InMemoryImageOwnerReviewLedger, PrismaImageOwnerReviewLedger } from '../src/gcl/image-review-ledger.js'
 import type { GclPersistence, GclRecordTransaction } from '../src/gcl/persistence.js'
 import { imageDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
@@ -55,6 +56,16 @@ class TestGclPersistence implements GclPersistence {
 
 function configuredConnector(): SyntheticImageTtiConnector {
   return new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2 })
+}
+
+async function governedIssuedRun(audit: InMemoryHashChainAuditLog, input: { prompt: string; negativePrompt?: string } = { prompt: 'A child-friendly solar system poster' }) {
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
+  const result = await runner.run({ connectorId: 'image-tti', input, ...context }) as ConnectorResult<TextToImageData>
+  const candidates = new InMemoryImageCandidateLedger(audit)
+  await issueSyntheticImageCandidates(result, candidates, context)
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  return { candidate, candidates, result }
 }
 
 test('GM3 image adapter is synthetic-only and fails closed until governance limits exist', async () => {
@@ -136,6 +147,7 @@ test('malformed safety hooks and free-form policy reasons fail closed without le
 test('GM3 run requires owner gate, cost cap, scope, safe identity, quota, audit chain, and a separate owner checker', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const reviews = new InMemoryImageOwnerReviewLedger(audit)
+  const candidates = new InMemoryImageCandidateLedger(audit)
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, quota, now)
 
@@ -169,40 +181,45 @@ test('GM3 run requires owner gate, cost cap, scope, safe identity, quota, audit 
   assert.equal(audit.entries[1]?.previousHash, audit.entries[0]?.hash)
   assert.equal(audit.entries[0]?.event.correlationId, context.correlationId)
   assert.equal(result.provenance.auditHash, audit.entries[1]?.hash)
+  const issuance = await issueSyntheticImageCandidates(result, candidates, context)
+  assert.equal(issuance.issuanceAuditHash, audit.entries[2]?.hash)
+  assert.equal(audit.entries[2]?.event.type, 'connector.artifact.candidates_issued')
+  assert.equal(JSON.stringify(audit.entries[2]).includes(privatePrompt), false)
+  assert.equal(JSON.stringify(audit.entries[2]).includes(privateNegativePrompt), false)
 
   const candidate = result.data.candidates[0]
   assert.ok(candidate)
-  await assert.rejects(() => ownerLikeSyntheticImage(candidate, false, 'checker@example.test', reviews, context), OwnerGateError)
-  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, context.actor, reviews, context), (error: unknown) => error instanceof OwnerGateError && error.message === 'MAKER_CHECKER_SEPARATION_REQUIRED')
-  const artifact = await ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, context)
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, false, 'checker@example.test', reviews, candidates, context), OwnerGateError)
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, context.actor, reviews, candidates, context), (error: unknown) => error instanceof OwnerGateError && error.message === 'MAKER_CHECKER_SEPARATION_REQUIRED')
+  const artifact = await ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, context)
   assert.equal(artifact.ownerReview.status, 'liked')
   assert.equal(artifact.publication, 'blocked')
-  assert.equal(artifact.auditHash, audit.entries[2]?.hash)
-  assert.equal(audit.entries[2]?.previousHash, audit.entries[1]?.hash)
-  assert.equal(audit.entries[2]?.event.type, 'connector.artifact.owner_liked')
-  assert.equal(audit.entries[2]?.event.correlationId, context.correlationId)
+  assert.equal(artifact.auditHash, audit.entries[3]?.hash)
+  assert.equal(artifact.issuanceAuditHash, issuance.issuanceAuditHash)
+  assert.equal(artifact.runAuditHash, result.provenance.auditHash)
+  assert.equal(audit.entries[3]?.previousHash, audit.entries[2]?.hash)
+  assert.equal(audit.entries[3]?.event.type, 'connector.artifact.owner_liked')
+  assert.equal(audit.entries[3]?.event.correlationId, context.correlationId)
 })
 
 test('owner rejection is terminal, scope-bound, auditable, and never returns a media artifact', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const reviews = new InMemoryImageOwnerReviewLedger(audit)
-  const result = await configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, context)
-  const candidate = result.data.candidates[0]
-  assert.ok(candidate)
-  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, context.actor, 'NOT_SUITABLE', reviews, context), (error: unknown) => error instanceof OwnerGateError && error.message === 'MAKER_CHECKER_SEPARATION_REQUIRED')
-  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'FREE_TEXT' as never, reviews, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REJECTION_REASON')
-  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'SAFETY_CONCERN', reviews, { ...context, workspaceId: 'other-workspace' }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_REVIEW_SCOPE_MISMATCH')
-  assert.equal(audit.entries.length, 0)
+  const { candidate, candidates } = await governedIssuedRun(audit)
+  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, context.actor, 'NOT_SUITABLE', reviews, candidates, context), (error: unknown) => error instanceof OwnerGateError && error.message === 'MAKER_CHECKER_SEPARATION_REQUIRED')
+  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'FREE_TEXT' as never, reviews, candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REJECTION_REASON')
+  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'SAFETY_CONCERN', reviews, candidates, { ...context, workspaceId: 'other-workspace' }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_REVIEW_SCOPE_MISMATCH')
+  assert.equal(audit.entries.length, 3)
 
-  const rejected = await ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'NEEDS_REVISION', reviews, context)
+  const rejected = await ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'NEEDS_REVISION', reviews, candidates, context)
   assert.equal(rejected.reviewId, `owner-rejected-${candidate.candidateId}`)
   assert.equal(rejected.ownerReview.status, 'rejected')
   assert.equal(rejected.ownerReview.reason, 'NEEDS_REVISION')
   assert.equal(rejected.publication, 'blocked')
   assert.equal('previewDataUri' in rejected, false)
   assert.equal('syntheticUri' in rejected, false)
-  assert.equal(audit.entries.length, 1)
-  assert.equal(audit.entries[0]?.event.type, 'connector.artifact.owner_rejected')
+  assert.equal(audit.entries.length, 4)
+  assert.equal(audit.entries[3]?.event.type, 'connector.artifact.owner_rejected')
   assert.equal(JSON.stringify(audit.entries).includes('child-friendly solar system poster'), false)
 })
 

@@ -26,6 +26,8 @@ type StoredReviewReceipt = {
   correlationId: string
   decision: 'liked' | 'rejected'
   publication: 'blocked'
+  issuanceAuditHash: string
+  runAuditHash: string
   auditHash: string
 }
 
@@ -53,8 +55,8 @@ function canonicalTimestamp(value: unknown): value is string {
 
 function storedReceipt(value: unknown): StoredReviewReceipt | null {
   const receipt = plainRecord(value)
-  if (!receipt || !exactKeys(receipt, ['schema', 'candidateId', 'correlationId', 'decision', 'publication', 'auditHash'])) return null
-  if (receipt.schema !== 'gcl-image-owner-review-v1' || typeof receipt.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(receipt.candidateId) || !safeIdentifier(receipt.correlationId) || (receipt.decision !== 'liked' && receipt.decision !== 'rejected') || receipt.publication !== 'blocked' || typeof receipt.auditHash !== 'string' || !HASH_PATTERN.test(receipt.auditHash)) return null
+  if (!receipt || !exactKeys(receipt, ['schema', 'candidateId', 'correlationId', 'decision', 'publication', 'issuanceAuditHash', 'runAuditHash', 'auditHash'])) return null
+  if (receipt.schema !== 'gcl-image-owner-review-v1' || typeof receipt.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(receipt.candidateId) || !safeIdentifier(receipt.correlationId) || (receipt.decision !== 'liked' && receipt.decision !== 'rejected') || receipt.publication !== 'blocked' || typeof receipt.issuanceAuditHash !== 'string' || !HASH_PATTERN.test(receipt.issuanceAuditHash) || typeof receipt.runAuditHash !== 'string' || !HASH_PATTERN.test(receipt.runAuditHash) || typeof receipt.auditHash !== 'string' || !HASH_PATTERN.test(receipt.auditHash)) return null
   return receipt as StoredReviewReceipt
 }
 
@@ -70,9 +72,9 @@ function assertImageOwnerReviewEvent(event: unknown): asserts event is ImageOwne
   const detail = plainRecord(value.detail)
   const liked = value.type === 'connector.artifact.owner_liked'
   const keys = liked
-    ? ['candidateId', 'maker', 'publication', 'artifactId', 'ownerReview']
-    : ['candidateId', 'maker', 'publication', 'reviewId', 'ownerReview', 'reason']
-  if (!detail || !exactKeys(detail, keys) || typeof detail.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(detail.candidateId) || !safeIdentifier(detail.maker) || detail.publication !== 'blocked' || detail.ownerReview !== (liked ? 'liked' : 'rejected')) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
+    ? ['candidateId', 'maker', 'publication', 'issuanceAuditHash', 'runAuditHash', 'artifactId', 'ownerReview']
+    : ['candidateId', 'maker', 'publication', 'issuanceAuditHash', 'runAuditHash', 'reviewId', 'ownerReview', 'reason']
+  if (!detail || !exactKeys(detail, keys) || typeof detail.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(detail.candidateId) || !safeIdentifier(detail.maker) || detail.publication !== 'blocked' || typeof detail.issuanceAuditHash !== 'string' || !HASH_PATTERN.test(detail.issuanceAuditHash) || typeof detail.runAuditHash !== 'string' || !HASH_PATTERN.test(detail.runAuditHash) || detail.ownerReview !== (liked ? 'liked' : 'rejected')) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
   if (liked && detail.artifactId !== `owner-liked-${detail.candidateId}`) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
   if (!liked && (detail.reviewId !== `owner-rejected-${detail.candidateId}` || (detail.reason !== 'NOT_SUITABLE' && detail.reason !== 'SAFETY_CONCERN' && detail.reason !== 'NEEDS_REVISION'))) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
 }
@@ -88,6 +90,8 @@ function receiptFor(event: ImageOwnerReviewDecisionEvent, auditHash: string): St
     correlationId: event.correlationId,
     decision: eventDecision(event),
     publication: 'blocked',
+    issuanceAuditHash: event.detail.issuanceAuditHash as string,
+    runAuditHash: event.detail.runAuditHash as string,
     auditHash,
   }
 }

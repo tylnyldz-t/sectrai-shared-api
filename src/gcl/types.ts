@@ -49,7 +49,7 @@ export interface Connector<TInput = unknown, TData = unknown> {
 }
 
 export type ConnectorAuditEvent = {
-  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected'
+  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'connector.artifact.candidates_issued' | 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected'
   connectorId: string
   product: string
   workspaceId: string

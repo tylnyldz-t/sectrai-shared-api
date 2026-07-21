@@ -100,12 +100,13 @@ function issuanceEntries(value: unknown): ImageCandidateIssuanceEntry[] | null {
 function assertImageCandidateIssuanceEvent(event: unknown): asserts event is ImageCandidateIssuanceEvent {
   const value = plainRecord(event)
   if (!value || !exactKeys(value, ['type', 'connectorId', 'product', 'workspaceId', 'actor', 'correlationId', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'])) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
-  if (value.type !== 'connector.artifact.candidates_issued' || value.connectorId !== 'image-tti' || !safeIdentifier(value.product) || !safeIdentifier(value.workspaceId) || !safeIdentifier(value.actor) || !safeIdentifier(value.correlationId) || !Array.isArray(value.scopes) || value.scopes.length !== 1 || value.scopes[0] !== IMAGE_SCOPE || value.costCapCents !== 0 || !Number.isSafeInteger(value.requestedItems) || value.requestedItems < 1 || !canonicalTimestamp(value.occurredAt)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
+  const requestedItems = value.requestedItems
+  if (value.type !== 'connector.artifact.candidates_issued' || value.connectorId !== 'image-tti' || !safeIdentifier(value.product) || !safeIdentifier(value.workspaceId) || !safeIdentifier(value.actor) || !safeIdentifier(value.correlationId) || !Array.isArray(value.scopes) || value.scopes.length !== 1 || value.scopes[0] !== IMAGE_SCOPE || value.costCapCents !== 0 || typeof requestedItems !== 'number' || !Number.isSafeInteger(requestedItems) || requestedItems < 1 || !canonicalTimestamp(value.occurredAt)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
 
   const detail = plainRecord(value.detail)
   if (!detail || !exactKeys(detail, ['candidateSetDigest', 'candidateCount', 'candidates', 'publication', 'runAuditHash']) || !safeHash(detail.candidateSetDigest) || !Number.isSafeInteger(detail.candidateCount) || detail.publication !== 'blocked' || !safeHash(detail.runAuditHash)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
   const entries = issuanceEntries(detail.candidates)
-  if (!entries || detail.candidateCount !== entries.length || value.requestedItems !== entries.length || detail.candidateSetDigest !== candidateSetDigest(entries)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
+  if (!entries || detail.candidateCount !== entries.length || requestedItems !== entries.length || detail.candidateSetDigest !== candidateSetDigest(entries)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
 }
 
 function storedReceipt(value: unknown): StoredCandidateReceipt | null {

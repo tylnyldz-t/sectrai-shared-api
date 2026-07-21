@@ -112,6 +112,8 @@ export type OwnerLikedImageArtifact = {
   ownerReview: Omit<OwnerReview, 'status'> & { status: 'liked'; actor: string; occurredAt: string }
   publication: 'blocked'
   auditHash: string
+  issuanceAuditHash: string
+  runAuditHash: string
 }
 
 /** A terminal owner decision, deliberately not a publishable media artifact. */
@@ -126,6 +128,8 @@ export type OwnerRejectedImageReview = {
   }
   publication: 'blocked'
   auditHash: string
+  issuanceAuditHash: string
+  runAuditHash: string
 }
 
 export type TextToImageData = {
@@ -357,14 +361,14 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
 function isSafeIdentifier(value: unknown): value is string { return typeof value === 'string' && OWNER_ACTOR_PATTERN.test(value) }
 
 function assertCandidateScope(value: unknown, error: string): asserts value is ImageCandidateScope {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError(error)
-  const scope = value as Record<string, unknown>
+  const scope = plainRecord(value)
+  if (!scope) throw new ConnectorInputError(error)
   if (!hasExactKeys(scope, ['product', 'workspaceId', 'correlationId']) || !isSafeIdentifier(scope.product) || !isSafeIdentifier(scope.workspaceId) || !isSafeIdentifier(scope.correlationId)) throw new ConnectorInputError(error)
 }
 
 function assertSyntheticCandidate(candidate: unknown): asserts candidate is SyntheticImageCandidate {
-  if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
-  const value = candidate as Record<string, unknown>
+  const value = plainRecord(candidate)
+  if (!value) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   const candidateKeys = value.negativePromptDigest === undefined
     ? ['candidateId', 'candidateIndex', 'promptDigest', 'requestedBy', 'scope', 'width', 'height', 'mediaType', 'previewDataUri', 'syntheticUri', 'safety', 'creativeWorkerPlan', 'ownerReview']
     : ['candidateId', 'candidateIndex', 'promptDigest', 'negativePromptDigest', 'requestedBy', 'scope', 'width', 'height', 'mediaType', 'previewDataUri', 'syntheticUri', 'safety', 'creativeWorkerPlan', 'ownerReview']
@@ -374,24 +378,72 @@ function assertSyntheticCandidate(candidate: unknown): asserts candidate is Synt
   if (value.candidateId !== candidateId(value.scope, value.requestedBy, value.promptDigest, value.negativePromptDigest, value.width as ImageSize, value.height as ImageSize, value.candidateIndex)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   if (!isImageSize(value.width) || !isImageSize(value.height) || value.mediaType !== 'image/svg+xml' || value.syntheticUri !== `synthetic://gcl/${IMAGE_TTI_CONNECTOR_ID}/${value.candidateId}` || value.previewDataUri !== previewDataUri(value.candidateId, value.width, value.height)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
 
-  if (!value.safety || typeof value.safety !== 'object' || Array.isArray(value.safety) || !hasExactKeys(value.safety as Record<string, unknown>, ['filterId', 'classification'])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
-  const safety = value.safety as Record<string, unknown>
+  const safety = plainRecord(value.safety)
+  if (!safety || !hasExactKeys(safety, ['filterId', 'classification'])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   if (typeof safety.filterId !== 'string' || !FILTER_ID_PATTERN.test(safety.filterId) || safety.classification !== 'family-safe') throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
 
-  if (!value.creativeWorkerPlan || typeof value.creativeWorkerPlan !== 'object' || Array.isArray(value.creativeWorkerPlan)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
-  const plan = value.creativeWorkerPlan as Record<string, unknown>
+  const plan = plainRecord(value.creativeWorkerPlan)
+  if (!plan) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   const planKeys = value.negativePromptDigest === undefined
     ? ['schema', 'provider', 'type', 'modelFamily', 'checkpoint', 'graphShape', 'promptDigest', 'dispatch']
     : ['schema', 'provider', 'type', 'modelFamily', 'checkpoint', 'graphShape', 'promptDigest', 'negativePromptDigest', 'dispatch']
   if (!hasExactKeys(plan, planKeys) || plan.schema !== 'creative-job-v1' || plan.provider !== 'local-comfyui' || plan.type !== 'image' || plan.modelFamily !== 'sdxl' || plan.checkpoint !== 'UNRESOLVED_SYNTHETIC_ONLY' || plan.promptDigest !== value.promptDigest || plan.negativePromptDigest !== value.negativePromptDigest || !Array.isArray(plan.graphShape) || plan.graphShape.length !== COMFY_SDXL_GRAPH_SHAPE.length || plan.graphShape.some((node, index) => node !== COMFY_SDXL_GRAPH_SHAPE[index])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
-  if (!plan.dispatch || typeof plan.dispatch !== 'object' || Array.isArray(plan.dispatch) || !hasExactKeys(plan.dispatch as Record<string, unknown>, ['performed', 'gate', 'network'])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
-  const dispatch = plan.dispatch as Record<string, unknown>
+  const dispatch = plainRecord(plan.dispatch)
+  if (!dispatch || !hasExactKeys(dispatch, ['performed', 'gate', 'network'])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   if (dispatch.performed !== false || dispatch.gate !== LIVE_DISABLED || dispatch.network !== 'not-attempted') throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
 
-  if (!value.ownerReview || typeof value.ownerReview !== 'object' || Array.isArray(value.ownerReview) || !hasExactKeys(value.ownerReview as Record<string, unknown>, ['status', 'visibility', 'publication', 'required'])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
-  const review = value.ownerReview as Record<string, unknown>
+  const review = plainRecord(value.ownerReview)
+  if (!review || !hasExactKeys(review, ['status', 'visibility', 'publication', 'required'])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   if (review.status !== 'pending') throw new ConnectorInputError('IMAGE_CANDIDATE_NOT_PENDING_OWNER_REVIEW')
   if (review.visibility !== 'owner-only' || review.publication !== 'blocked' || review.required !== true) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+}
+
+/**
+ * Records exactly the redacted candidate fingerprints from a completed
+ * governed run. The returned run provenance must carry the runner's success
+ * audit hash; direct connector output intentionally cannot be issued.
+ */
+export async function issueSyntheticImageCandidates(runResult: ConnectorResult<TextToImageData>, candidateLedger: ImageCandidateLedger, context: ImageCandidateIssuanceContext): Promise<{ issuanceAuditHash: string }> {
+  const result = plainRecord(runResult)
+  const data = result ? plainRecord(result.data) : null
+  const provenance = result ? plainRecord(result.provenance) : null
+  if (!data || data.mode !== LIVE_DISABLED || data.nextAction !== 'INDEPENDENT_OWNER_LIKE_REQUIRED' || data.automaticPublication !== false || !Array.isArray(data.candidates) || !provenance || provenance.connectorId !== IMAGE_TTI_CONNECTOR_ID || provenance.source !== 'synthetic-image-tti' || typeof provenance.auditHash !== 'string' || !DIGEST_PATTERN.test(provenance.auditHash)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
+  if (!candidateLedger || typeof candidateLedger !== 'object' || typeof candidateLedger.appendIssuance !== 'function') throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
+  if (!context || typeof context !== 'object' || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+  const occurredAt = context.now()
+  if (!(occurredAt instanceof Date) || Number.isNaN(occurredAt.getTime())) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+  if (data.candidates.length < 1 || data.candidates.length > 32) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
+
+  const candidates: SyntheticImageCandidate[] = []
+  for (let index = 0; index < data.candidates.length; index += 1) {
+    const candidate = data.candidates[index]
+    assertSyntheticCandidate(candidate)
+    if (candidate.candidateIndex !== index || candidate.requestedBy !== context.actor || candidate.scope.product !== context.product || candidate.scope.workspaceId !== context.workspaceId || candidate.scope.correlationId !== context.correlationId) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
+    candidates.push(candidate)
+  }
+  const entries = candidates.map((candidate) => ({ candidateId: candidate.candidateId, fingerprint: imageCandidateFingerprint(candidate) }))
+  const event: ImageCandidateIssuanceEvent = {
+    type: 'connector.artifact.candidates_issued',
+    connectorId: IMAGE_TTI_CONNECTOR_ID,
+    product: context.product,
+    workspaceId: context.workspaceId,
+    actor: context.actor,
+    correlationId: context.correlationId,
+    scopes: [IMAGE_SCOPE],
+    costCapCents: 0,
+    requestedItems: entries.length,
+    occurredAt: occurredAt.toISOString(),
+    detail: {
+      candidateSetDigest: imageCandidateFingerprint([...entries].sort((left, right) => left.candidateId.localeCompare(right.candidateId))),
+      candidateCount: entries.length,
+      candidates: entries,
+      publication: 'blocked',
+      runAuditHash: provenance.auditHash,
+    },
+  }
+  const audit = await candidateLedger.appendIssuance(event)
+  if (!audit || typeof audit.hash !== 'string' || !DIGEST_PATTERN.test(audit.hash)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
+  return { issuanceAuditHash: audit.hash }
 }
 
 function assertOwnerReviewContext(candidate: SyntheticImageCandidate, context: ImageOwnerReviewContext): Date {
@@ -411,7 +463,11 @@ function assertOwnerReviewRequest(candidate: unknown, ownerApproved: boolean, ac
   return { candidate, actor, occurredAt: assertOwnerReviewContext(candidate, context) }
 }
 
-function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected', candidate: SyntheticImageCandidate, actor: string, occurredAt: Date, context: ImageOwnerReviewContext, detail: Record<string, unknown>): ImageOwnerReviewDecisionEvent {
+function assertCandidateLedger(candidateLedger: unknown): asserts candidateLedger is ImageCandidateLedger {
+  if (!candidateLedger || typeof candidateLedger !== 'object' || typeof (candidateLedger as ImageCandidateLedger).assertIssued !== 'function') throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
+}
+
+function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected', candidate: SyntheticImageCandidate, actor: string, occurredAt: Date, context: ImageOwnerReviewContext, issuance: { issuanceAuditHash: string; runAuditHash: string }, detail: Record<string, unknown>): ImageOwnerReviewDecisionEvent {
   return {
     type,
     connectorId: IMAGE_TTI_CONNECTOR_ID,
@@ -423,7 +479,7 @@ function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.ar
     costCapCents: 0,
     requestedItems: 1,
     occurredAt: occurredAt.toISOString(),
-    detail: { candidateId: candidate.candidateId, maker: candidate.requestedBy, publication: 'blocked', ...detail },
+    detail: { candidateId: candidate.candidateId, maker: candidate.requestedBy, publication: 'blocked', issuanceAuditHash: issuance.issuanceAuditHash, runAuditHash: issuance.runAuditHash, ...detail },
   } as const
 }
 
@@ -432,10 +488,12 @@ function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.ar
  * and atomically persists one terminal receipt with the same audit event. The
  * maker cannot self-approve. The artifact remains blocked from publication.
  */
-export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate, ownerApproved: boolean, actor: string, reviewLedger: ImageOwnerReviewLedger, context: ImageOwnerReviewContext): Promise<OwnerLikedImageArtifact> {
+export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate, ownerApproved: boolean, actor: string, reviewLedger: ImageOwnerReviewLedger, candidateLedger: ImageCandidateLedger, context: ImageOwnerReviewContext): Promise<OwnerLikedImageArtifact> {
   const request = assertOwnerReviewRequest(candidate, ownerApproved, actor, reviewLedger, context)
+  assertCandidateLedger(candidateLedger)
+  const issuance = await candidateLedger.assertIssued(request.candidate)
   const artifactId = `owner-liked-${candidate.candidateId}`
-  const audit = await reviewLedger.appendDecision(reviewAuditEvent('connector.artifact.owner_liked', request.candidate, request.actor, request.occurredAt, context, { artifactId, ownerReview: 'liked' }))
+  const audit = await reviewLedger.appendDecision(reviewAuditEvent('connector.artifact.owner_liked', request.candidate, request.actor, request.occurredAt, context, issuance, { artifactId, ownerReview: 'liked' }))
   return {
     artifactId,
     candidateId: request.candidate.candidateId,
@@ -445,6 +503,8 @@ export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate
     ownerReview: { status: 'liked', visibility: 'owner-only', publication: 'blocked', required: true, actor: request.actor, occurredAt: request.occurredAt.toISOString() },
     publication: 'blocked',
     auditHash: audit.hash,
+    issuanceAuditHash: issuance.issuanceAuditHash,
+    runAuditHash: issuance.runAuditHash,
   }
 }
 
@@ -454,17 +514,21 @@ export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate
  * audit chain and a replay-protected terminal receipt. This connector never
  * exposes a route, authenticates an actor, or offers a publication path.
  */
-export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandidate, ownerApproved: boolean, actor: string, reason: ImageRejectionReason, reviewLedger: ImageOwnerReviewLedger, context: ImageOwnerReviewContext): Promise<OwnerRejectedImageReview> {
+export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandidate, ownerApproved: boolean, actor: string, reason: ImageRejectionReason, reviewLedger: ImageOwnerReviewLedger, candidateLedger: ImageCandidateLedger, context: ImageOwnerReviewContext): Promise<OwnerRejectedImageReview> {
   const request = assertOwnerReviewRequest(candidate, ownerApproved, actor, reviewLedger, context)
+  assertCandidateLedger(candidateLedger)
   if (reason !== 'NOT_SUITABLE' && reason !== 'SAFETY_CONCERN' && reason !== 'NEEDS_REVISION') throw new ConnectorInputError('INVALID_IMAGE_REJECTION_REASON')
+  const issuance = await candidateLedger.assertIssued(request.candidate)
   const reviewId = `owner-rejected-${request.candidate.candidateId}`
-  const audit = await reviewLedger.appendDecision(reviewAuditEvent('connector.artifact.owner_rejected', request.candidate, request.actor, request.occurredAt, context, { reviewId, ownerReview: 'rejected', reason }))
+  const audit = await reviewLedger.appendDecision(reviewAuditEvent('connector.artifact.owner_rejected', request.candidate, request.actor, request.occurredAt, context, issuance, { reviewId, ownerReview: 'rejected', reason }))
   return {
     reviewId,
     candidateId: request.candidate.candidateId,
     ownerReview: { status: 'rejected', visibility: 'owner-only', publication: 'blocked', required: true, actor: request.actor, occurredAt: request.occurredAt.toISOString(), reason },
     publication: 'blocked',
     auditHash: audit.hash,
+    issuanceAuditHash: issuance.issuanceAuditHash,
+    runAuditHash: issuance.runAuditHash,
   }
 }
 
