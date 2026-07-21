@@ -17,7 +17,7 @@ const productKey = 'synthetic-product-key'
 
 function runResult(): ConnectorResult {
   return {
-    data: { type: 'text-translation', mode: 'SYNTHETIC' },
+    data: { type: 'text-translation', mode: 'SYNTHETIC', translatedText: 'must never be stored' },
     artifact: {
       kind: 'translated-text',
       contentHash: `sha256:${'a'.repeat(64)}`,

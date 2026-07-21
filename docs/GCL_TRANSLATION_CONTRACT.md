@@ -146,7 +146,10 @@ The connector derives `reviewExpiresAt` from its synthetic run clock; it is not
 caller-controlled. A checker has to resubmit a newly generated synthetic
 fixture after expiry. Before adding an audit entry, the durable audit writer
 revalidates the whole product/workspace SHA-256 chain. A malformed prior entry
-returns `GCL_AUDIT_CHAIN_INVALID` and no new entry is appended.
+returns `GCL_AUDIT_CHAIN_INVALID` and no new entry is appended. In the durable
+Prisma store, artifact creation and a successful compare-and-set decision each
+share one database transaction with their audit row; an audit failure rolls back
+that metadata mutation.
 
 ## ADOS boundary checklist
 

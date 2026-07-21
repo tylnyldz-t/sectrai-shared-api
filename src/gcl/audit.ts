@@ -32,40 +32,47 @@ function auditValue(value: unknown): AuditRecordValue | null {
   return candidate as AuditRecordValue
 }
 
+/**
+ * Appends within an already-open Prisma transaction. Keeping a lifecycle
+ * mutation and its audit row in the same transaction prevents a durable,
+ * unaudited translation decision when the audit write fails.
+ */
+export async function appendAuditEvent(transaction: Prisma.TransactionClient, event: ConnectorAuditEvent): Promise<{ hash: string }> {
+  await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${event.product}:${event.workspaceId}:${GCL_AUDIT_MODULE_ID}`}))`
+  const records = await transaction.record.findMany({
+    where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    select: { values: true },
+  })
+  let previousHash: string | null = null
+  for (const record of records) {
+    const value = auditValue(record.values)
+    if (!value || value.previousHash !== previousHash || value.hash !== hashAuditEvent(value.event, value.previousHash)) {
+      throw new ConnectorUnavailableError('GCL_AUDIT_CHAIN_INVALID')
+    }
+    previousHash = value.hash
+  }
+  const hash = hashAuditEvent(event, previousHash)
+  await transaction.record.create({
+    data: {
+      product: event.product,
+      workspaceId: event.workspaceId,
+      moduleId: GCL_AUDIT_MODULE_ID,
+      values: { event, previousHash, hash } as Prisma.InputJsonValue,
+      status: 'append-only',
+      createdBy: 'gcl-audit',
+    },
+  })
+  return { hash }
+}
+
 /** Per product/workspace append-only SHA-256 chain. Translation text and audio
  * bytes are represented by hashes only; they never enter audit records. */
 export class PrismaHashChainAuditLog implements AuditLog {
   constructor(private readonly prisma: PrismaClient) {}
 
   async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
-    return this.prisma.$transaction(async (transaction) => {
-      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${event.product}:${event.workspaceId}:${GCL_AUDIT_MODULE_ID}`}))`
-      const records = await transaction.record.findMany({
-        where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
-        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-        select: { values: true },
-      })
-      let previousHash: string | null = null
-      for (const record of records) {
-        const value = auditValue(record.values)
-        if (!value || value.previousHash !== previousHash || value.hash !== hashAuditEvent(value.event, value.previousHash)) {
-          throw new ConnectorUnavailableError('GCL_AUDIT_CHAIN_INVALID')
-        }
-        previousHash = value.hash
-      }
-      const hash = hashAuditEvent(event, previousHash)
-      await transaction.record.create({
-        data: {
-          product: event.product,
-          workspaceId: event.workspaceId,
-          moduleId: GCL_AUDIT_MODULE_ID,
-          values: { event, previousHash, hash } as Prisma.InputJsonValue,
-          status: 'append-only',
-          createdBy: 'gcl-audit',
-        },
-      })
-      return { hash }
-    })
+    return this.prisma.$transaction((transaction) => appendAuditEvent(transaction, event))
   }
 }
 

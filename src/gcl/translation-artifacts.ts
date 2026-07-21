@@ -1,7 +1,8 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
+import { appendAuditEvent } from './audit.js'
 import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorUnavailableError, MakerCheckerError } from './errors.js'
-import type { TranslationArtifactProposal } from './types.js'
+import type { ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
 
 export const GCL_TRANSLATION_ARTIFACT_MODULE_ID = 'gcl-translation-artifacts'
 const SHA256 = /^sha256:[a-f0-9]{64}$/
@@ -59,6 +60,7 @@ function validArtifactBinding(input: Pick<TranslationArtifactRecord, 'connectorI
 }
 
 type ReviewDigestInput = Pick<TranslationArtifactRecord, 'connectorId' | 'kind' | 'contentHash' | 'mediaType' | 'source' | 'synthetic' | 'autoPublish' | 'reviewPolicyVersion' | 'reviewExpiresAt' | 'runAuditHash'>
+type ArtifactAuditContext = Pick<ConnectorAuditEvent, 'scopes' | 'costCapCents' | 'requestedItems' | 'occurredAt'>
 
 function digest(value: unknown): string {
   return `sha256:${createHash('sha256').update(JSON.stringify(value)).digest('hex')}`
@@ -166,6 +168,41 @@ export class PrismaTranslationArtifactStore {
     return artifact
   }
 
+  /** Atomically persists metadata and its creation audit row; no raw content enters either. */
+  async proposeAndAudit(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: TranslationArtifactProposal; runAuditHash: string; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord; auditHash: string }> {
+    return this.prisma.$transaction(async (transaction) => {
+      const proposal = translationArtifactProposal(input.connectorId, input.proposal)
+      if (!proposal || !AUDIT_SHA256.test(input.runAuditHash)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_PROPOSAL_INVALID')
+      const pending = { connectorId: input.connectorId, ...proposal, runAuditHash: input.runAuditHash }
+      const record = await transaction.record.create({
+        data: {
+          product: input.product,
+          workspaceId: input.workspaceId,
+          moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID,
+          values: { ...pending, reviewDigest: translationArtifactReviewDigest(pending) } as Prisma.InputJsonValue,
+          status: 'pending-checker-approval',
+          createdBy: input.actor,
+        },
+      })
+      const artifact = toRecord(record)
+      if (!artifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
+      const audit = await appendAuditEvent(transaction, {
+        type: 'translation.artifact.created', connectorId: input.connectorId, product: input.product, workspaceId: input.workspaceId, actor: input.actor, ...input.audit,
+        detail: {
+          artifactId: artifact.id,
+          kind: artifact.kind,
+          contentHash: artifact.contentHash,
+          approvalState: artifact.approvalState,
+          reviewDigest: artifact.reviewDigest,
+          reviewExpiresAt: artifact.reviewExpiresAt,
+          runAuditHash: artifact.runAuditHash,
+          autoPublish: false,
+        },
+      })
+      return { artifact, auditHash: audit.hash }
+    })
+  }
+
   async get(product: string, workspaceId: string, id: string): Promise<TranslationArtifactRecord | null> {
     const record = await this.prisma.record.findFirst({ where: { id, product, workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID } })
     if (!record) return null
@@ -217,6 +254,68 @@ export class PrismaTranslationArtifactStore {
     if (!currentArtifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
     if (currentArtifact.createdBy === input.actor) throw new MakerCheckerError()
     throw new ArtifactStateError()
+  }
+
+  /** The compare-and-set decision and its audit row share one transaction. */
+  async decideAndAudit(input: { product: string; workspaceId: string; id: string; actor: string; decision: TranslationArtifactDecision; reviewDigest: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord | null; auditHash?: string }> {
+    return this.prisma.$transaction(async (transaction) => {
+      const record = await transaction.record.findFirst({ where: { id: input.id, product: input.product, workspaceId: input.workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID } })
+      if (!record) return { artifact: null }
+      const artifact = toRecord(record)
+      if (!artifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
+      if (artifact.approvalState !== 'pending-checker-approval') throw new ArtifactStateError()
+      if (artifact.createdBy === input.actor) throw new MakerCheckerError()
+      if (!constantTimeEqual(input.reviewDigest, artifact.reviewDigest)) throw new ArtifactReviewBindingError()
+      if (new Date(artifact.reviewExpiresAt).valueOf() <= input.now.valueOf()) throw new ArtifactReviewExpiredError()
+      const approvalState = input.decision
+      const decidedAt = input.now.toISOString()
+      const next: TranslationArtifactRecord = { ...artifact, approvalState, decidedAt, decidedBy: input.actor }
+      const updated = await transaction.record.updateMany({
+        where: { id: record.id, product: input.product, workspaceId: input.workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID, status: 'pending-checker-approval' },
+        data: {
+          values: {
+            connectorId: artifact.connectorId,
+            kind: artifact.kind,
+            contentHash: artifact.contentHash,
+            mediaType: artifact.mediaType,
+            source: artifact.source,
+            synthetic: true,
+            approvalState,
+            autoPublish: false,
+            reviewPolicyVersion: artifact.reviewPolicyVersion,
+            reviewExpiresAt: artifact.reviewExpiresAt,
+            reviewDigest: artifact.reviewDigest,
+            runAuditHash: artifact.runAuditHash,
+            decidedAt,
+            decidedBy: input.actor,
+          } as Prisma.InputJsonValue,
+          status: approvalState,
+          updatedAt: input.now,
+        },
+      })
+      if (updated.count !== 1) {
+        const current = await transaction.record.findFirst({ where: { id: input.id, product: input.product, workspaceId: input.workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID } })
+        if (!current) return { artifact: null }
+        const currentArtifact = toRecord(current)
+        if (!currentArtifact) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_STORAGE_INVALID')
+        if (currentArtifact.createdBy === input.actor) throw new MakerCheckerError()
+        throw new ArtifactStateError()
+      }
+      const audit = await appendAuditEvent(transaction, {
+        type: input.decision === 'approved' ? 'translation.artifact.approved' : 'translation.artifact.rejected', connectorId: artifact.connectorId, product: input.product, workspaceId: input.workspaceId, actor: input.actor, ...input.audit,
+        detail: {
+          artifactId: next.id,
+          kind: next.kind,
+          contentHash: next.contentHash,
+          approvalState: next.approvalState,
+          reviewDigest: next.reviewDigest,
+          reviewExpiresAt: next.reviewExpiresAt,
+          runAuditHash: next.runAuditHash,
+          autoPublish: false,
+        },
+      })
+      return { artifact: next, auditHash: audit.hash }
+    })
   }
 }
 
