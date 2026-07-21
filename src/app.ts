@@ -2,9 +2,20 @@ import { PrismaClient, Prisma } from '@prisma/client'
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import { productAuth, validProduct } from './auth.js'
 import { serializeRecord } from './types.js'
-import { mutationFrom, scopeFrom } from './validation.js'
+import { PrismaHashChainAuditLog, GCL_AUDIT_MODULE_ID } from './gcl/audit.js'
+import { GclError } from './gcl/errors.js'
+import { suggestExtensions, type Extension, type ExtensionInput } from './gcl/extensions.js'
+import { EnvironmentPrismaDailyConnectorQuota, GCL_USAGE_MODULE_ID } from './gcl/quota.js'
+import { ConnectorRegistry, GovernedConnectorRunner, type RunConnectorRequest } from './gcl/registry.js'
+import { syntheticVideoConnectorsFromEnvironment } from './gcl/video.js'
+import { EnvironmentPrismaVideoJobQueue, GCL_VIDEO_QUEUE_MODULE_ID, type VideoJobQueue } from './gcl/video-queue.js'
+import { connectorRunFrom, extensionFrom, extensionSuggestionFrom, mutationFrom, scopeFrom, workspaceScopeFrom } from './validation.js'
 
-type AppOptions = { prisma?: PrismaClient; now?: () => Date }
+type ConnectorRunner = { run(request: RunConnectorRequest): Promise<unknown> }
+type AppOptions = { prisma?: PrismaClient; now?: () => Date; gclRunner?: ConnectorRunner; gclOwnerToken?: string; videoQueue?: VideoJobQueue; environment?: NodeJS.ProcessEnv }
+
+const GCL_EXTENSION_MODULE_ID = 'gcl-extensions'
+const GCL_RESERVED_MODULES = new Set([GCL_EXTENSION_MODULE_ID, GCL_AUDIT_MODULE_ID, GCL_USAGE_MODULE_ID, GCL_VIDEO_QUEUE_MODULE_ID])
 
 function asyncRoute(handler: (request: Request, response: Response, next: NextFunction) => Promise<unknown> | unknown): RequestHandler {
   return (request, response, next) => { void Promise.resolve(handler(request, response, next)).catch(next) }
@@ -15,7 +26,7 @@ function cors(request: Request, response: Response, next: NextFunction): void {
   if (origin) response.setHeader('Access-Control-Allow-Origin', origin)
   response.setHeader('Vary', 'Origin')
   response.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
-  response.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-Sectrai-Product-Key')
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-Sectrai-Product-Key,X-Sectrai-Owner-Token,X-Sectrai-Owner-Actor')
   response.setHeader('Access-Control-Max-Age', '600')
   next()
 }
@@ -26,8 +37,49 @@ function recordIdFrom(request: Request): string {
   return recordId
 }
 
-export function createApp({ prisma = new PrismaClient(), now = () => new Date() }: AppOptions = {}) {
+function constantTimeEqual(left: string, right: string): boolean {
+  if (left.length !== right.length) return false
+  let different = 0
+  for (let index = 0; index < left.length; index += 1) different |= left.charCodeAt(index) ^ right.charCodeAt(index)
+  return different === 0
+}
+
+function gclOwnerAuth(expectedToken: string | undefined): RequestHandler {
+  return (request, response, next) => {
+    const supplied = request.header('x-sectrai-owner-token')
+    if (!expectedToken) return response.status(503).json({ error: 'GCL_OWNER_GATE_NOT_CONFIGURED', code: 'connector_unavailable' })
+    if (!supplied || !constantTimeEqual(supplied, expectedToken)) return response.status(403).json({ error: 'OWNER_APPROVAL_REQUIRED', code: 'owner_approval_required' })
+    return next()
+  }
+}
+
+function ownerActorFrom(request: Request): string {
+  const actor = request.header('x-sectrai-owner-actor')
+  if (!actor || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(actor)) throw Object.assign(new Error('INVALID_OWNER_ACTOR'), { status: 422 })
+  return actor
+}
+
+function connectorIdFrom(request: Request): string {
+  const connectorId = request.params.connectorId
+  if (typeof connectorId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(connectorId)) throw Object.assign(new Error('INVALID_CONNECTOR_ID'), { status: 400 })
+  return connectorId
+}
+
+function storedExtension(id: string, value: unknown): Extension | null {
+  try { return { id, ...extensionFrom(value) } } catch { return null }
+}
+
+function extensionValues(input: ExtensionInput): Prisma.InputJsonValue { return input as Prisma.InputJsonValue }
+
+export function createApp({ prisma = new PrismaClient(), now = () => new Date(), gclRunner, gclOwnerToken = process.env.GCL_OWNER_TOKEN, videoQueue, environment = process.env }: AppOptions = {}) {
   const app = express()
+  const activeVideoQueue = videoQueue ?? new EnvironmentPrismaVideoJobQueue(prisma, environment)
+  const governedRunner = gclRunner ?? new GovernedConnectorRunner(
+    new ConnectorRegistry(syntheticVideoConnectorsFromEnvironment(activeVideoQueue, environment)),
+    new PrismaHashChainAuditLog(prisma),
+    new EnvironmentPrismaDailyConnectorQuota(prisma),
+    now,
+  )
   app.disable('x-powered-by')
   app.use(cors)
   app.options('*splat', (_, response) => response.sendStatus(204))
@@ -41,6 +93,7 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date() 
   const base = '/api/products/:product/workspaces/:workspaceId/modules/:moduleId/records'
   app.use(base, (request, response, next) => {
     if (!validProduct(request.params.product ?? '')) return response.status(404).json({ error: 'NOT_FOUND', code: 'not_found' })
+    if (GCL_RESERVED_MODULES.has(request.params.moduleId ?? '')) return response.status(404).json({ error: 'NOT_FOUND', code: 'not_found' })
     return productAuth(request, response, next)
   })
 
@@ -74,8 +127,71 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date() 
     return response.status(204).end()
   }))
 
+  const gclBase = '/api/products/:product/workspaces/:workspaceId/gcl'
+  app.use(gclBase, (request, response, next) => {
+    if (!validProduct(request.params.product ?? '')) return response.status(404).json({ error: 'NOT_FOUND', code: 'not_found' })
+    return productAuth(request, response, next)
+  })
+
+  app.post(`${gclBase}/connectors/:connectorId/runs`, gclOwnerAuth(gclOwnerToken), asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    const input = connectorRunFrom(request.body)
+    const result = await governedRunner.run({
+      connectorId: connectorIdFrom(request), input: input.input, ...scope, actor: ownerActorFrom(request), ownerApproved: true,
+      scopes: input.scopes, costCapCents: input.costCapCents, requestedItems: input.requestedItems,
+    })
+    return response.json({ result })
+  }))
+
+  app.get(`${gclBase}/video/jobs`, gclOwnerAuth(gclOwnerToken), asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    return response.json({ jobs: await activeVideoQueue.list(scope), liveStatus: 'LIVE_DISABLED', publication: 'OWNER_APPROVAL_REQUIRED' })
+  }))
+
+  const extensionBase = `${gclBase}/extensions`
+  app.get(extensionBase, asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    const records = await prisma.record.findMany({ where: { ...scope, moduleId: GCL_EXTENSION_MODULE_ID }, orderBy: { createdAt: 'desc' } })
+    response.json({ extensions: records.map((record) => storedExtension(record.id, record.values)).filter((extension): extension is Extension => extension !== null) })
+  }))
+
+  app.post(extensionBase, gclOwnerAuth(gclOwnerToken), asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    const input = extensionFrom(request.body)
+    const record = await prisma.record.create({ data: { ...scope, moduleId: GCL_EXTENSION_MODULE_ID, values: extensionValues(input), status: input.consentState, createdBy: ownerActorFrom(request) } })
+    return response.status(201).json({ extension: { id: record.id, ...input } })
+  }))
+
+  app.patch(`${extensionBase}/:recordId`, gclOwnerAuth(gclOwnerToken), asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    const input = extensionFrom(request.body)
+    const existing = await prisma.record.findFirst({ where: { ...scope, moduleId: GCL_EXTENSION_MODULE_ID, id: recordIdFrom(request) } })
+    if (!existing) return response.status(404).json({ error: 'EXTENSION_NOT_FOUND', code: 'extension_not_found' })
+    ownerActorFrom(request)
+    const record = await prisma.record.update({ where: { id: existing.id }, data: { values: extensionValues(input), status: input.consentState, updatedAt: now() } })
+    return response.json({ extension: { id: record.id, ...input } })
+  }))
+
+  app.delete(`${extensionBase}/:recordId`, gclOwnerAuth(gclOwnerToken), asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    const existing = await prisma.record.findFirst({ where: { ...scope, moduleId: GCL_EXTENSION_MODULE_ID, id: recordIdFrom(request) } })
+    if (!existing) return response.status(404).json({ error: 'EXTENSION_NOT_FOUND', code: 'extension_not_found' })
+    ownerActorFrom(request)
+    await prisma.record.delete({ where: { id: existing.id } })
+    return response.status(204).end()
+  }))
+
+  app.post(`${extensionBase}/suggestions`, asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    const input = extensionSuggestionFrom(request.body)
+    const records = await prisma.record.findMany({ where: { ...scope, moduleId: GCL_EXTENSION_MODULE_ID }, orderBy: { createdAt: 'desc' } })
+    const extensions = records.map((record) => storedExtension(record.id, record.values)).filter((extension): extension is Extension => extension !== null)
+    return response.json({ suggestions: suggestExtensions(input, extensions), activation: 'owner-approval-required' })
+  }))
+
   app.use((error: unknown, _: Request, response: Response, __: NextFunction) => {
     if (error instanceof SyntaxError && 'body' in error) return response.status(400).json({ error: 'INVALID_JSON', code: 'invalid_json' })
+    if (error instanceof GclError) return response.status(error.status).json({ error: error.message, code: error.code })
     const status = typeof error === 'object' && error && 'status' in error && typeof error.status === 'number' ? error.status : 500
     return response.status(status).json({ error: error instanceof Error ? error.message : 'INTERNAL_ERROR', code: status === 500 ? 'internal_error' : 'invalid_request' })
   })

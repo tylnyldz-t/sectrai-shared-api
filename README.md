@@ -2,6 +2,8 @@
 
 Shared, product-scoped persistence API for Sectrai synthetic demo products. It uses one Neon Postgres database and one Render web service. It never connects to Sektral, Xontainer, Yapıborsası, or any other database.
 
+It also contains the L0 Governed Connector Layer (GCL) foundation. GCL starts disabled and is fail-closed until its owner gate, quotas, and a connector’s deployment configuration exist. This GM4 working tree contains only the [synthetic video contract](docs/GCL_VIDEO_CONTRACT.md); it has no real provider connector.
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:
@@ -36,7 +38,7 @@ DATABASE_URL='your Neon URL' npm run db:migrate
 DATABASE_URL='your Neon URL' SHARED_API_KEY_HEALTH='...' npm start
 ```
 
-`npm test` is a real Neon integration test. It creates records only under the temporary `sectrai-integration-test` product, verifies create → list → edit → a new Prisma connection → delete, and cleans those records up.
+`npm test` includes offline GCL contract tests. When `DATABASE_URL` is set, it additionally runs the real Neon integration test: it creates records only under the temporary `sectrai-integration-test` product, verifies create → list → edit → a new Prisma connection → delete, and cleans those records up.
 
 ## Product adaptation guide
 

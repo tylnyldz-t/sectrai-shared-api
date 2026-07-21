@@ -1,4 +1,5 @@
 import type { Request } from 'express'
+import type { ExtensionInput, ExtensionSuggestionInput } from './gcl/extensions.js'
 
 const ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const STATUS_LIMIT = 80
@@ -6,6 +7,8 @@ const ACTOR_LIMIT = 160
 
 export type RecordScope = { product: string; workspaceId: string; moduleId: string }
 export type RecordMutation = { values: Record<string, unknown>; status: string | null; createdBy?: string }
+export type WorkspaceScope = { product: string; workspaceId: string }
+export type ConnectorRunMutation = { input: Record<string, unknown>; scopes: string[]; costCapCents: number; requestedItems: number }
 
 export function scopeFrom(request: Request): RecordScope {
   const { product, workspaceId, moduleId } = request.params
@@ -14,9 +17,19 @@ export function scopeFrom(request: Request): RecordScope {
   return { product, workspaceId, moduleId }
 }
 
+export function workspaceScopeFrom(request: Request): WorkspaceScope {
+  const { product, workspaceId } = request.params
+  if (typeof product !== 'string' || typeof workspaceId !== 'string' || !product || !workspaceId || !ID_PATTERN.test(workspaceId)) throw Object.assign(new Error('INVALID_WORKSPACE_SCOPE'), { status: 400 })
+  return { product, workspaceId }
+}
+
 function jsonSize(value: unknown): number { return Buffer.byteLength(JSON.stringify(value), 'utf8') }
 function values(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || jsonSize(value) > 48 * 1024) throw Object.assign(new Error('INVALID_RECORD_VALUES'), { status: 422 })
+  return value as Record<string, unknown>
+}
+function plainObject(value: unknown, error: string, limit = 48 * 1024): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || jsonSize(value) > limit) throw Object.assign(new Error(error), { status: 422 })
   return value as Record<string, unknown>
 }
 function status(value: unknown): string | null {
@@ -35,4 +48,64 @@ export function mutationFrom(body: unknown, allowCreatedBy: boolean): RecordMuta
   const allowed = allowCreatedBy ? new Set(['values', 'status', 'createdBy']) : new Set(['values', 'status'])
   if (Object.keys(input).some((key) => !allowed.has(key))) throw Object.assign(new Error('UNEXPECTED_RECORD_FIELD'), { status: 400 })
   return { values: values(input.values), status: status(input.status), ...(allowCreatedBy ? { createdBy: actor(input.createdBy) } : {}) }
+}
+
+function exactObject(body: unknown, allowed: readonly string[], error: string): Record<string, unknown> {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw Object.assign(new Error(error), { status: 400 })
+  const input = body as Record<string, unknown>
+  if (Object.keys(input).some((key) => !allowed.includes(key))) throw Object.assign(new Error(error), { status: 400 })
+  return input
+}
+
+function shortText(value: unknown, error: string, limit = 120): string {
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > limit) throw Object.assign(new Error(error), { status: 422 })
+  return value.trim()
+}
+
+function stringArray(value: unknown, error: string, limit: number, itemLimit = 120): string[] {
+  if (!Array.isArray(value) || value.length < 1 || value.length > limit) throw Object.assign(new Error(error), { status: 422 })
+  const output = value.map((item) => shortText(item, error, itemLimit))
+  if (new Set(output).size !== output.length) throw Object.assign(new Error(error), { status: 422 })
+  return output
+}
+
+function positiveInteger(value: unknown, error: string, limit: number): number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > limit) throw Object.assign(new Error(error), { status: 422 })
+  return value
+}
+
+export function connectorRunFrom(body: unknown): ConnectorRunMutation {
+  const input = exactObject(body, ['input', 'scopes', 'costCapCents', 'requestedItems'], 'INVALID_CONNECTOR_RUN_REQUEST')
+  return {
+    input: plainObject(input.input, 'INVALID_CONNECTOR_INPUT'),
+    scopes: stringArray(input.scopes, 'INVALID_CONNECTOR_SCOPES', 12, 80),
+    costCapCents: positiveInteger(input.costCapCents, 'INVALID_CONNECTOR_COST_CAP', 10_000_000),
+    requestedItems: positiveInteger(input.requestedItems, 'INVALID_CONNECTOR_REQUESTED_ITEMS', 100_000),
+  }
+}
+
+export function extensionFrom(body: unknown): ExtensionInput {
+  const input = exactObject(body, ['name', 'sector', 'role', 'connectorId', 'defaultScopes', 'consentState'], 'INVALID_EXTENSION_REQUEST')
+  const role = input.role
+  const consentState = input.consentState
+  if (role !== 'ai-support' && role !== 'add-on-module') throw Object.assign(new Error('INVALID_EXTENSION_ROLE'), { status: 422 })
+  if (consentState !== 'pending' && consentState !== 'granted' && consentState !== 'revoked') throw Object.assign(new Error('INVALID_EXTENSION_CONSENT_STATE'), { status: 422 })
+  return {
+    name: shortText(input.name, 'INVALID_EXTENSION_NAME'),
+    sector: stringArray(input.sector, 'INVALID_EXTENSION_SECTOR', 12, 80),
+    role,
+    connectorId: shortText(input.connectorId, 'INVALID_EXTENSION_CONNECTOR_ID', 120),
+    defaultScopes: stringArray(input.defaultScopes, 'INVALID_EXTENSION_SCOPES', 12, 80),
+    consentState,
+  }
+}
+
+export function extensionSuggestionFrom(body: unknown): ExtensionSuggestionInput {
+  const input = exactObject(body, ['sector', 'activeModules', 'lastCommand'], 'INVALID_EXTENSION_SUGGESTION_REQUEST')
+  if (input.lastCommand !== null && input.lastCommand !== undefined && (typeof input.lastCommand !== 'string' || input.lastCommand.length > 500)) throw Object.assign(new Error('INVALID_EXTENSION_LAST_COMMAND'), { status: 422 })
+  return {
+    sector: shortText(input.sector, 'INVALID_EXTENSION_SECTOR', 80),
+    activeModules: stringArray(input.activeModules, 'INVALID_EXTENSION_ACTIVE_MODULES', 40, 120),
+    lastCommand: typeof input.lastCommand === 'string' ? input.lastCommand.trim() : null,
+  }
 }
