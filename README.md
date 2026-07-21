@@ -60,6 +60,6 @@ or `*_LIVE_ENABLED` setting.
 - `translation-text-synthetic` returns only the explicitly supplied synthetic text-translation fixture.
 - `translation-speech-synthetic` accepts a synthetic audio descriptor plus an explicitly supplied fixture and returns only a deterministic `synthetic://` audio reference—never audio bytes.
 - Both require the product key, owner token, owner actor, matching scope, positive cost cap, daily quota, and `GCL_TRANSLATION_LIVE_DISABLED=true`.
-- Successful runs create metadata-only proposals. The maker cannot approve or reject their own proposal; a distinct checker is required. Approval never permits publication.
+- Successful runs create metadata-only proposals. The maker cannot approve or reject their own proposal; a distinct checker must echo the returned review digest before its configured review TTL expires. Approval never permits publication.
 
 See [the interpreter contract](docs/GCL_TRANSLATION_CONTRACT.md) for the exact shapes and safety boundary.

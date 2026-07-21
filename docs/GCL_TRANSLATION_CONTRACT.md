@@ -13,7 +13,7 @@ Each route is unavailable until all synthetic-only gates are configured:
 - a valid `X-Sectrai-Owner-Actor`;
 - `GCL_TRANSLATION_SYNTHETIC_ENABLED=true`;
 - `GCL_TRANSLATION_LIVE_DISABLED=true`;
-- positive cost, text-size, audio-duration, daily-run, and daily-item limits;
+- positive cost, text-size, audio-duration, review-TTL, daily-run, and daily-item limits;
 - matching scope, a positive cost cap, and exactly one requested item.
 
 Missing or invalid configuration returns a visible `503`; owner, input, scope,
@@ -92,6 +92,9 @@ Successful runs create a proposal with:
 synthetic = true
 approvalState = pending-checker-approval
 autoPublish = false
+reviewPolicyVersion = gcl-translation-synthetic-v1
+reviewExpiresAt = canonical UTC timestamp
+reviewDigest = sha256:<64 lowercase hex chars> (stored proposal response)
 ```
 
 The service stores only connector/artifact metadata, hashes, run-audit hash,
@@ -105,10 +108,14 @@ GET  /api/products/:product/workspaces/:workspaceId/gcl/translation-artifacts/:r
 POST /api/products/:product/workspaces/:workspaceId/gcl/translation-artifacts/:recordId/approval
 ```
 
-An approval body is exactly `{ "decision": "approved" }` or
-`{ "decision": "rejected" }`. The maker of the proposal is rejected with
+An approval body is exactly `{ "decision": "approved", "reviewDigest": "sha256:..." }` or
+`{ "decision": "rejected", "reviewDigest": "sha256:..." }`. The digest is
+computed from the immutable, metadata-only proposal binding (connector, artifact
+binding, hashes, policy version, expiry, and linked run audit), not raw text or
+audio. The maker of the proposal is rejected with
 `maker_checker_separation_required`; only a distinct checker can decide it. A
-non-pending proposal returns a conflict. No decision can publish content.
+non-pending proposal, a mismatched digest, or an expired review returns a
+conflict. No decision can publish content.
 
 ## Artifact integrity and decision race boundary
 
@@ -134,6 +141,13 @@ must retain a canonical UTC decision time and checker identity; a pending
 artifact cannot carry either field. This is lifecycle integrity only: it never
 creates a publish, send, provider, media-byte, or live execution path.
 
+`GCL_TRANSLATION_REVIEW_TTL_MS` is required and must be a positive integer.
+The connector derives `reviewExpiresAt` from its synthetic run clock; it is not
+caller-controlled. A checker has to resubmit a newly generated synthetic
+fixture after expiry. Before adding an audit entry, the durable audit writer
+revalidates the whole product/workspace SHA-256 chain. A malformed prior entry
+returns `GCL_AUDIT_CHAIN_INVALID` and no new entry is appended.
+
 ## ADOS boundary checklist
 
 - Product/workspace scope is retained; this module makes no cross-product DB
@@ -141,8 +155,9 @@ creates a publish, send, provider, media-byte, or live execution path.
 - Default deny applies to absent synthetic gates, owner token, actor, scope,
   quota, cost cap, and malformed fixture metadata.
 - Artifacts/audit hold reference hashes and provenance, not raw content.
-- Maker and checker are separated; terminal artifact decisions are
-  compare-and-set; audit is a per-product/workspace SHA-256 chain; no migration
-  is introduced by this module.
+- Maker and checker are separated; the exact metadata digest and TTL bind a
+  decision; terminal artifact decisions are compare-and-set; audit is a
+  fail-closed, per-product/workspace SHA-256 chain; no migration is introduced
+  by this module.
 - `LIVE_DISABLED` synthetic tests and contracts do not authorize production,
   real-data ingestion, real translation, sending, publishing, or launch.
