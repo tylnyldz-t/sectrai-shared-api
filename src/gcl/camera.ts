@@ -922,6 +922,96 @@ export function validateCameraReviewAuditTrailReceipt(sourceResult: unknown, rev
   return expected
 }
 
+function reviewEvidenceManifestIntegrityMaterial(manifest: Omit<CameraReviewEvidenceManifest, 'manifestId' | 'integrityDigest'>): Record<string, unknown> {
+  return {
+    version: manifest.version,
+    scopeBinding: manifest.scopeBinding,
+    reviewId: manifest.reviewId,
+    reviewReceiptIntegrityDigest: manifest.reviewReceiptIntegrityDigest,
+    auditTrailReceiptIntegrityDigest: manifest.auditTrailReceiptIntegrityDigest,
+    state: manifest.state,
+    rawMediaIncluded: manifest.rawMediaIncluded,
+    automaticAction: manifest.automaticAction,
+    notification: manifest.notification,
+    publication: manifest.publication,
+  }
+}
+
+function reviewEvidenceManifestFor(reviewed: ReviewedCameraObservation, auditTrailReceipt: CameraReviewAuditTrailReceipt, context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): CameraReviewEvidenceManifest {
+  const scope = cameraReviewContext(context)
+  const material: Omit<CameraReviewEvidenceManifest, 'manifestId' | 'integrityDigest'> = {
+    version: CAMERA_REVIEW_EVIDENCE_MANIFEST_VERSION,
+    scopeBinding: { productDigest: digest(scope.product), workspaceDigest: digest(scope.workspaceId) },
+    reviewId: reviewed.reviewId,
+    reviewReceiptIntegrityDigest: reviewed.reviewReceipt.integrityDigest,
+    auditTrailReceiptIntegrityDigest: auditTrailReceipt.integrityDigest,
+    state: 'SYNTHETIC_REVIEW_EVIDENCE_MANIFEST_VERIFIED_NO_ACTION',
+    rawMediaIncluded: false,
+    automaticAction: false,
+    notification: 'NOT_SENT',
+    publication: 'NOT_PUBLISHED',
+  }
+  const integrityDigest = digest(JSON.stringify(reviewEvidenceManifestIntegrityMaterial(material)))
+  return {
+    ...material,
+    manifestId: `synthetic-camera-review-evidence-manifest-${digest(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
+    integrityDigest,
+  }
+}
+
+function cameraReviewEvidenceManifest(value: unknown): CameraReviewEvidenceManifest {
+  const manifest = exactObject(value, ['version', 'manifestId', 'scopeBinding', 'reviewId', 'reviewReceiptIntegrityDigest', 'auditTrailReceiptIntegrityDigest', 'state', 'rawMediaIncluded', 'automaticAction', 'notification', 'publication', 'integrityDigest'], 'UNEXPECTED_CAMERA_REVIEW_EVIDENCE_MANIFEST_FIELD')
+  const scopeBinding = exactObject(manifest.scopeBinding, ['productDigest', 'workspaceDigest'], 'INVALID_CAMERA_REVIEW_EVIDENCE_MANIFEST_SCOPE')
+  const manifestId = requiredString(manifest.manifestId, 'INVALID_CAMERA_REVIEW_EVIDENCE_MANIFEST', 80)
+  const reviewId = requiredString(manifest.reviewId, 'INVALID_CAMERA_REVIEW_EVIDENCE_MANIFEST', 64)
+  const productDigest = requiredString(scopeBinding.productDigest, 'INVALID_CAMERA_REVIEW_EVIDENCE_MANIFEST_SCOPE', 64)
+  const workspaceDigest = requiredString(scopeBinding.workspaceDigest, 'INVALID_CAMERA_REVIEW_EVIDENCE_MANIFEST_SCOPE', 64)
+  const reviewReceiptIntegrityDigest = requiredString(manifest.reviewReceiptIntegrityDigest, 'INVALID_CAMERA_REVIEW_EVIDENCE_MANIFEST', 64)
+  const auditTrailReceiptIntegrityDigest = requiredString(manifest.auditTrailReceiptIntegrityDigest, 'INVALID_CAMERA_REVIEW_EVIDENCE_MANIFEST', 64)
+  const integrityDigest = requiredString(manifest.integrityDigest, 'INVALID_CAMERA_REVIEW_EVIDENCE_MANIFEST', 64)
+  if (manifest.version !== CAMERA_REVIEW_EVIDENCE_MANIFEST_VERSION || !CAMERA_REVIEW_EVIDENCE_MANIFEST_ID_PATTERN.test(manifestId) || !CAMERA_REVIEW_ID_PATTERN.test(reviewId) || !SHA256_PATTERN.test(productDigest) || !SHA256_PATTERN.test(workspaceDigest) || !SHA256_PATTERN.test(reviewReceiptIntegrityDigest) || !SHA256_PATTERN.test(auditTrailReceiptIntegrityDigest) || !SHA256_PATTERN.test(integrityDigest) || manifest.state !== 'SYNTHETIC_REVIEW_EVIDENCE_MANIFEST_VERIFIED_NO_ACTION' || manifest.rawMediaIncluded !== false || manifest.automaticAction !== false || manifest.notification !== 'NOT_SENT' || manifest.publication !== 'NOT_PUBLISHED') {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_EVIDENCE_MANIFEST')
+  }
+  return {
+    version: CAMERA_REVIEW_EVIDENCE_MANIFEST_VERSION,
+    manifestId,
+    scopeBinding: { productDigest, workspaceDigest },
+    reviewId,
+    reviewReceiptIntegrityDigest,
+    auditTrailReceiptIntegrityDigest,
+    state: 'SYNTHETIC_REVIEW_EVIDENCE_MANIFEST_VERIFIED_NO_ACTION',
+    rawMediaIncluded: false,
+    automaticAction: false,
+    notification: 'NOT_SENT',
+    publication: 'NOT_PUBLISHED',
+    integrityDigest,
+  }
+}
+
+/**
+ * D7 derives a compact evidence manifest only after D2 and D6 independently
+ * reconstruct the same supplied review and audit segment. It is library-only
+ * and read-only: no storage read/write, quota use, route, delivery, or action.
+ */
+export function createCameraReviewEvidenceManifest(sourceResult: unknown, reviewedResult: unknown, auditTrail: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'checkedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): CameraReviewEvidenceManifest {
+  const auditTrailReceipt = createCameraReviewAuditTrailReceipt(sourceResult, reviewedResult, auditTrail, context)
+  const reviewed = validateCameraReviewReceipt(sourceResult, reviewedResult, context)
+  return reviewEvidenceManifestFor(reviewed, auditTrailReceipt, context)
+}
+
+/**
+ * D7 checks a caller-supplied manifest against freshly reconstructed D2/D6
+ * evidence. Its digest is unkeyed mutation evidence, never authorization.
+ */
+export function validateCameraReviewEvidenceManifest(sourceResult: unknown, reviewedResult: unknown, auditTrail: unknown, value: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'checkedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): CameraReviewEvidenceManifest {
+  const manifest = cameraReviewEvidenceManifest(value)
+  const expected = createCameraReviewEvidenceManifest(sourceResult, reviewedResult, auditTrail, context)
+  if (manifest.integrityDigest !== digest(JSON.stringify(reviewEvidenceManifestIntegrityMaterial(manifest))) || manifest.manifestId !== expected.manifestId || manifest.integrityDigest !== expected.integrityDigest) {
+    throw new ConnectorInputError('CAMERA_REVIEW_EVIDENCE_MANIFEST_INTEGRITY_MISMATCH')
+  }
+  return expected
+}
+
 /**
  * Records an independent synthetic-only review decision. It never mutates a
  * camera result, starts an action, contacts a device, sends a handoff, or

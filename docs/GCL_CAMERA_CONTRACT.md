@@ -156,9 +156,34 @@ deliberately unkeyed mutation evidence, not a signature, credential, durable
 audit proof, or replayable capability. It verifies only the supplied D5
 segment; no future product action is implemented here.
 
+## D7 — minimized review-evidence manifest
+
+`createCameraReviewEvidenceManifest(sourceResult, reviewedResult, trail,
+context)` first independently rebuilds D6's supplied three-event segment and
+D2's review receipt. It then emits only a compact link between those two
+integrity digests: product/workspace digests, review ID, the D2 receipt
+integrity digest, the D6 audit-trail receipt integrity digest, and fixed
+no-action flags. It intentionally omits the fixture, finding, consent, raw
+media, device information, reviewer identity, decision text, and audit hashes.
+
+`validateCameraReviewEvidenceManifest(sourceResult, reviewedResult, trail,
+manifest, context)` accepts only an exact D3-style own-data manifest and
+reconstructs both D2 and D6 before checking its canonical ID and digest.
+Unknown, hidden, symbol, Proxy, accessor, inherited, raw-media/device-shaped,
+cross-workspace, malformed, or mutated input fails closed without evaluating an
+accessor or Proxy trap.
+
+D7 is a library-only, read-only minimization seam. It does not query or write
+storage, consume quota, create a route, authenticate a person, disclose an
+audit event, send a handoff, publish, notify, or authorize an action. Its
+digest is deliberately unkeyed mutation evidence—not a signature, credential,
+durable proof, delivery instruction, or replayable capability. It verifies
+only caller-supplied D1–D6 evidence; durable lookup and every product action
+remain separate future owner decisions and are not implemented here.
+
 ## Audit and storage boundary
 
-The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1/D2/D3/D4/D5/D6 add no migration and no new persistence model.
+The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1/D2/D3/D4/D5/D6/D7 add no migration and no new persistence model.
 
 ## ADOS 10-rule conformance
 
@@ -169,8 +194,8 @@ The existing shared `gcl-audit` and `gcl-usage` records use the product/workspac
 5. Purpose-bound synthetic KVKK consent must match the fixture.
 6. Owner approval plus maker–checker separation are required; D1 rejects the original maker as reviewer and D2 minimizes that review evidence.
 7. The code has no device SDK, transport, network client, credential, or provider interface.
-8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5/D6 can only read-check a caller-supplied three-event segment and its minimized receipt.
-9. Owner review, its D2 receipt, and D4/D5/D6 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6 validate them without executing accessors or adding a write path.
+8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, while D6/D7 only minimize and recheck evidence derived from it.
+9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate them without executing accessors or adding a write path.
 10. This branch contains no live launch, production migration, main/prod write, or camera hardware path.
 
 ## Explicit non-goals
