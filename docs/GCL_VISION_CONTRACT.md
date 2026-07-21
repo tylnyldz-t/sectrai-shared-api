@@ -42,6 +42,14 @@ At review time, the module uses the caller-supplied review clock once, rejects a
 
 D2 is not revocation lookup, replay protection, or durable approval state. The binding is still unkeyed and only protects the in-process packet from accidental change. A future durable, scoped host must enforce consent revocation and one-time decision semantics before it can make a review actionable; this module still only records a synthetic review audit event and never sends or applies evidence.
 
+## D3 — bounded review-time window
+
+New proposals use `synthetic-document-review-packet-v3`. The packet adds integrity-bound `issuedAt` and `reviewBy` metadata. A controlled synthetic configuration must explicitly set `GCL_VISION_MAX_REVIEW_AGE_SECONDS`; it must be a positive integer no greater than one day. The actual deadline is the earlier of that interval and the consent expiry, so a proposal can never outlive its consent.
+
+At review time the module denies a reviewer clock before issuance and denies the exact deadline boundary (`reviewBy <= review time`) before appending audit. It also rejects absent or extended review windows, non-canonical timestamps, zero/negative windows, windows longer than one day, extra window fields, and integrity changes. D3 intentionally rejects v1/v2 packets: they have no bounded issuance/deadline evidence, so deny is safer than grandfathering.
+
+D3 does not turn the packet into a signed token, durable review state, replay control, a retention store, or an apply/send authorization. It only limits the lifetime of an in-process synthetic review proposal; a future durable scoped host must independently enforce any one-time decision and retention policy.
+
 ## Safe configuration
 
 These values configure a synthetic proposal limit only; they cannot enable a provider or a live execution path:
@@ -50,12 +58,13 @@ These values configure a synthetic proposal limit only; they cannot enable a pro
 GCL_VISION_LIVE_MODE=LIVE_DISABLED
 GCL_VISION_MAX_COST_CENTS=20
 GCL_VISION_MAX_ITEMS=1
+GCL_VISION_MAX_REVIEW_AGE_SECONDS=3600
 GCL_VISION_DAILY_RUN_QUOTA=5
 GCL_VISION_DAILY_ITEM_QUOTA=5
 ```
 
-No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`. D1/D2 add no persistence, review-state mutation, migration, credential, or network client.
+No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`. D1/D2/D3 add no persistence, review-state mutation, migration, credential, or network client.
 
 ## ADOS controls
 
-The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. D1 additionally rejects review-packet tampering and cross-scope review before audit; D2 default-denies stale or legacy consent evidence at review time. It makes no migration, promotion, publication, or provider request.
+The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. D1 additionally rejects review-packet tampering and cross-scope review before audit; D2 default-denies stale consent evidence; D3 default-denies a packet outside its bounded review window. It makes no migration, promotion, publication, or provider request.

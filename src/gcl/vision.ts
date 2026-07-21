@@ -15,7 +15,9 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v2' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v3' as const
+/** A synthetic packet must never remain reviewable indefinitely. */
+const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
 
 const fieldNames = [
   'containerId', 'referenceNumber', 'importOrderNumber', 'exportOrderNumber', 'loadType', 'loadAmount', 'loadWeight',
@@ -85,6 +87,11 @@ export type SyntheticDocumentReviewPacket = {
     policyVersionDigest: string
     expiresAt: string
   }
+  /** Metadata-only, integrity-bound deadline; it is not a capability or token. */
+  reviewWindow: {
+    issuedAt: string
+    reviewBy: string
+  }
   state: 'PENDING_INDEPENDENT_OWNER_REVIEW'
   rawDocumentContentIncluded: false
   automaticApply: false
@@ -136,6 +143,8 @@ export type SyntheticVisionConnectorConfig = {
   liveMode?: string
   maxCostCapCents?: number
   maxItems?: number
+  /** Required, positive, and capped at one day; it cannot enable live OCR. */
+  maxReviewAgeSeconds?: number
 }
 
 function digest(value: string): string { return createHash('sha256').update(value).digest('hex') }
@@ -174,6 +183,7 @@ function reviewPacketIntegrityMaterial(
   proposal: Omit<SyntheticDocumentProposal, 'reviewPacket'>,
   scopeBinding: SyntheticDocumentReviewPacket['scopeBinding'],
   consentBinding: SyntheticDocumentReviewPacket['consentBinding'],
+  reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): Record<string, unknown> {
   return {
     proposalId: proposal.proposalId,
@@ -188,6 +198,7 @@ function reviewPacketIntegrityMaterial(
     mesaEvidenceHandoff: proposal.mesaEvidenceHandoff,
     scopeBinding,
     consentBinding,
+    reviewWindow,
   }
 }
 function reviewPacketFor(
@@ -195,14 +206,19 @@ function reviewPacketFor(
   product: string,
   workspaceId: string,
   consent: DocumentConsentAssertion,
+  issuedAt: Date,
+  maxReviewAgeSeconds: number,
 ): SyntheticDocumentReviewPacket {
   const scopeBinding = { productDigest: digest(product), workspaceDigest: digest(workspaceId) }
   const consentBinding = { purpose: consent.purpose, policyVersionDigest: digest(consent.policyVersion), expiresAt: consent.expiresAt }
+  const reviewByMilliseconds = Math.min(issuedAt.getTime() + (maxReviewAgeSeconds * 1000), new Date(consent.expiresAt).getTime())
+  const reviewWindow = { issuedAt: issuedAt.toISOString(), reviewBy: new Date(reviewByMilliseconds).toISOString() }
   return {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
-    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding))),
+    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, reviewWindow))),
     scopeBinding,
     consentBinding,
+    reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
     rawDocumentContentIncluded: false,
     automaticApply: false,
@@ -333,6 +349,18 @@ function reviewedConsentBinding(value: unknown, reviewedAt: Date): SyntheticDocu
   return { purpose: 'document-field-extraction', policyVersionDigest, expiresAt: expiresAt.toISOString() }
 }
 
+function reviewedReviewWindow(value: unknown, reviewedAt: Date): SyntheticDocumentReviewPacket['reviewWindow'] {
+  if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_WINDOW')
+  exactKeys(value, ['issuedAt', 'reviewBy'], 'UNEXPECTED_DOCUMENT_REVIEW_WINDOW_FIELD')
+  const issuedAt = parsedDate(value.issuedAt, 'INVALID_DOCUMENT_REVIEW_WINDOW_ISSUED_AT')
+  const reviewBy = parsedDate(value.reviewBy, 'INVALID_DOCUMENT_REVIEW_WINDOW_DEADLINE')
+  const reviewWindowMilliseconds = reviewBy.getTime() - issuedAt.getTime()
+  if (reviewWindowMilliseconds <= 0 || reviewWindowMilliseconds > MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS * 1000) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_WINDOW')
+  if (issuedAt.getTime() > reviewedAt.getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_TIME_BEFORE_ISSUED')
+  if (reviewBy.getTime() <= reviewedAt.getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_EXPIRED')
+  return { issuedAt: issuedAt.toISOString(), reviewBy: reviewBy.toISOString() }
+}
+
 function validateSyntheticDocumentProposalForReviewAt(
   proposal: unknown,
   context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>,
@@ -366,7 +394,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const mesaEvidenceHandoff: SyntheticDocumentProposal['mesaEvidenceHandoff'] = { state: 'BLOCKED_PENDING_INDEPENDENT_OWNER_REVIEW', referenceOnly: true, rawContentIncluded: false, sent: false }
 
   if (!isRecord(proposal.reviewPacket)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET')
-  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
+  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
   if (proposal.reviewPacket.version !== SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
   if (!isRecord(proposal.reviewPacket.scopeBinding)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_SCOPE')
   exactKeys(proposal.reviewPacket.scopeBinding, ['productDigest', 'workspaceDigest'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_SCOPE_FIELD')
@@ -375,11 +403,13 @@ function validateSyntheticDocumentProposalForReviewAt(
   const integrityDigest = requiredString(proposal.reviewPacket.integrityDigest, 'INVALID_DOCUMENT_REVIEW_PACKET_DIGEST', 64)
   if (!SHA256_PATTERN.test(productDigest) || !SHA256_PATTERN.test(workspaceDigest) || !SHA256_PATTERN.test(integrityDigest)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_DIGEST')
   const consentBinding = reviewedConsentBinding(proposal.reviewPacket.consentBinding, reviewedAt)
+  const reviewWindow = reviewedReviewWindow(proposal.reviewPacket.reviewWindow, reviewedAt)
   const reviewPacket: SyntheticDocumentReviewPacket = {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
     integrityDigest,
     scopeBinding: { productDigest, workspaceDigest },
     consentBinding,
+    reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
     rawDocumentContentIncluded: false,
     automaticApply: false,
@@ -387,7 +417,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   }
   if (proposal.reviewPacket.state !== reviewPacket.state || proposal.reviewPacket.rawDocumentContentIncluded !== false || proposal.reviewPacket.automaticApply !== false || proposal.reviewPacket.automaticPublication !== false || productDigest !== digest(scoped.product) || workspaceDigest !== digest(scoped.workspaceId)) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_SCOPE_MISMATCH')
   const normalized: SyntheticDocumentProposal = { proposalId, syntheticUri: proposal.syntheticUri, preparedBy, mode: LIVE_DISABLED, extraction: 'SYNTHETIC_PROPOSAL_ONLY_NOT_OCR', evidence, fields, fieldsDigest, ownerReview, reviewPacket, mesaEvidenceHandoff }
-  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
   return normalized
 }
 
@@ -414,13 +444,15 @@ export class SyntheticVisionDocumentFieldExtractionConnector implements Connecto
 
   constructor(private readonly config: SyntheticVisionConnectorConfig = {}) {}
 
-  private configured(context: ConnectorRunContext): void {
+  private configured(context: ConnectorRunContext): number {
     if ((this.config.liveMode ?? LIVE_DISABLED) !== LIVE_DISABLED) throw new ConnectorUnavailableError('VISION_DOCUMENT_FIELD_EXTRACTION_LIVE_DISABLED')
     if (!positiveInteger(this.config.maxCostCapCents) || !positiveInteger(this.config.maxItems)) throw new ConnectorUnavailableError('VISION_DOCUMENT_GOVERNANCE_LIMITS_NOT_CONFIGURED')
+    if (!positiveInteger(this.config.maxReviewAgeSeconds) || this.config.maxReviewAgeSeconds > MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS) throw new ConnectorUnavailableError('VISION_DOCUMENT_REVIEW_WINDOW_NOT_CONFIGURED')
     if (!positiveInteger(context.costCapCents) || !positiveInteger(context.requestedItems)) throw new CostCapError('INVALID_VISION_GOVERNANCE_REQUEST')
     if (context.costCapCents > this.config.maxCostCapCents) throw new CostCapError()
     if (context.requestedItems > this.config.maxItems) throw new CostCapError('CONNECTOR_ITEM_CAP_EXCEEDED')
     if (context.requestedItems !== 1) throw new CostCapError('VISION_DOCUMENT_SINGLE_EVIDENCE_ONLY')
+    return this.config.maxReviewAgeSeconds
   }
 
   preflight(input: SyntheticDocumentScanInput, context: ConnectorRunContext): void {
@@ -429,12 +461,13 @@ export class SyntheticVisionDocumentFieldExtractionConnector implements Connecto
   }
 
   async run(input: SyntheticDocumentScanInput, context: ConnectorRunContext): Promise<ConnectorResult<DocumentFieldExtractionData>> {
-    this.configured(context)
-    const normalized = normalizedInput(input, context.now())
+    const maxReviewAgeSeconds = this.configured(context)
+    const issuedAt = reviewNow(context)
+    const normalized = normalizedInput(input, issuedAt)
     const fields = fieldsFrom(normalized)
     const fieldsDigest = fieldsDigestFrom(fields)
     const proposalId = proposalIdFor(context.product, context.workspaceId, normalized.evidence.sha256, fieldsDigest)
-    const generatedAt = context.now().toISOString()
+    const generatedAt = issuedAt.toISOString()
     const proposalWithoutReviewPacket: Omit<SyntheticDocumentProposal, 'reviewPacket'> = {
       proposalId,
       syntheticUri: `synthetic://gcl/${this.id}/${proposalId}`,
@@ -447,7 +480,7 @@ export class SyntheticVisionDocumentFieldExtractionConnector implements Connecto
       ownerReview: { status: 'pending', required: true, visibility: 'owner-only', automaticApply: false, automaticPublication: false },
       mesaEvidenceHandoff: { state: 'BLOCKED_PENDING_INDEPENDENT_OWNER_REVIEW', referenceOnly: true, rawContentIncluded: false, sent: false },
     }
-    const proposal: SyntheticDocumentProposal = { ...proposalWithoutReviewPacket, reviewPacket: reviewPacketFor(proposalWithoutReviewPacket, context.product, context.workspaceId, normalized.consent) }
+    const proposal: SyntheticDocumentProposal = { ...proposalWithoutReviewPacket, reviewPacket: reviewPacketFor(proposalWithoutReviewPacket, context.product, context.workspaceId, normalized.consent, issuedAt, maxReviewAgeSeconds) }
     return {
       data: { mode: LIVE_DISABLED, proposal, nextAction: 'INDEPENDENT_OWNER_REVIEW_REQUIRED', automaticApply: false, automaticPublication: false },
       provenance: {
@@ -499,5 +532,6 @@ export function syntheticVisionDocumentFieldExtractionConnectorFromEnvironment(e
     liveMode: environment.GCL_VISION_LIVE_MODE,
     maxCostCapCents: environmentPositiveInteger(environment.GCL_VISION_MAX_COST_CENTS),
     maxItems: environmentPositiveInteger(environment.GCL_VISION_MAX_ITEMS),
+    maxReviewAgeSeconds: environmentPositiveInteger(environment.GCL_VISION_MAX_REVIEW_AGE_SECONDS),
   })
 }
