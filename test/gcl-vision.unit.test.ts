@@ -93,13 +93,14 @@ test('GM2 run requires owner gate, scope, cost cap, quota, consent, and creates 
   assert.equal(proposal.evidence.rawContentStored, false)
   assert.equal(proposal.ownerReview.status, 'pending')
   assert.equal(proposal.ownerReview.automaticApply, false)
-  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v5')
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v6')
   assert.match(proposal.reviewPacket.integrityDigest, /^[a-f0-9]{64}$/)
   assert.equal(proposal.reviewPacket.scopeBinding.productDigest.length, 64)
   assert.equal(proposal.reviewPacket.consentBinding.purpose, 'document-field-extraction')
   assert.match(proposal.reviewPacket.consentBinding.policyVersionDigest, /^[a-f0-9]{64}$/)
   assert.equal(proposal.reviewPacket.consentBinding.expiresAt, input.consent.expiresAt)
   assert.equal(JSON.stringify(proposal.reviewPacket).includes('kvkk-v1'), false)
+  assert.deepEqual(proposal.reviewPacket.governanceBinding, { maxReviewAgeSeconds: 60, maxEvidenceAgeSeconds: 300 })
   assert.equal(proposal.reviewPacket.evidenceBinding.capturedAt, input.evidence.capturedAt)
   assert.equal(proposal.reviewPacket.evidenceBinding.expiresAt, '2026-07-22T12:04:00.000Z')
   assert.equal(proposal.reviewPacket.reviewWindow.issuedAt, now().toISOString())
@@ -232,7 +233,7 @@ test('D3 bounds review time and rejects an expired, pre-issued, malformed, overs
 
   const alteredWindow = clone()
   alteredWindow.reviewPacket.reviewWindow.reviewBy = '2026-07-22T12:00:30.000Z'
-  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(alteredWindow, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(alteredWindow, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_WINDOW_DERIVATION_MISMATCH')
   assert.equal(audit.entries.length, 2)
   assert.equal(quota.requests.length, 1)
 })
@@ -265,7 +266,7 @@ test('D4 binds reviewability to fresh evidence and rejects stale, legacy, malfor
 
   const extendedEvidence = clone()
   extendedEvidence.reviewPacket.evidenceBinding.expiresAt = '2026-07-22T12:00:45.000Z'
-  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(extendedEvidence, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(extendedEvidence, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_EVIDENCE_EXPIRY_MISMATCH')
 
   const reviewBeyondEvidence = clone()
   reviewBeyondEvidence.reviewPacket.reviewWindow.reviewBy = '2026-07-22T12:00:31.000Z'
@@ -286,7 +287,7 @@ test('D5 requires a causally coherent review timeline and refuses review deadlin
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input: consentBoundInput, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
 
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v5')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v6')
   assert.equal(result.data.proposal.reviewPacket.reviewWindow.reviewBy, consentBoundInput.consent.expiresAt)
 
   const deadlineBeyondConsent = clone()
@@ -301,6 +302,43 @@ test('D5 requires a causally coherent review timeline and refuses review deadlin
 
   const legacyPacket = clone()
   legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v4' as never
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(legacyPacket, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
+  assert.equal(audit.entries.length, 2)
+  assert.equal(quota.requests.length, 1)
+})
+
+test('D6 derives exact review and evidence deadlines from integrity-bound synthetic governance limits before audit append', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
+  const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
+  const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
+
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v6')
+  assert.deepEqual(result.data.proposal.reviewPacket.governanceBinding, { maxReviewAgeSeconds: 60, maxEvidenceAgeSeconds: 300 })
+
+  const missingBinding = clone()
+  delete (missingBinding.reviewPacket as { governanceBinding?: unknown }).governanceBinding
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(missingBinding, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_GOVERNANCE_BINDING')
+
+  const extraBindingField = clone()
+  ;(extraBindingField.reviewPacket.governanceBinding as { untrusted?: unknown }).untrusted = true
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(extraBindingField, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_DOCUMENT_REVIEW_GOVERNANCE_BINDING_FIELD')
+
+  const invalidReviewLimit = clone()
+  invalidReviewLimit.reviewPacket.governanceBinding.maxReviewAgeSeconds = 0
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(invalidReviewLimit, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_GOVERNANCE_BINDING')
+
+  const shortenedEvidenceWindow = clone()
+  shortenedEvidenceWindow.reviewPacket.evidenceBinding.expiresAt = '2026-07-22T12:03:59.000Z'
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(shortenedEvidenceWindow, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_EVIDENCE_EXPIRY_MISMATCH')
+
+  const shortenedReviewWindow = clone()
+  shortenedReviewWindow.reviewPacket.reviewWindow.reviewBy = '2026-07-22T12:00:59.000Z'
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(shortenedReviewWindow, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_WINDOW_DERIVATION_MISMATCH')
+
+  const legacyPacket = clone()
+  legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v5' as never
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(legacyPacket, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
   assert.equal(audit.entries.length, 2)
   assert.equal(quota.requests.length, 1)
