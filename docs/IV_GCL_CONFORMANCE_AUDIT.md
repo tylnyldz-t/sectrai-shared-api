@@ -151,3 +151,71 @@ the audit boundary; no owner decision is inferred; camera alone proves the
 maker–checker edge; audit-chain gaps are reported rather than hidden; no
 migration is introduced; all outputs remain proposal-only; no JARVIS job is
 started; and synthetic testing is not a launch decision.
+
+## D2 — next committed connector package
+
+This follow-up is again a source-only audit.  It pins the next committed
+connector package, rather than observing a sibling worktree: RA OCR
+`b8d9505`, RA image `ee498bf`, RA 3D/game `e896365`, RA market `e20e176`,
+RFID `14f069a`, translation `eff19c3`, and camera `9a3841a`.  Voice and
+language-education had no subsequent committed connector/runner package, so
+they remain D1 evidence; a language-education cleanup-only commit is not
+treated as a new connector audit.
+
+The fixture reads each named Git object with `git show`, checks the connector
+and runner blob IDs, and follows only its local `src/gcl` import closure.  It
+does not read mutable target source, import a connector, load an environment
+file, start a worker, open a socket, or contact a provider.  Missing local
+repositories, commits, paths, or blob mismatches fail the audit.  Run the
+complete D1/D2 fixture with:
+
+```bash
+npm run test:conformance
+```
+
+| Connector | D2 source-only change/evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D2 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Synthetic document review packet and independent-review validation | `requested` only | Pass | Nonconformant |
+| RA image | Synthetic image-review ledger closure | `requested` only | Pass | Nonconformant |
+| RA 3D/game | JNC contract test/documentation package | `requested` only | Pass | Nonconformant |
+| RA market | Literal `false` is now required; absent, malformed, and true live settings deny | `requested` only | Pass | Nonconformant |
+| RFID | `quota.consume` is inside the protected lifecycle; failure detail forwards `requestedAudit.hash` | `requested`, `failed` | Pass | Conformant |
+| Translation | Latest committed artifact-contract package (connector blob is unchanged) | `requested` only | Pass | Nonconformant |
+| Camera | ADOS control evidence and synthetic review hardening | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` in this table means only that the immutable source meets this IV
+synthetic GCL envelope.  It is neither live-provider approval nor permission
+to connect a device, run a JARVIS/JNC job, write production data, publish, or
+send an output.
+
+### D2 negative and edge evidence
+
+- The closure check now permits only local GCL files and the non-transport
+  `node:crypto` module.  A static import of a runtime/transport module fails.
+- Dynamic `import(...)`, CommonJS `require(...)`/`module.require(...)`, and
+  `createRequire(...)` fail.  This closes a dependency-loading bypass that a
+  direct egress-call scan alone would miss.
+- Direct egress primitives remain denied; `globalThis['fetch']` (and the
+  equivalent XMLHttpRequest/WebSocket client lookup) is now also an explicit
+  negative probe.  Bracket-style credential reads such as
+  `process.env['SYNTHETIC_API_KEY']` likewise fail.
+- The source classifier recognizes both direct failure links and a local
+  helper that receives `requestedAudit.hash` and emits `requestedAuditHash`.
+  This records RFID's protected quota failure accurately without claiming the
+  same behaviour for runners that reserve quota before `try`.
+- Owner denial is still required before preflight, requested-audit append, or
+  quota reservation.  The static check accepts the equivalent strict form
+  `ownerApproved !== true`; it does not infer an approval from fixtures.
+
+### D2 remediation and ADOS boundary
+
+RA OCR, image, 3D/game, market, and translation still need their quota
+reservation inside the protected `try` (or an equivalent linked failed-audit
+path) plus behavioural rejecting-quota tests before GCL certification.  The
+D1 Apify live-opt-in blocker is unchanged and remains outside this D2 package.
+
+All ten ADOS rules remain in force: no product data-plane join; default-deny
+gates (including RA market's strict-false setting); source/blob pointers only
+across the audit boundary; no inferred owner decision; maker–checker retained
+for camera; audit gaps reported; no migration; proposal-only output; no JARVIS
+or JNC launch; and a synthetic source test is not a deployment decision.
