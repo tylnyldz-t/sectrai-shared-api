@@ -181,10 +181,21 @@ function containsControlCharacter(value: string): boolean {
   })
 }
 
-function reviewActor(value: unknown): string {
-  if (typeof value !== 'string' || !value.trim() || value.length > 160 || containsControlCharacter(value)) throw new OwnerGateError('CAMERA_REVIEWER_REQUIRED')
+function normalizedActor(value: unknown): string | null {
+  if (typeof value !== 'string' || !value.trim() || value.length > 160 || containsControlCharacter(value)) return null
   const actor = value.trim()
-  if (!ACTOR_PATTERN.test(actor)) throw new OwnerGateError('CAMERA_REVIEWER_REQUIRED')
+  return ACTOR_PATTERN.test(actor) ? actor : null
+}
+
+function reviewActor(value: unknown): string {
+  const actor = normalizedActor(value)
+  if (!actor) throw new OwnerGateError('CAMERA_REVIEWER_REQUIRED')
+  return actor
+}
+
+function reviewRequester(value: unknown): string {
+  const actor = normalizedActor(value)
+  if (!actor) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_REQUESTER')
   return actor
 }
 
@@ -338,12 +349,13 @@ export async function independentlyReviewCameraObservation(result: CameraObserva
   if (!ownerApproved) throw new OwnerGateError()
   if (decision !== 'approved' && decision !== 'rejected') throw new ConnectorInputError('INVALID_CAMERA_REVIEW_DECISION')
   const normalizedReviewer = reviewActor(reviewer)
+  const normalizedRequester = reviewRequester(context.requestedBy)
   const normalized = validateCameraObservationForReview(result, context)
-  if (normalizedReviewer === context.requestedBy) throw new MakerCheckerError('CAMERA_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
+  if (normalizedReviewer === normalizedRequester) throw new MakerCheckerError('CAMERA_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
   const occurredAt = context.now().toISOString()
   const audit = await auditLog.append({
     type: 'connector.camera.owner_reviewed', connectorId: CAMERA_CONNECTOR_ID,
-    product: context.product, workspaceId: context.workspaceId, requestedBy: context.requestedBy, checkedBy: normalizedReviewer,
+    product: context.product, workspaceId: context.workspaceId, requestedBy: normalizedRequester, checkedBy: normalizedReviewer,
     correlationId: context.correlationId, scopes: [CAMERA_SCOPE], costCapCents: context.costCapCents, requestedItems: context.requestedItems,
     occurredAt,
     detail: {

@@ -156,6 +156,11 @@ test('D1 fails closed before review audit append for tampered, cross-scope, raw-
     () => independentlyReviewCameraObservation(clone(), 'approved', true, context.requestedBy, setup.audit, context),
     (error: unknown) => error instanceof MakerCheckerError && error.message === 'CAMERA_REVIEW_REQUIRES_INDEPENDENT_CHECKER',
   )
+  const spacedMakerContext = { ...context, requestedBy: ` ${context.requestedBy} ` }
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(clone(), 'approved', true, context.requestedBy, setup.audit, spacedMakerContext),
+    (error: unknown) => error instanceof MakerCheckerError && error.message === 'CAMERA_REVIEW_REQUIRES_INDEPENDENT_CHECKER',
+  )
   await assert.rejects(
     () => independentlyReviewCameraObservation(clone(), 'approved', false, 'reviewer@example.test', setup.audit, context),
     (error: unknown) => error instanceof OwnerGateError,
