@@ -230,15 +230,15 @@ function reviewRequester(value: unknown): string {
 }
 
 function inputFrom(value: unknown): CameraObservationInput {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError('SYNTHETIC_CAMERA_INPUT_REQUIRED')
-  const input = value as Record<string, unknown>
+  if (!isRecord(value)) throw new ConnectorInputError('SYNTHETIC_CAMERA_INPUT_REQUIRED')
+  const input = value
   if (Object.keys(input).some((key) => !['synthetic', 'cameraFixtureId', 'purpose', 'consent'].includes(key))) throw new ConnectorInputError('SYNTHETIC_CAMERA_INPUT_REQUIRED')
   if (input.synthetic !== true || typeof input.cameraFixtureId !== 'string' || (input.purpose !== 'operational-safety' && input.purpose !== 'site-security')) {
     throw new ConnectorInputError('SYNTHETIC_CAMERA_INPUT_REQUIRED')
   }
   const consent = input.consent
-  if (!consent || typeof consent !== 'object' || Array.isArray(consent)) throw new CameraConsentError()
-  const assertion = consent as Record<string, unknown>
+  if (!isRecord(consent)) throw new CameraConsentError()
+  const assertion = consent
   if (Object.keys(assertion).some((key) => !['state', 'receiptRef', 'policyVersion', 'sourceRights'].includes(key))) throw new CameraConsentError()
   if (assertion.state !== 'granted' || typeof assertion.receiptRef !== 'string' || assertion.policyVersion !== 'kvkk-synthetic-v1' || assertion.sourceRights !== 'synthetic-fixture') {
     throw new CameraConsentError()

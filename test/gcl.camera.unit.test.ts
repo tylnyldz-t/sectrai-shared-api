@@ -65,6 +65,14 @@ test('camera adapter rejects raw-media and device-shaped input before any fixtur
     () => connector.run({ ...loadingDockInput, cameraUrl: 'rtsp://not-accepted.example.test/stream' }, context),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'SYNTHETIC_CAMERA_INPUT_REQUIRED',
   )
+  await assert.rejects(
+    () => connector.run(Object.create(loadingDockInput), context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'SYNTHETIC_CAMERA_INPUT_REQUIRED',
+  )
+  await assert.rejects(
+    () => connector.run({ ...loadingDockInput, consent: Object.create(loadingDockInput.consent) }, context),
+    (error: unknown) => error instanceof CameraConsentError && error.message === 'CAMERA_CONSENT_REQUIRED',
+  )
 })
 
 test('admitted synthetic observation contains no media, device identifier, identity, action, notification, or publication path', async () => {
