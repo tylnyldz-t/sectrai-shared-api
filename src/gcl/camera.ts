@@ -28,12 +28,12 @@ export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every audit and review packet is bound to one product and workspace digest.' },
   { id: 'ADOS-02', control: 'MINIMIZED_SYNTHETIC_FIXTURE', enforcement: 'Only an allowlisted synthetic fixture ID and fixed finding are resolved.' },
   { id: 'ADOS-03', control: 'DEFAULT_DENY_LIVE_DISABLED', enforcement: 'Synthetic enablement and positive limits are required; a live flag is rejected.' },
-  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown, hidden, symbol, proxy, or accessor-shaped input fields, media, device identifiers, identity resolution, and biometric inference are denied.' },
+  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown, hidden, symbol, proxy, or accessor-shaped input, evidence, and D8 caller-context fields, media, device identifiers, identity resolution, and biometric inference are denied.' },
   { id: 'ADOS-05', control: 'PURPOSE_BOUND_CONSENT', enforcement: 'A granted synthetic KVKK consent assertion must match the selected fixture and purpose.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'The governed run requires owner approval and separate request/check actors; review rejects the original maker.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIAL_INTERFACE', enforcement: 'The adapter has no camera SDK, network client, stream URL, credential, or provider configuration surface.' },
-  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment and D6/D7 only render its minimized evidence.' },
-  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6/D7 witnesses record only an approved or rejected decision; action, notification, publication, and handoff remain not sent.' },
+  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment, D6/D7 only render minimized evidence, and D8 rejects shaped caller context before review audit append.' },
+  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6/D7 witnesses record only an approved or rejected decision; D8 only validates their caller context; action, notification, publication, and handoff remain not sent.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or camera connection is part of this connector.' },
 ])
 
@@ -239,6 +239,10 @@ const CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_ID_PATTERN = /^synthetic-camera-review-a
 const CAMERA_REVIEW_EVIDENCE_MANIFEST_ID_PATTERN = /^synthetic-camera-review-evidence-manifest-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
+const CAMERA_REVIEW_CONTEXT_FIELDS = [
+  'product', 'workspaceId', 'requestedBy', 'checkedBy', 'correlationId',
+  'ownerApproved', 'scopes', 'costCapCents', 'requestedItems', 'now',
+] as const
 
 const FIXTURES: Readonly<Record<string, CameraFixture>> = Object.freeze({
   'synthetic-loading-dock-001': {
@@ -316,11 +320,26 @@ function requiredString(value: unknown, error: string, maximumLength: number): s
   return value
 }
 
-function cameraReviewContext(context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): { product: string; workspaceId: string } {
-  if (typeof context.product !== 'string' || typeof context.workspaceId !== 'string' || !SCOPE_ID_PATTERN.test(context.product) || !SCOPE_ID_PATTERN.test(context.workspaceId)) {
+/**
+ * D8 applies D3's own-data rule to every caller-provided review context.
+ * It accepts the documented context subsets and the full runner context, but
+ * never reads an accessor or a Proxy trap and never tolerates extra fields.
+ */
+function cameraReviewContextRecord(value: unknown): Record<string, unknown> {
+  return exactObject(value, CAMERA_REVIEW_CONTEXT_FIELDS, 'UNEXPECTED_CAMERA_REVIEW_CONTEXT_FIELD')
+}
+
+function cameraReviewScopeFromRecord(context: Record<string, unknown>): { product: string; workspaceId: string } {
+  const product = context.product
+  const workspaceId = context.workspaceId
+  if (typeof product !== 'string' || typeof workspaceId !== 'string' || !SCOPE_ID_PATTERN.test(product) || !SCOPE_ID_PATTERN.test(workspaceId)) {
     throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CONTEXT')
   }
-  return { product: context.product, workspaceId: context.workspaceId }
+  return { product, workspaceId }
+}
+
+function cameraReviewContext(context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): { product: string; workspaceId: string } {
+  return cameraReviewScopeFromRecord(cameraReviewContextRecord(context))
 }
 
 function containsControlCharacter(value: string): boolean {
@@ -346,6 +365,24 @@ function reviewRequester(value: unknown): string {
   const actor = normalizedActor(value)
   if (!actor) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_REQUESTER')
   return actor
+}
+
+function cameraReviewAuditWitnessContext(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): { product: string; workspaceId: string; requestedBy: string; correlationId: string; costCapCents: number; requestedItems: number } {
+  const candidate = cameraReviewContextRecord(context)
+  const scope = cameraReviewScopeFromRecord(candidate)
+  const requestedBy = reviewRequester(candidate.requestedBy)
+  const correlationId = requiredString(candidate.correlationId, 'INVALID_CAMERA_REVIEW_CONTEXT', 120)
+  const costCapCents = positiveInteger(candidate.costCapCents)
+  const requestedItems = positiveInteger(candidate.requestedItems)
+  if (!SCOPE_ID_PATTERN.test(correlationId) || !costCapCents || !requestedItems) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CONTEXT')
+  return { ...scope, requestedBy, correlationId, costCapCents, requestedItems }
+}
+
+function independentCameraReviewContext(context: ConnectorRunContext): { product: string; workspaceId: string; requestedBy: string; correlationId: string; costCapCents: number; requestedItems: number; now: () => Date } {
+  const candidate = cameraReviewContextRecord(context)
+  const witness = cameraReviewAuditWitnessContext(candidate as Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>)
+  if (typeof candidate.now !== 'function') throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CONTEXT')
+  return { ...witness, now: candidate.now as () => Date }
 }
 
 function inputFrom(value: unknown): CameraObservationInput {
@@ -697,17 +734,13 @@ function cameraReviewAuditEntry(value: unknown): CameraReviewAuditEntry {
  * that a supplied predecessor exists, and it never grants an action capability.
  */
 export function validateCameraReviewAuditWitness(sourceResult: unknown, reviewedResult: unknown, auditEntry: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): CameraReviewAuditWitness {
-  const source = validateCameraObservationForReview(sourceResult, context)
-  const reviewed = validateCameraReviewReceipt(source, reviewedResult, context)
+  const witnessContext = cameraReviewAuditWitnessContext(context)
+  const source = validateCameraObservationForReview(sourceResult, witnessContext)
+  const reviewed = validateCameraReviewReceipt(source, reviewedResult, witnessContext)
   const entry = cameraReviewAuditEntry(auditEntry)
-  const requestedBy = reviewRequester(context.requestedBy)
-  const correlationId = requiredString(context.correlationId, 'INVALID_CAMERA_REVIEW_CONTEXT', 120)
-  const costCapCents = positiveInteger(context.costCapCents)
-  const requestedItems = positiveInteger(context.requestedItems)
-  if (!SCOPE_ID_PATTERN.test(correlationId) || !costCapCents || !requestedItems) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CONTEXT')
   if (entry.hash !== hashAuditEvent(entry.event, entry.previousHash)) throw new ConnectorInputError('CAMERA_REVIEW_AUDIT_HASH_MISMATCH')
   const detail = entry.event.detail
-  if (entry.event.type !== 'connector.camera.owner_reviewed' || entry.event.connectorId !== CAMERA_CONNECTOR_ID || entry.event.product !== context.product || entry.event.workspaceId !== context.workspaceId || entry.event.requestedBy !== requestedBy || entry.event.checkedBy !== reviewed.ownerReview.reviewer || entry.event.correlationId !== correlationId || entry.event.scopes.length !== 1 || entry.event.scopes[0] !== CAMERA_SCOPE || entry.event.costCapCents !== costCapCents || entry.event.requestedItems !== requestedItems || entry.event.occurredAt !== reviewed.ownerReview.occurredAt || detail.reviewId !== source.reviewPacket.reviewId || detail.decision !== reviewed.decision || detail.observationDigest !== source.reviewPacket.observationDigest || detail.reviewPacketIntegrityDigest !== source.reviewPacket.integrityDigest || entry.hash !== reviewed.auditHash) {
+  if (entry.event.type !== 'connector.camera.owner_reviewed' || entry.event.connectorId !== CAMERA_CONNECTOR_ID || entry.event.product !== witnessContext.product || entry.event.workspaceId !== witnessContext.workspaceId || entry.event.requestedBy !== witnessContext.requestedBy || entry.event.checkedBy !== reviewed.ownerReview.reviewer || entry.event.correlationId !== witnessContext.correlationId || entry.event.scopes.length !== 1 || entry.event.scopes[0] !== CAMERA_SCOPE || entry.event.costCapCents !== witnessContext.costCapCents || entry.event.requestedItems !== witnessContext.requestedItems || entry.event.occurredAt !== reviewed.ownerReview.occurredAt || detail.reviewId !== source.reviewPacket.reviewId || detail.decision !== reviewed.decision || detail.observationDigest !== source.reviewPacket.observationDigest || detail.reviewPacketIntegrityDigest !== source.reviewPacket.integrityDigest || entry.hash !== reviewed.auditHash) {
     throw new ConnectorInputError('CAMERA_REVIEW_AUDIT_MISMATCH')
   }
   return {
@@ -768,13 +801,14 @@ function cameraGovernedRunAuditEntry(value: unknown, expectedType: 'connector.ru
 }
 
 function auditTrailContext(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'checkedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): { product: string; workspaceId: string; requestedBy: string; checkedBy: string; correlationId: string; costCapCents: number; requestedItems: number } {
-  const scope = cameraReviewContext(context)
-  const requestedBy = normalizedActor(context.requestedBy)
-  const checkedBy = normalizedActor(context.checkedBy)
-  const correlationId = typeof context.correlationId === 'string' ? context.correlationId : ''
-  const costCapCents = positiveInteger(context.costCapCents)
-  const requestedItems = positiveInteger(context.requestedItems)
-  if (!requestedBy || requestedBy !== context.requestedBy || !checkedBy || checkedBy !== context.checkedBy || requestedBy === checkedBy || !SCOPE_ID_PATTERN.test(correlationId) || !costCapCents || !requestedItems) {
+  const candidate = cameraReviewContextRecord(context)
+  const scope = cameraReviewScopeFromRecord(candidate)
+  const requestedBy = normalizedActor(candidate.requestedBy)
+  const checkedBy = normalizedActor(candidate.checkedBy)
+  const correlationId = typeof candidate.correlationId === 'string' ? candidate.correlationId : ''
+  const costCapCents = positiveInteger(candidate.costCapCents)
+  const requestedItems = positiveInteger(candidate.requestedItems)
+  if (!requestedBy || requestedBy !== candidate.requestedBy || !checkedBy || checkedBy !== candidate.checkedBy || requestedBy === checkedBy || !SCOPE_ID_PATTERN.test(correlationId) || !costCapCents || !requestedItems) {
     throw new ConnectorInputError('INVALID_CAMERA_AUDIT_TRAIL_CONTEXT')
   }
   return { ...scope, requestedBy, checkedBy, correlationId, costCapCents, requestedItems }
@@ -791,11 +825,11 @@ function governedRunEventMatches(entry: CameraGovernedRunAuditEntry, context: Re
  * a reviewer, send a handoff, or authorize an action.
  */
 export function validateCameraReviewAuditTrailWitness(sourceResult: unknown, reviewedResult: unknown, auditTrail: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'checkedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): CameraReviewAuditTrailWitness {
+  const trailContext = auditTrailContext(context)
   const trail = exactObject(auditTrail, ['requestedRun', 'succeededRun', 'ownerReview'], 'UNEXPECTED_CAMERA_AUDIT_TRAIL_FIELD')
   const requested = cameraGovernedRunAuditEntry(trail.requestedRun, 'connector.run.requested')
   const succeeded = cameraGovernedRunAuditEntry(trail.succeededRun, 'connector.run.succeeded')
   const reviewed = cameraReviewAuditEntry(trail.ownerReview)
-  const trailContext = auditTrailContext(context)
 
   if (requested.hash !== hashAuditEvent(requested.event, requested.previousHash) || succeeded.hash !== hashAuditEvent(succeeded.event, succeeded.previousHash) || reviewed.hash !== hashAuditEvent(reviewed.event, reviewed.previousHash)) {
     throw new ConnectorInputError('CAMERA_AUDIT_TRAIL_HASH_MISMATCH')
@@ -810,7 +844,7 @@ export function validateCameraReviewAuditTrailWitness(sourceResult: unknown, rev
     throw new ConnectorInputError('CAMERA_AUDIT_TRAIL_TIME_MISMATCH')
   }
 
-  const witness = validateCameraReviewAuditWitness(sourceResult, reviewedResult, trail.ownerReview, context)
+  const witness = validateCameraReviewAuditWitness(sourceResult, reviewedResult, trail.ownerReview, trailContext)
   return {
     version: CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION,
     reviewId: witness.reviewId,
@@ -1020,15 +1054,16 @@ export function validateCameraReviewEvidenceManifest(sourceResult: unknown, revi
 export async function independentlyReviewCameraObservation(result: CameraObservationResult, decision: 'approved' | 'rejected', ownerApproved: boolean, reviewer: string, auditLog: AuditLog, context: ConnectorRunContext): Promise<ReviewedCameraObservation> {
   if (!ownerApproved) throw new OwnerGateError()
   if (decision !== 'approved' && decision !== 'rejected') throw new ConnectorInputError('INVALID_CAMERA_REVIEW_DECISION')
+  const reviewContext = independentCameraReviewContext(context)
   const normalizedReviewer = reviewActor(reviewer)
-  const normalizedRequester = reviewRequester(context.requestedBy)
-  const normalized = validateCameraObservationForReview(result, context)
+  const normalizedRequester = reviewContext.requestedBy
+  const normalized = validateCameraObservationForReview(result, reviewContext)
   if (normalizedReviewer === normalizedRequester) throw new MakerCheckerError('CAMERA_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
-  const occurredAt = context.now().toISOString()
+  const occurredAt = reviewContext.now().toISOString()
   const audit = await auditLog.append({
     type: 'connector.camera.owner_reviewed', connectorId: CAMERA_CONNECTOR_ID,
-    product: context.product, workspaceId: context.workspaceId, requestedBy: normalizedRequester, checkedBy: normalizedReviewer,
-    correlationId: context.correlationId, scopes: [CAMERA_SCOPE], costCapCents: context.costCapCents, requestedItems: context.requestedItems,
+    product: reviewContext.product, workspaceId: reviewContext.workspaceId, requestedBy: normalizedRequester, checkedBy: normalizedReviewer,
+    correlationId: reviewContext.correlationId, scopes: [CAMERA_SCOPE], costCapCents: reviewContext.costCapCents, requestedItems: reviewContext.requestedItems,
     occurredAt,
     detail: {
       reviewId: normalized.reviewPacket.reviewId,
@@ -1047,7 +1082,7 @@ export async function independentlyReviewCameraObservation(result: CameraObserva
     handoff: { state: 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED', rawMediaIncluded: false, sent: false, automaticAction: false, notification: 'NOT_SENT', publication: 'NOT_PUBLISHED' },
     auditHash: audit.hash,
   }
-  return { ...reviewed, reviewReceipt: reviewReceiptFor(normalized, reviewed, context) }
+  return { ...reviewed, reviewReceipt: reviewReceiptFor(normalized, reviewed, reviewContext) }
 }
 
 /**

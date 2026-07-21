@@ -653,6 +653,86 @@ test('D7 evidence manifest binds independently rebuilt D2 and D6 evidence and re
   assert.equal(setup.audit.entries.length, 3)
 })
 
+test('D8 caller review context rejects hidden, symbol, inherited, accessor, Proxy, and media-shaped values without reads or writes', async () => {
+  const setup = runnerFor()
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
+  const requestedEntry = setup.audit.entries[0]
+  const succeededEntry = setup.audit.entries[1]
+  const ownerReviewEntry = setup.audit.entries[2]
+  assert.ok(requestedEntry)
+  assert.ok(succeededEntry)
+  assert.ok(ownerReviewEntry)
+  const trail = () => ({
+    requestedRun: structuredClone(requestedEntry),
+    succeededRun: structuredClone(succeededEntry),
+    ownerReview: structuredClone(ownerReviewEntry),
+  })
+  const manifest = createCameraReviewEvidenceManifest(result.data, reviewed, trail(), context)
+  const validate = (candidate: ConnectorRunContext) => validateCameraReviewEvidenceManifest(result.data, reviewed, trail(), structuredClone(manifest), candidate)
+
+  const rawMediaContext = { ...context, snapshot: 'data:image/png;base64,not-accepted' } as ConnectorRunContext
+  assert.throws(
+    () => validate(rawMediaContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_CONTEXT_FIELD',
+  )
+
+  const hiddenDeviceContext = { ...context }
+  Object.defineProperty(hiddenDeviceContext, 'deviceAddress', { value: 'rtsp://not-accepted.example.test/stream', enumerable: false })
+  assert.throws(
+    () => validate(hiddenDeviceContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_CONTEXT_FIELD',
+  )
+
+  const symbolContext = { ...context }
+  Object.defineProperty(symbolContext, Symbol('raw-media'), { value: 'not-accepted', enumerable: true })
+  assert.throws(
+    () => validate(symbolContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_CONTEXT_FIELD',
+  )
+
+  assert.throws(
+    () => validate(Object.create(context) as ConnectorRunContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_CONTEXT_FIELD',
+  )
+
+  const accessorContext = { ...context }
+  let workspaceAccessorRead = false
+  Object.defineProperty(accessorContext, 'workspaceId', {
+    enumerable: true,
+    get() { workspaceAccessorRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validate(accessorContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_CONTEXT_FIELD',
+  )
+  assert.equal(workspaceAccessorRead, false)
+
+  let proxyTrapRead = false
+  const proxyContext = new Proxy({ ...context }, {
+    get() { proxyTrapRead = true; throw new Error('PROXY_TRAP_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validate(proxyContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_CONTEXT_FIELD',
+  )
+  assert.equal(proxyTrapRead, false)
+
+  const accessorNowContext = { ...context }
+  let nowAccessorRead = false
+  Object.defineProperty(accessorNowContext, 'now', {
+    enumerable: true,
+    get() { nowAccessorRead = true; throw new Error('NOW_ACCESSOR_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(result.data, 'approved', true, 'another-reviewer@example.test', setup.audit, accessorNowContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_CONTEXT_FIELD',
+  )
+  assert.equal(nowAccessorRead, false)
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
+})
+
 test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
   const setup = runnerFor()
   const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
@@ -715,8 +795,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /hidden, symbol, proxy, or accessor-shaped input fields/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 

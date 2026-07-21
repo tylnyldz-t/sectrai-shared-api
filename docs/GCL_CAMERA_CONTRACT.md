@@ -181,21 +181,38 @@ durable proof, delivery instruction, or replayable capability. It verifies
 only caller-supplied D1–D6 evidence; durable lookup and every product action
 remain separate future owner decisions and are not implemented here.
 
+## D8 — strict caller review-context boundary
+
+All D1–D7 library seams now parse their caller-supplied review context through
+the same own-data boundary as evidence. The permitted context names are only
+the documented product/workspace, maker/checker, correlation, owner, scope,
+cost/item, and local `now` clock fields; each present field must be an own,
+enumerable data property. The documented small context subsets remain valid,
+as does the full runner context.
+
+An extra raw-media/device-shaped field, hidden field, symbol, accessor,
+Proxy, inherited/prototype-shaped record, malformed scope/actor/correlation,
+non-positive cap/item value, or non-function clock fails closed. The parser
+copies data before use, so it neither evaluates a getter nor a Proxy trap. D8
+does not add a context API, route, storage read/write, quota use, audit append,
+credential, or capability. In particular, an invalid context is rejected
+before `independentlyReviewCameraObservation()` can append its review event.
+
 ## Audit and storage boundary
 
-The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1/D2/D3/D4/D5/D6/D7 add no migration and no new persistence model.
+The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1/D2/D3/D4/D5/D6/D7/D8 add no migration and no new persistence model.
 
 ## ADOS 10-rule conformance
 
 1. Product/workspace digest binding keeps each run and review packet scoped to one data plane.
 2. Only minimized built-in synthetic fixture metadata is accepted.
 3. The front door default-denies absent configuration; `LIVE_DISABLED` is permanent.
-4. Unknown, hidden, symbol, Proxy, and accessor-shaped fields—plus media, device identifiers, personal identity, and biometric inference—are excluded.
+4. Unknown, hidden, symbol, Proxy, and accessor-shaped input, evidence, and D8 caller-context fields—plus media, device identifiers, personal identity, and biometric inference—are excluded.
 5. Purpose-bound synthetic KVKK consent must match the fixture.
 6. Owner approval plus maker–checker separation are required; D1 rejects the original maker as reviewer and D2 minimizes that review evidence.
 7. The code has no device SDK, transport, network client, credential, or provider interface.
-8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, while D6/D7 only minimize and recheck evidence derived from it.
-9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate them without executing accessors or adding a write path.
+8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, D6/D7 only minimize and recheck evidence derived from it, and D8 rejects shaped caller context before review append.
+9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate evidence and D8 validates context without executing accessors or adding a write path.
 10. This branch contains no live launch, production migration, main/prod write, or camera hardware path.
 
 ## Explicit non-goals
