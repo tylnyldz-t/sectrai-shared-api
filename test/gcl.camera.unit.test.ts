@@ -729,6 +729,12 @@ test('D8 caller review context rejects hidden, symbol, inherited, accessor, Prox
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_CONTEXT_FIELD',
   )
   assert.equal(nowAccessorRead, false)
+
+  const nonFunctionNowContext = { ...context, now: 'not-a-local-clock' } as unknown as ConnectorRunContext
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(result.data, 'approved', true, 'another-reviewer@example.test', setup.audit, nonFunctionNowContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_REVIEW_CONTEXT',
+  )
   assert.equal((setup.quota as TestQuota).requests.length, 1)
   assert.equal(setup.audit.entries.length, 3)
 })

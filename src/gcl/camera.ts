@@ -367,8 +367,7 @@ function reviewRequester(value: unknown): string {
   return actor
 }
 
-function cameraReviewAuditWitnessContext(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): { product: string; workspaceId: string; requestedBy: string; correlationId: string; costCapCents: number; requestedItems: number } {
-  const candidate = cameraReviewContextRecord(context)
+function cameraReviewAuditWitnessContextFromRecord(candidate: Record<string, unknown>): { product: string; workspaceId: string; requestedBy: string; correlationId: string; costCapCents: number; requestedItems: number } {
   const scope = cameraReviewScopeFromRecord(candidate)
   const requestedBy = reviewRequester(candidate.requestedBy)
   const correlationId = requiredString(candidate.correlationId, 'INVALID_CAMERA_REVIEW_CONTEXT', 120)
@@ -378,9 +377,13 @@ function cameraReviewAuditWitnessContext(context: Pick<ConnectorRunContext, 'pro
   return { ...scope, requestedBy, correlationId, costCapCents, requestedItems }
 }
 
+function cameraReviewAuditWitnessContext(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): { product: string; workspaceId: string; requestedBy: string; correlationId: string; costCapCents: number; requestedItems: number } {
+  return cameraReviewAuditWitnessContextFromRecord(cameraReviewContextRecord(context))
+}
+
 function independentCameraReviewContext(context: ConnectorRunContext): { product: string; workspaceId: string; requestedBy: string; correlationId: string; costCapCents: number; requestedItems: number; now: () => Date } {
   const candidate = cameraReviewContextRecord(context)
-  const witness = cameraReviewAuditWitnessContext(candidate as Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>)
+  const witness = cameraReviewAuditWitnessContextFromRecord(candidate)
   if (typeof candidate.now !== 'function') throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CONTEXT')
   return { ...witness, now: candidate.now as () => Date }
 }
