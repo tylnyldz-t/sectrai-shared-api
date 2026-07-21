@@ -80,10 +80,10 @@ package: RA voice `80a1cc6`, RA OCR `f6f28d7`, RA image `4d0806b`, RA
 3D/game `7e5b947`, RA market `1b53141`, RFID `7b14d54`, translation
 `43541af`, language education `2635230`, and camera `0c166df`.
 
-The audit fixture is deliberately source-only.  It uses local `git show` to
-pin each connector and its runner blob, and does not import a connector,
-read an `.env` file, contact a provider, or open a network socket.  Run it
-with:
+The audit fixture is deliberately source-only.  It reads the nine local
+worktree snapshots, pins each connector and runner to its Git blob hash, and
+does not import a connector, read an `.env` file, contact a provider, or open
+a network socket.  Run it with:
 
 ```bash
 npm run test:conformance
@@ -110,7 +110,7 @@ require `DATABASE_URL` and are outside this source-only audit.
 ### D1 negative and edge evidence
 
 - The fixture asserts that every connector source declares `LIVE_DISABLED`,
-  contains neither an HTTP client nor a provider URL, and that the only two
+  contains no HTTP/egress client primitive, and that the only two
   `*_LIVE_ENABLED` environment surfaces (market and camera) immediately
   reject a true value.  All other snapshots expose no such environment
   surface.
