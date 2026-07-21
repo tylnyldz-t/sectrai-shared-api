@@ -6,7 +6,7 @@ Its only connector is `vision-document-field-extraction`, with scope `vision:doc
 
 - `LIVE_DISABLED` is the sole accepted mode. `LIVE_ENABLED`, a missing cost/item limit, malformed quota limits, missing owner approval, missing/expired consent, invalid scope, or a non-synthetic input all fail closed.
 - There is no provider endpoint, SDK, credential field, `fetch` client, camera client, Base64 image field, or live sending path.
-- Input accepts only `source: "synthetic-fixture"` evidence metadata, an SHA-256 evidence reference, purpose-bound consent, and bounded synthetic field fixtures. Raw bytes, camera sources, and unrecognised fields are rejected.
+- Input accepts only `source: "synthetic-fixture"` evidence metadata, an SHA-256 evidence reference, purpose-bound consent, and bounded synthetic field fixtures. Every accepted record is plain own enumerable data: inherited, hidden, symbol-keyed, and accessor-backed fields are rejected before their values are read. Raw bytes, camera sources, and unrecognised fields are rejected.
 - The output explicitly says `SYNTHETIC_PROPOSAL_ONLY_NOT_OCR`, sets `confidence: 0`, stores no raw image, and never automatically applies or publishes a result.
 
 ## Xontainer schema adaptation
@@ -70,6 +70,12 @@ New proposals use `synthetic-document-review-packet-v6`. Its integrity material 
 
 The binding contains neither a credential nor an ability to enable OCR; it merely makes an issued synthetic packet's bounded timings independently checkable in-process. Like the rest of the packet, it is deliberately unkeyed and is not a signature, configuration attestation, replay control, durable review state, send/apply authorization, or a provider capability. Packets v1 through v5 are non-reviewable; a future durable scoped host must resolve the real policy, state, revocation, and one-time decision semantics before any separate action.
 
+## D7 — plain-own-data review boundary
+
+New proposals use `synthetic-document-review-packet-v7`. Its integrity material adds `dataBoundaryBinding`, fixed to `evidenceSource: "synthetic-fixture"`, `inputShape: "plain-own-data-only"`, and `rawDocumentContentAccepted: false`. The binding is a metadata statement of the enforced boundary; it neither accepts image bytes nor confers an OCR, provider, apply, send, or approval capability.
+
+Both proposal intake and review-time revalidation accept only records with `Object.prototype` (or a null prototype) and own, enumerable data properties. Inherited values, non-enumerable “hidden” fields, symbol keys, getters, and setters are rejected before their values are read. This prevents a runtime object from smuggling unreviewed values through a prototype chain or executing an accessor during validation. A missing required value still reaches the existing field-specific fail-closed validator; an inherited or accessor replacement is rejected at the structural boundary. Packets v1 through v6 are deliberately non-reviewable, and D7 still provides no signature, durable replay control, persistence, send/apply action, or live-provider capability.
+
 ## Safe configuration
 
 These values configure a synthetic proposal limit only; they cannot enable a provider or a live execution path:
@@ -84,8 +90,8 @@ GCL_VISION_DAILY_RUN_QUOTA=5
 GCL_VISION_DAILY_ITEM_QUOTA=5
 ```
 
-No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`. D1/D2/D3/D4/D5/D6 add no persistence, review-state mutation, migration, credential, or network client.
+No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`. D1–D7 add no persistence, review-state mutation, migration, credential, or network client.
 
 ## ADOS controls
 
-The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. D1 additionally rejects review-packet tampering and cross-scope review before audit; D2 default-denies stale consent evidence; D3 default-denies a packet outside its bounded review window; D4 default-denies stale synthetic evidence references; D5 default-denies a causally inconsistent packet or a review deadline beyond consent; D6 default-denies timing values that cannot be exactly re-derived from the issued synthetic governance limits. It makes no migration, promotion, publication, or provider request.
+The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. D1 additionally rejects review-packet tampering and cross-scope review before audit; D2 default-denies stale consent evidence; D3 default-denies a packet outside its bounded review window; D4 default-denies stale synthetic evidence references; D5 default-denies a causally inconsistent packet or a review deadline beyond consent; D6 default-denies timing values that cannot be exactly re-derived from the issued synthetic governance limits; D7 default-denies inherited, hidden, symbol-keyed, or accessor-backed records before their values can influence a proposal or review audit. It makes no migration, promotion, publication, or provider request.

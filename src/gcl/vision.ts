@@ -15,7 +15,12 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v6' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v7' as const
+const SYNTHETIC_DOCUMENT_DATA_BOUNDARY = {
+  evidenceSource: 'synthetic-fixture',
+  inputShape: 'plain-own-data-only',
+  rawDocumentContentAccepted: false,
+} as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
 
@@ -92,6 +97,12 @@ export type SyntheticDocumentReviewPacket = {
     maxReviewAgeSeconds: number
     maxEvidenceAgeSeconds: number
   }
+  /** Records are metadata-only plain own-data, never inherited/accessor content. */
+  dataBoundaryBinding: {
+    evidenceSource: typeof SYNTHETIC_DOCUMENT_DATA_BOUNDARY.evidenceSource
+    inputShape: typeof SYNTHETIC_DOCUMENT_DATA_BOUNDARY.inputShape
+    rawDocumentContentAccepted: typeof SYNTHETIC_DOCUMENT_DATA_BOUNDARY.rawDocumentContentAccepted
+  }
   /** Metadata-only freshness limit for the synthetic evidence reference. */
   evidenceBinding: {
     capturedAt: string
@@ -160,7 +171,11 @@ export type SyntheticVisionConnectorConfig = {
 }
 
 function digest(value: string): string { return createHash('sha256').update(value).digest('hex') }
-function isRecord(value: unknown): value is Record<string, unknown> { return !!value && typeof value === 'object' && !Array.isArray(value) }
+function isRecord(value: unknown): value is Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  return prototype === Object.prototype || prototype === null
+}
 function positiveInteger(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 }
 function environmentPositiveInteger(value: string | undefined): number | undefined {
   if (!value || !/^[1-9][0-9]*$/.test(value)) return undefined
@@ -169,7 +184,17 @@ function environmentPositiveInteger(value: string | undefined): number | undefin
 }
 function hasControlCharacter(value: string): boolean { return Array.from(value).some((character) => (character.codePointAt(0) ?? 0) < 32 || character === '\u007f') }
 function exactKeys(value: Record<string, unknown>, allowed: readonly string[], error: string): void {
-  if (Object.keys(value).some((key) => !allowed.includes(key))) throw new ConnectorInputError(error)
+  const ownKeys = Reflect.ownKeys(value)
+  if (ownKeys.some((key) => typeof key !== 'string' || !allowed.includes(key))) throw new ConnectorInputError(error)
+  for (const key of ownKeys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (!descriptor || !descriptor.enumerable || descriptor.get || descriptor.set) throw new ConnectorInputError(error)
+  }
+  for (const key of allowed) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (descriptor && (!descriptor.enumerable || descriptor.get || descriptor.set)) throw new ConnectorInputError(error)
+    if (!descriptor && key in value) throw new ConnectorInputError(error)
+  }
 }
 function requiredString(value: unknown, error: string, maxLength: number): string {
   if (typeof value !== 'string' || !value.trim() || value.length > maxLength || hasControlCharacter(value)) throw new ConnectorInputError(error)
@@ -196,6 +221,7 @@ function reviewPacketIntegrityMaterial(
   scopeBinding: SyntheticDocumentReviewPacket['scopeBinding'],
   consentBinding: SyntheticDocumentReviewPacket['consentBinding'],
   governanceBinding: SyntheticDocumentReviewPacket['governanceBinding'],
+  dataBoundaryBinding: SyntheticDocumentReviewPacket['dataBoundaryBinding'],
   evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
   reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): Record<string, unknown> {
@@ -213,6 +239,7 @@ function reviewPacketIntegrityMaterial(
     scopeBinding,
     consentBinding,
     governanceBinding,
+    dataBoundaryBinding,
     evidenceBinding,
     reviewWindow,
   }
@@ -254,14 +281,16 @@ function reviewPacketFor(
   const scopeBinding = { productDigest: digest(product), workspaceDigest: digest(workspaceId) }
   const consentBinding = { purpose: consent.purpose, policyVersionDigest: digest(consent.policyVersion), expiresAt: consent.expiresAt }
   const governanceBinding = { maxReviewAgeSeconds, maxEvidenceAgeSeconds }
+  const dataBoundaryBinding = { ...SYNTHETIC_DOCUMENT_DATA_BOUNDARY }
   const evidenceBinding = evidenceBindingFor(proposal.evidence, issuedAt, maxEvidenceAgeSeconds)
   const reviewWindow = { issuedAt: issuedAt.toISOString(), reviewBy: reviewByFor(issuedAt, consent.expiresAt, evidenceBinding.expiresAt, maxReviewAgeSeconds).toISOString() }
   return {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
-    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, evidenceBinding, reviewWindow))),
+    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, evidenceBinding, reviewWindow))),
     scopeBinding,
     consentBinding,
     governanceBinding,
+    dataBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -401,6 +430,13 @@ function reviewedGovernanceBinding(value: unknown): SyntheticDocumentReviewPacke
   return { maxReviewAgeSeconds: value.maxReviewAgeSeconds, maxEvidenceAgeSeconds: value.maxEvidenceAgeSeconds }
 }
 
+function reviewedDataBoundaryBinding(value: unknown): SyntheticDocumentReviewPacket['dataBoundaryBinding'] {
+  if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_DATA_BOUNDARY_BINDING')
+  exactKeys(value, ['evidenceSource', 'inputShape', 'rawDocumentContentAccepted'], 'UNEXPECTED_DOCUMENT_REVIEW_DATA_BOUNDARY_BINDING_FIELD')
+  if (value.evidenceSource !== SYNTHETIC_DOCUMENT_DATA_BOUNDARY.evidenceSource || value.inputShape !== SYNTHETIC_DOCUMENT_DATA_BOUNDARY.inputShape || value.rawDocumentContentAccepted !== false) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_DATA_BOUNDARY_BINDING')
+  return { ...SYNTHETIC_DOCUMENT_DATA_BOUNDARY }
+}
+
 function reviewedEvidenceBinding(
   value: unknown,
   evidence: SyntheticDocumentProposal['evidence'],
@@ -484,7 +520,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const mesaEvidenceHandoff: SyntheticDocumentProposal['mesaEvidenceHandoff'] = { state: 'BLOCKED_PENDING_INDEPENDENT_OWNER_REVIEW', referenceOnly: true, rawContentIncluded: false, sent: false }
 
   if (!isRecord(proposal.reviewPacket)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET')
-  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
+  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
   if (proposal.reviewPacket.version !== SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
   if (!isRecord(proposal.reviewPacket.scopeBinding)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_SCOPE')
   exactKeys(proposal.reviewPacket.scopeBinding, ['productDigest', 'workspaceDigest'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_SCOPE_FIELD')
@@ -494,6 +530,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   if (!SHA256_PATTERN.test(productDigest) || !SHA256_PATTERN.test(workspaceDigest) || !SHA256_PATTERN.test(integrityDigest)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_DIGEST')
   const consentBinding = reviewedConsentBinding(proposal.reviewPacket.consentBinding, reviewedAt)
   const governanceBinding = reviewedGovernanceBinding(proposal.reviewPacket.governanceBinding)
+  const dataBoundaryBinding = reviewedDataBoundaryBinding(proposal.reviewPacket.dataBoundaryBinding)
   const evidenceBinding = reviewedEvidenceBinding(proposal.reviewPacket.evidenceBinding, evidence, governanceBinding, reviewedAt)
   const reviewWindow = reviewedReviewWindow(proposal.reviewPacket.reviewWindow, reviewedAt)
   validateReviewPacketTimeline(consentBinding, governanceBinding, evidenceBinding, reviewWindow)
@@ -503,6 +540,7 @@ function validateSyntheticDocumentProposalForReviewAt(
     scopeBinding: { productDigest, workspaceDigest },
     consentBinding,
     governanceBinding,
+    dataBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -512,7 +550,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   }
   if (proposal.reviewPacket.state !== reviewPacket.state || proposal.reviewPacket.rawDocumentContentIncluded !== false || proposal.reviewPacket.automaticApply !== false || proposal.reviewPacket.automaticPublication !== false || productDigest !== digest(scoped.product) || workspaceDigest !== digest(scoped.workspaceId)) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_SCOPE_MISMATCH')
   const normalized: SyntheticDocumentProposal = { proposalId, syntheticUri: proposal.syntheticUri, preparedBy, mode: LIVE_DISABLED, extraction: 'SYNTHETIC_PROPOSAL_ONLY_NOT_OCR', evidence, fields, fieldsDigest, ownerReview, reviewPacket, mesaEvidenceHandoff }
-  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
   return normalized
 }
 
