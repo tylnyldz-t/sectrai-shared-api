@@ -1,4 +1,4 @@
-import { appendAuditEvent, GCL_AUDIT_MODULE_ID } from './audit.js'
+import { appendAuditEvent, auditRecordValue, GCL_AUDIT_MODULE_ID } from './audit.js'
 import { ConnectorInputError, ConnectorUnavailableError } from './errors.js'
 import { imageCandidateFingerprint } from './image.js'
 import type { SyntheticImageCandidate } from './image.js'
@@ -136,6 +136,23 @@ function proofFor(receipt: StoredCandidateReceipt): ImageCandidateIssuanceProof 
   return { issuanceAuditHash: receipt.issuanceAuditHash, runAuditHash: receipt.runAuditHash }
 }
 
+function isSourceRunSuccess(record: { event: ConnectorAuditEvent; hash: string }, event: ImageCandidateIssuanceEvent): boolean {
+  return record.hash === event.detail.runAuditHash
+    && record.event.type === 'connector.run.succeeded'
+    && record.event.connectorId === event.connectorId
+    && record.event.product === event.product
+    && record.event.workspaceId === event.workspaceId
+    && record.event.actor === event.actor
+    && record.event.correlationId === event.correlationId
+    && record.event.requestedItems === event.detail.candidateCount
+}
+
+function assertSourceRunAudit(records: readonly unknown[], event: ImageCandidateIssuanceEvent): void {
+  const auditRecords = records.map(auditRecordValue)
+  if (auditRecords.some((record) => !record)) throw new ConnectorUnavailableError('GCL_AUDIT_CHAIN_INVALID')
+  if (!auditRecords.some((record) => record && isSourceRunSuccess(record, event))) throw new ConnectorInputError('IMAGE_CANDIDATE_RUN_AUDIT_NOT_FOUND')
+}
+
 /** Durable, redacted candidate-issuance store. It is always publication-blocked. */
 export class PrismaImageCandidateLedger implements ImageCandidateLedger {
   constructor(private readonly prisma: GclPersistence) {}
@@ -148,6 +165,11 @@ export class PrismaImageCandidateLedger implements ImageCandidateLedger {
         where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_IMAGE_CANDIDATE_MODULE_ID },
         select: { values: true },
       })
+      const auditRecords = await transaction.record.findMany({
+        where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
+        select: { values: true },
+      })
+      assertSourceRunAudit(auditRecords.map((record) => record.values), event)
       const prior = records.map((record) => storedReceipt(record.values))
       if (prior.some((receipt) => !receipt)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
       const candidateIds = new Set(event.detail.candidates.map((entry) => entry.candidateId))
@@ -188,11 +210,13 @@ export class InMemoryImageCandidateLedger implements ImageCandidateLedger {
   private readonly receipts = new Map<string, StoredCandidateReceipt>()
   private readonly issuanceStates = new Map<string, 'in-flight' | 'final'>()
 
-  constructor(private readonly auditLog: { append(event: ConnectorAuditEvent): Promise<{ hash: string }> }) {}
+  constructor(private readonly auditLog: { append(event: ConnectorAuditEvent): Promise<{ hash: string }>; entries?: readonly unknown[] }) {}
 
   async appendIssuance(event: ImageCandidateIssuanceEvent): Promise<{ hash: string }> {
     assertImageCandidateIssuanceEvent(event)
     if (!this.auditLog || typeof this.auditLog.append !== 'function') throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
+    if (!Array.isArray(this.auditLog.entries)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
+    assertSourceRunAudit(this.auditLog.entries, event)
     const keys = event.detail.candidates.map((entry) => JSON.stringify([event.product, event.workspaceId, event.correlationId, entry.candidateId]))
     if (keys.some((key) => this.issuanceStates.get(key) === 'final' || this.receipts.has(key))) throw new ConnectorInputError('IMAGE_CANDIDATE_ALREADY_ISSUED')
     if (keys.some((key) => this.issuanceStates.get(key) === 'in-flight')) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_ISSUANCE_IN_FLIGHT')

@@ -218,7 +218,7 @@ function canonicalJson(value: unknown): string {
   return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
 }
 
-/** Hashes a redacted candidate/issuance shape; it never accepts raw prompt text. */
+/** Used only for redacted candidate/issuance shapes; ledger callers never persist raw prompt text. */
 export function imageCandidateFingerprint(value: unknown): string { return digest(canonicalJson(value)) }
 
 function previewDataUri(candidateId: string, width: ImageSize, height: ImageSize): string {

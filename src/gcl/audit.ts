@@ -7,7 +7,7 @@ import type { AuditLog, ConnectorAuditEvent } from './types.js'
 export const GCL_AUDIT_MODULE_ID = 'gcl-audit'
 const HASH_PATTERN = /^[a-f0-9]{64}$/
 
-type AuditRecordValue = {
+export type AuditRecordValue = {
   event: ConnectorAuditEvent
   previousHash: string | null
   hash: string
@@ -25,7 +25,7 @@ export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string 
   return createHash('sha256').update(JSON.stringify(normalize({ event, previousHash }))).digest('hex')
 }
 
-function auditValue(value: unknown): AuditRecordValue | null {
+export function auditRecordValue(value: unknown): AuditRecordValue | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const candidate = value as Partial<AuditRecordValue>
   if (!candidate.event || typeof candidate.event !== 'object' || Array.isArray(candidate.event) || typeof candidate.hash !== 'string' || !HASH_PATTERN.test(candidate.hash) || (candidate.previousHash !== null && (typeof candidate.previousHash !== 'string' || !HASH_PATTERN.test(candidate.previousHash)))) return null
@@ -45,7 +45,7 @@ export async function appendAuditEvent(transaction: GclRecordTransaction, event:
     where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
   })
-  const previousRecord = previous ? auditValue(previous.values) : null
+  const previousRecord = previous ? auditRecordValue(previous.values) : null
   if (previous && !previousRecord) throw new ConnectorUnavailableError('GCL_AUDIT_CHAIN_INVALID')
   const previousHash = previousRecord?.hash ?? null
   const hash = hashAuditEvent(event, previousHash)
@@ -80,7 +80,7 @@ export class InMemoryHashChainAuditLog implements AuditLog {
 
   async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
     const previous = this.entries.at(-1)
-    if (previous && !auditValue(previous)) throw new ConnectorUnavailableError('GCL_AUDIT_CHAIN_INVALID')
+    if (previous && !auditRecordValue(previous)) throw new ConnectorUnavailableError('GCL_AUDIT_CHAIN_INVALID')
     const previousHash = previous?.hash ?? null
     const hash = hashAuditEvent(event, previousHash)
     this.entries.push({ event, previousHash, hash })

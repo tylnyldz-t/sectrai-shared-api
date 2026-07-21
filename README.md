@@ -8,8 +8,10 @@ plan shape only: `LIVE_DISABLED` is mandatory, no provider credential, graph
 execution, Docker/loopback client, or network adapter exists, and a separate
 owner checker plus a replay-protected terminal review ledger is required before
 a still-unpublished liked artifact or a non-publishable rejection receipt can
-exist. The ledger reuses existing Records and adds no migration. See [the GM3
-contract](docs/GM3_IMAGE_TTI_CONTRACT.md).
+exist. A successful governed run must first receive a durable, redacted
+candidate-issuance receipt; generic CRUD never exposes the reserved `gcl-*`
+system records. The ledgers reuse existing Records and add no migration. See
+[the GM3 contract](docs/GM3_IMAGE_TTI_CONTRACT.md).
 
 ## Record contract
 

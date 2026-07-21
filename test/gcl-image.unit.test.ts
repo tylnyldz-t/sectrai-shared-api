@@ -10,6 +10,7 @@ import { imageDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import type { TextToImageData } from '../src/gcl/image.js'
 import type { ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
+import { isInternalGclModuleId } from '../src/validation.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
 const context: ConnectorRunContext = {
@@ -362,6 +363,14 @@ test('environment construction has no credential fields and accepts only explici
 test('direct connector use also rejects malformed context and unexpected input fields', async () => {
   await assert.rejects(() => configuredConnector().run({ prompt: 'A child-friendly solar system poster', providerKey: 'not-accepted' } as never, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_IMAGE_TTI_FIELD')
   await assert.rejects(() => configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, { ...context, correlationId: 'unsafe/correlation-id' }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_TTI_CONTEXT')
+})
+
+test('GCL audit, quota, review, and candidate records stay outside generic product CRUD', () => {
+  assert.equal(isInternalGclModuleId(GCL_AUDIT_MODULE_ID), true)
+  assert.equal(isInternalGclModuleId(GCL_IMAGE_CANDIDATE_MODULE_ID), true)
+  assert.equal(isInternalGclModuleId(GCL_IMAGE_OWNER_REVIEW_MODULE_ID), true)
+  assert.equal(isInternalGclModuleId('image-owner-review'), false)
+  assert.equal(isInternalGclModuleId('gcl'), false)
 })
 
 test('daily image quota configuration is positive-integer-only and fail-closed', () => {

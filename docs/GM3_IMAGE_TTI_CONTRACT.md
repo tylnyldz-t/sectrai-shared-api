@@ -26,14 +26,21 @@ only accepted mode.
 4. The runner appends request/success/failure events, with a correlation ID,
    to the per-workspace SHA-256 chain and reserves daily usage through
    `PrismaDailyConnectorQuota`.
-5. Each candidate is `owner-only`, `pending`, and `publication: blocked`.
+5. The trusted host must then call
+   `issueSyntheticImageCandidates(governedResult, candidateLedger, context)`.
+   It accepts only a successful governed result with its success audit hash,
+   then stores one redacted, `publication: blocked` fingerprint receipt per
+   candidate through `PrismaImageCandidateLedger`. Direct connector output is
+   deliberately not issuable. This is an issuance/provenance guard, not actor
+   authentication; the host still authenticates the caller that records it.
+6. Each candidate is `owner-only`, `pending`, and `publication: blocked`.
    It records its maker and originating product/workspace/correlation scope.
    Only a different owner checker may call
-   `ownerLikeSyntheticImage(..., true, checker, reviewLedger, context)`; self
-   approval is denied. The resulting artifact is still blocked from
-   publication.
-6. An independent checker may instead call
-   `ownerRejectSyntheticImage(..., true, checker, reason, reviewLedger, context)`.
+   `ownerLikeSyntheticImage(..., true, checker, reviewLedger, candidateLedger, context)`;
+   self approval is denied. The candidate must have an exact, durable issuance
+   receipt. The resulting artifact is still blocked from publication.
+7. An independent checker may instead call
+   `ownerRejectSyntheticImage(..., true, checker, reason, reviewLedger, candidateLedger, context)`.
    `reason` is a closed code (`NOT_SUITABLE`, `SAFETY_CONCERN`, or
    `NEEDS_REVISION`), so free-form owner text never enters the audit chain.
    A rejection returns a terminal review receipt, not an artifact URI or image
@@ -46,16 +53,19 @@ has the exact local SVG preview, synthetic URI, non-executable plan shape,
 digest linkage, bounded candidate index, pending owner-review state, and
 matching source scope that the synthetic adapter emits. The candidate ID binds
 those redacted fields, preventing an accidental scope/actor/preview mix-up;
-it is an integrity check, not an authentication signature. Cross-workspace or
-correlation review, altered preview or URI, extra candidate fields (including
-a raw prompt), malformed audit log, and attempted self approval are rejected
-before an audit append. `PrismaImageOwnerReviewLedger` writes a minimal
-terminal receipt and its audit event inside the same existing-Record
-transaction, under the existing per-workspace audit lock; a duplicate or
+it is an integrity check, not an authentication signature. Its full redacted
+shape must additionally match a prior candidate receipt tied to the governed
+run success audit hash. Cross-workspace or correlation review, altered preview,
+URI, safety metadata, or plan, an unissued candidate, extra candidate fields
+(including a raw prompt), malformed audit log, and attempted self approval are
+rejected before a decision audit append. `PrismaImageCandidateLedger` and
+`PrismaImageOwnerReviewLedger` reuse existing Records; each writes with its
+audit event under the existing per-workspace audit lock. A duplicate or
 opposite decision is rejected before either write. The host is still
-responsible for authenticating its actors before it grants owner approval or
-calls a decision function. This module has no HTTP route, database migration,
-or publishing path.
+responsible for authenticating its actors before it grants owner approval,
+records issuance, or calls a decision function. This module has no image HTTP
+route, database migration, or publishing path; generic product CRUD returns
+`404` for all reserved `gcl-*` system modules.
 
 The candidate's `creativeWorkerPlan` is intentionally **not** an executable
 Creative Worker manifest: it has no raw prompt or negative prompt, no actual
@@ -66,12 +76,14 @@ to Jarvis Creative Worker or ComfyUI.
 A host may compose the governed path with `SyntheticImageTtiConnector`,
 `ConnectorRegistry`, `GovernedConnectorRunner`, `PrismaHashChainAuditLog`, and
 `new PrismaDailyConnectorQuota(prisma, imageDailyQuotaFromEnvironment())`.
-Terminal owner decisions additionally require
+After the runner succeeds, it must call `issueSyntheticImageCandidates` with
+`new PrismaImageCandidateLedger(prisma)` before it offers either terminal
+owner decision. Terminal decisions additionally require
 `new PrismaImageOwnerReviewLedger(prisma)`, not a bare audit log. The host
-must authenticate both maker and independent owner checker before it can set
-`ownerApproved: true` or call an owner-decision function. `InMemoryImageOwnerReviewLedger`
-is a test seam only. This module does not expose an HTTP route or manage
-credentials.
+must authenticate the maker, issuance caller, and independent owner checker
+before it can set `ownerApproved: true`, record issuance, or call an
+owner-decision function. The in-memory ledgers are test seams only. This
+module does not expose an HTTP route or manage credentials.
 
 ## Synthetic-only environment contract
 
@@ -104,13 +116,20 @@ decision and must be implemented behind its own bounded approval path.
   only a bounded uppercase reason code; untrusted free-form reasons are
   replaced with `FAMILY_SAFETY_FILTER_REJECTED`.
 - The review audit records only candidate IDs, maker/checker identities,
-  controlled decision fields, and the blocked publication state. It never
-  records the prompt, negative prompt, preview bytes, provider endpoint, or a
-  credential.
-- The durable review ledger serializes on the audit lock and records one
-  terminal decision only. A replay, concurrent opposite decision, malformed
-  receipt, or malformed audit-chain tail fails closed and cannot add another
+  controlled decision fields, blocked publication state, and SHA-256 lineage
+  hashes. It never records the prompt, negative prompt, preview bytes,
+  provider endpoint, or a credential.
+- Candidate issuance accepts only the governed result carrying a success audit
+  hash, stores candidate IDs plus fingerprints/hashes only, and rejects direct
+  connector output, a changed redacted candidate field, duplicate issuance, or
+  concurrent issuance replay.
+- The durable candidate and review ledgers serialize on the audit lock. A
+  replay, concurrent opposite decision, malformed receipt, malformed
+  audit-chain tail, or unissued candidate fails closed and cannot add another
   decision event.
+- Accessor-shaped input, policy objects, and candidate data are rejected
+  before their getters can run, so untrusted runtime objects cannot smuggle
+  prompt text or behavior through validation.
 - `creativeWorkerPlan.dispatch` remains exactly
   `{ performed: false, gate: "LIVE_DISABLED", network: "not-attempted" }`.
   This package does not invoke Creative Worker, ComfyUI, Docker, loopback, a
