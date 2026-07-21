@@ -236,7 +236,7 @@ test('durable proposals require a same-scope requested and succeeded audit pair 
   assert.equal(artifactCreates, 0)
 })
 
-test('durable proposals bind the maker, request limits, and exact metadata envelope to the successful synthetic run', async () => {
+test('durable proposals bind the maker, request limits, metadata envelope, and unexpired creation instant to the successful synthetic run', async () => {
   const proposal = runResult().artifact!
   const requested: ConnectorAuditEvent = {
     type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
@@ -295,6 +295,7 @@ test('durable proposals bind the maker, request limits, and exact metadata envel
     { ...input, actor: 'other-maker@example.test' },
     { ...input, audit: { ...input.audit, costCapCents: 24 } },
     { ...input, audit: { ...input.audit, requestedItems: 2 } },
+    { ...input, audit: { ...input.audit, occurredAt: proposal.reviewExpiresAt } },
     { ...input, proposal: { ...proposal, contentHash: `sha256:${'c'.repeat(64)}` } },
   ]) {
     await assert.rejects(() => artifacts.proposeAndAudit(forged), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_RUN_AUDIT_LINK_INVALID')
@@ -388,7 +389,7 @@ test('durable decisions reject an audit context that is not bound to the decisio
   assert.equal(transactionCalls, 0)
 })
 
-test('durable terminal artifacts require a distinct checker and an audit decision at the stored decision instant', async () => {
+test('durable terminal artifacts require a distinct checker, matching decision instant, and a pre-expiry chronology', async () => {
   const proposal = runResult().artifact!
   const artifactId = 'translation-artifact-terminal-lifecycle'
   const maker = 'maker@example.test'
@@ -405,14 +406,14 @@ test('durable terminal artifacts require a distinct checker and an audit decisio
   }
   const succeededHash = hashAuditEvent(succeeded, requestedHash)
 
-  function lifecycle(decisionActor: string, decisionOccurredAt: string): PrismaTranslationArtifactStore {
+  function lifecycle(decisionActor: string, decisionOccurredAt: string, storedDecidedAt = now().toISOString()): PrismaTranslationArtifactStore {
     const pending = { connectorId: 'translation-text-synthetic', ...proposal, runAuditHash: succeededHash }
     const reviewDigest = translationArtifactReviewDigest(pending)
     const values = {
       ...pending,
       approvalState: 'approved',
       reviewDigest,
-      decidedAt: now().toISOString(),
+      decidedAt: storedDecidedAt,
       decidedBy: decisionActor,
     }
     const detail = (approvalState: 'pending-checker-approval' | 'approved') => ({
@@ -460,6 +461,8 @@ test('durable terminal artifacts require a distinct checker and an audit decisio
   await assert.doesNotReject(() => lifecycle(checker, now().toISOString()).get(product, workspaceId, artifactId))
   await assert.rejects(() => lifecycle(maker, now().toISOString()).get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
   await assert.rejects(() => lifecycle(checker, '2026-07-22T12:00:01.000Z').get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+  await assert.rejects(() => lifecycle(checker, proposal.reviewExpiresAt, proposal.reviewExpiresAt).get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+  await assert.rejects(() => lifecycle(checker, '2026-07-22T11:59:59.999Z', '2026-07-22T11:59:59.999Z').get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
 })
 
 test('durable audit fails closed on a hash-valid success event whose bound result carries a raw fixture field', async () => {

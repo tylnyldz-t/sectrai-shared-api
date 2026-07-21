@@ -234,6 +234,7 @@ export class PrismaTranslationArtifactStore {
         requestedItems: input.audit.requestedItems,
         proposal,
         runAuditHash: input.runAuditHash,
+        creationOccurredAt: input.audit.occurredAt,
       })
       await requireUnusedRunAudit(transaction, input)
       const pending = { connectorId: input.connectorId, ...proposal, runAuditHash: input.runAuditHash }

@@ -160,6 +160,14 @@ must use only `translation:artifact:approve` with zero cost/items, a checker
 different from the maker, and the same canonical UTC instant as the row's
 `decidedAt`. The durable store rejects a missing, noncanonical, mismatched, or
 out-of-scope decision audit context before it opens the decision transaction.
+It also requires nondecreasing requested → succeeded → creation → decision
+instants, with creation and any terminal decision strictly before
+`reviewExpiresAt`; a hash-valid, backdated, or post-expiry lifecycle is not
+readable. Proposal persistence checks the same requested → succeeded →
+creation timing before it inserts metadata, so a stale proposal cannot create
+an unreachable durable row. This temporal validation is a metadata-only
+integrity check and does not extend the review window or create a live
+execution path.
 Metadata-shaped rows with missing, duplicate, out-of-order, cross-maker, or
 mismatched lifecycle evidence is unavailable with
 `TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID`. This check does not expose

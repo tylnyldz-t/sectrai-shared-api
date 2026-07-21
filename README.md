@@ -65,5 +65,6 @@ or `*_LIVE_ENABLED` setting.
 - Durable proposal creation and checker decisions are each one transaction with their audit append; no audit-less production artifact mutation API exists. Blank actors and malformed status/maker storage envelopes fail closed.
 - Durable artifact reads and decisions also require a complete, ordered run → creation → optional single-decision audit lifecycle; metadata-shaped rows without that proof are unavailable.
 - Terminal decisions are bound to a distinct checker and one canonical timestamp shared by the artifact row and its audit event; malformed decision-audit context fails before any durable mutation.
+- Hash-valid durable lifecycles must also be temporally consistent and within the review TTL; backdated or post-expiry audit decisions fail closed.
 
 See [the interpreter contract](docs/GCL_TRANSLATION_CONTRACT.md) for the exact shapes and safety boundary.

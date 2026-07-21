@@ -191,6 +191,15 @@ function sameScopes(left: readonly string[], right: readonly string[]): boolean 
   return left.length === right.length && left.every((scope, index) => scope === right[index])
 }
 
+/** Audit chain order is not sufficient when durable rows can be independently forged. */
+function atOrBefore(left: string, right: string): boolean {
+  return new Date(left).valueOf() <= new Date(right).valueOf()
+}
+
+function before(left: string, right: string): boolean {
+  return new Date(left).valueOf() < new Date(right).valueOf()
+}
+
 function artifactEventMatches(event: ConnectorAuditEvent, artifact: TranslationArtifactRecord, state: 'pending-checker-approval' | 'approved' | 'rejected'): boolean {
   const detail = event.detail
   return event.connectorId === artifact.connectorId
@@ -260,7 +269,10 @@ export async function requireTranslationArtifactLifecycleAudit(transaction: Pris
     || !sameScopes(created.entry.event.scopes, succeeded.event.scopes)
     || created.entry.event.costCapCents !== succeeded.event.costCapCents
     || created.entry.event.requestedItems !== succeeded.event.requestedItems
-    || !artifactEventMatches(created.entry.event, artifact, 'pending-checker-approval')) {
+    || !artifactEventMatches(created.entry.event, artifact, 'pending-checker-approval')
+    || !atOrBefore(requested.event.occurredAt, succeeded.event.occurredAt)
+    || !atOrBefore(succeeded.event.occurredAt, created.entry.event.occurredAt)
+    || !before(created.entry.event.occurredAt, artifact.reviewExpiresAt)) {
     throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
   }
 
@@ -281,6 +293,8 @@ export async function requireTranslationArtifactLifecycleAudit(transaction: Pris
     || decision.entry.event.costCapCents !== 0
     || decision.entry.event.requestedItems !== 0
     || artifact.decidedAt !== decision.entry.event.occurredAt
+    || !atOrBefore(created.entry.event.occurredAt, decision.entry.event.occurredAt)
+    || !before(decision.entry.event.occurredAt, artifact.reviewExpiresAt)
     || !artifactEventMatches(decision.entry.event, artifact, artifact.approvalState)) {
     throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
   }
@@ -289,9 +303,11 @@ export async function requireTranslationArtifactLifecycleAudit(transaction: Pris
 /**
  * A proposal can only reference a verified successful run from the same
  * connector and product/workspace chain. The artifact metadata, maker, and
- * governance context must also be exactly the values from that successful run.
+ * governance context and creation instant must also be exactly compatible with
+ * that successful run. This rejects an already-expired proposal before its
+ * durable artifact row can be created.
  */
-export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionClient, input: { product: string; workspaceId: string; connectorId: string; actor: string; scopes: readonly string[]; costCapCents: number; requestedItems: number; proposal: TranslationArtifactProposal; runAuditHash: string }): Promise<void> {
+export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionClient, input: { product: string; workspaceId: string; connectorId: string; actor: string; scopes: readonly string[]; costCapCents: number; requestedItems: number; proposal: TranslationArtifactProposal; runAuditHash: string; creationOccurredAt: string }): Promise<void> {
   if (!SHA256.test(input.runAuditHash)) throw new ConnectorUnavailableError('TRANSLATION_RUN_AUDIT_LINK_INVALID')
   const entries = await validatedAuditEntries(transaction, input.product, input.workspaceId)
   const succeeded = entries.find((entry) => entry.hash === input.runAuditHash
@@ -310,10 +326,14 @@ export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionC
     || JSON.stringify(requested.event.scopes) !== JSON.stringify(succeeded.event.scopes)
     || requested.event.costCapCents !== succeeded.event.costCapCents
     || requested.event.requestedItems !== succeeded.event.requestedItems
+    || !atOrBefore(requested.event.occurredAt, succeeded.event.occurredAt)
     || succeeded.event.actor !== input.actor
     || JSON.stringify(succeeded.event.scopes) !== JSON.stringify(input.scopes)
     || succeeded.event.costCapCents !== input.costCapCents
     || succeeded.event.requestedItems !== input.requestedItems
+    || !canonicalTimestamp(input.creationOccurredAt)
+    || !atOrBefore(succeeded.event.occurredAt, input.creationOccurredAt)
+    || !before(input.creationOccurredAt, input.proposal.reviewExpiresAt)
     || !artifactProposalDetail(input.connectorId, succeededArtifact)
     || !sameArtifactProposal(succeededArtifact, input.proposal)) {
     throw new ConnectorUnavailableError('TRANSLATION_RUN_AUDIT_LINK_INVALID')
