@@ -34,6 +34,14 @@ The proposal contains a `synthetic-document-review-packet-v1`. Before it appends
 
 Any malformed, cross-scope, altered, raw-sensitive, or non-pending proposal fails before the review audit append. The integrity digest is deliberately **unkeyed**: it detects accidental or in-process mutation, but is not a signature, credential, capability, or proof of authorization. A future durable host must resolve a proposal through its own scoped persistence/audit records before it can treat a review as actionable. That host, durable review state, any send/apply action, and any provider integration are outside this module.
 
+## D2 — consent-bound, time-valid review
+
+New proposals use `synthetic-document-review-packet-v2`. Its integrity material adds a consent binding with the fixed document-extraction purpose, the SHA-256 digest of the policy version, and the canonical consent expiry. Neither a consent token nor the policy text is put in the proposal or review audit.
+
+At review time, the module uses the caller-supplied review clock once, rejects an invalid clock, and rejects expiry at the exact boundary (`expiresAt <= review time`) before writing an audit event. It also rejects legacy v1 packets, a missing/extra consent-binding field, an invalid consent purpose/digest/timestamp, and a consent-binding alteration whose packet checksum no longer matches. This means existing v1 packets are intentionally not reviewable under D2: they lack the review-time consent evidence, so the safe result is deny rather than grandfathering.
+
+D2 is not revocation lookup, replay protection, or durable approval state. The binding is still unkeyed and only protects the in-process packet from accidental change. A future durable, scoped host must enforce consent revocation and one-time decision semantics before it can make a review actionable; this module still only records a synthetic review audit event and never sends or applies evidence.
+
 ## Safe configuration
 
 These values configure a synthetic proposal limit only; they cannot enable a provider or a live execution path:
@@ -46,8 +54,8 @@ GCL_VISION_DAILY_RUN_QUOTA=5
 GCL_VISION_DAILY_ITEM_QUOTA=5
 ```
 
-No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`. D1 adds no persistence, review-state mutation, migration, credential, or network client.
+No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`. D1/D2 add no persistence, review-state mutation, migration, credential, or network client.
 
 ## ADOS controls
 
-The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. D1 additionally rejects review-packet tampering and cross-scope review before audit. It makes no migration, promotion, publication, or provider request.
+The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. D1 additionally rejects review-packet tampering and cross-scope review before audit; D2 default-denies stale or legacy consent evidence at review time. It makes no migration, promotion, publication, or provider request.

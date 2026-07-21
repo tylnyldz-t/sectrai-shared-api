@@ -92,9 +92,13 @@ test('GM2 run requires owner gate, scope, cost cap, quota, consent, and creates 
   assert.equal(proposal.evidence.rawContentStored, false)
   assert.equal(proposal.ownerReview.status, 'pending')
   assert.equal(proposal.ownerReview.automaticApply, false)
-  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v1')
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v2')
   assert.match(proposal.reviewPacket.integrityDigest, /^[a-f0-9]{64}$/)
   assert.equal(proposal.reviewPacket.scopeBinding.productDigest.length, 64)
+  assert.equal(proposal.reviewPacket.consentBinding.purpose, 'document-field-extraction')
+  assert.match(proposal.reviewPacket.consentBinding.policyVersionDigest, /^[a-f0-9]{64}$/)
+  assert.equal(proposal.reviewPacket.consentBinding.expiresAt, input.consent.expiresAt)
+  assert.equal(JSON.stringify(proposal.reviewPacket).includes('kvkk-v1'), false)
   assert.equal(proposal.reviewPacket.rawDocumentContentIncluded, false)
   assert.equal(proposal.mesaEvidenceHandoff.sent, false)
   assert.equal(proposal.mesaEvidenceHandoff.referenceOnly, true)
@@ -158,6 +162,42 @@ test('D1 rejects altered, cross-scope, non-pending, malformed-decision, and raw-
 
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'send' as never, true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_DECISION')
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, '   ', audit, context), (error: unknown) => error instanceof OwnerGateError && error.message === 'OWNER_REVIEWER_REQUIRED')
+  assert.equal(audit.entries.length, 2)
+  assert.equal(quota.requests.length, 1)
+})
+
+test('D2 binds review to unexpired consent metadata and rejects legacy or altered packets before audit append', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, quota, now)
+  const consentExpiringSoon = { ...input, consent: { ...input.consent, expiresAt: '2026-07-22T12:01:00.000Z' } }
+  const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input: consentExpiringSoon, ...context }) as ConnectorResult<DocumentFieldExtractionData>
+  const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
+  const expiredReviewContext = { ...context, now: () => new Date('2026-07-22T12:01:00.000Z') }
+
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', audit, expiredReviewContext), (error: unknown) => error instanceof ConsentError && error.message === 'DOCUMENT_REVIEW_CONSENT_EXPIRED')
+
+  const alteredExpiry = clone()
+  alteredExpiry.reviewPacket.consentBinding.expiresAt = '2026-07-23T12:00:00.000Z'
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(alteredExpiry, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+
+  const missingBinding = clone()
+  delete (missingBinding.reviewPacket as { consentBinding?: unknown }).consentBinding
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(missingBinding, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_CONSENT_BINDING')
+
+  const extraBindingField = clone()
+  ;(extraBindingField.reviewPacket.consentBinding as { untrusted?: unknown }).untrusted = true
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(extraBindingField, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_DOCUMENT_REVIEW_CONSENT_BINDING_FIELD')
+
+  const malformedBindingExpiry = clone()
+  malformedBindingExpiry.reviewPacket.consentBinding.expiresAt = 'not-a-timestamp'
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(malformedBindingExpiry, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_CONSENT_EXPIRY')
+
+  const legacyPacket = clone()
+  legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v1' as never
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(legacyPacket, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
+
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', audit, { ...context, now: (() => new Date('invalid')) as typeof context.now }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_TIME')
   assert.equal(audit.entries.length, 2)
   assert.equal(quota.requests.length, 1)
 })

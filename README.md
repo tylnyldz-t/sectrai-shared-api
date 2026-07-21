@@ -53,4 +53,4 @@ The service stores only product-owned synthetic demo records. It does not make A
 
 ## GM2 synthetic vision adapter
 
-`src/gcl/vision.ts` provides a non-wired, synthetic-only document-field proposal adapter based on the MagicScan form-field pattern. It accepts no raw image, camera input, credential, provider client, or live mode; it returns masked, owner-review-only proposals with `confidence: 0`. Its D1 review packet revalidates scope and proposal integrity before recording an independent review, but does not authorize or perform apply/send. See [the GM2 contract](docs/GCL_VISION_CONTRACT.md).
+`src/gcl/vision.ts` provides a non-wired, synthetic-only document-field proposal adapter based on the MagicScan form-field pattern. It accepts no raw image, camera input, credential, provider client, or live mode; it returns masked, owner-review-only proposals with `confidence: 0`. Its D1/D2 review packet revalidates scope, integrity, and unexpired consent evidence before recording an independent review, but does not authorize or perform apply/send. See [the GM2 contract](docs/GCL_VISION_CONTRACT.md).
