@@ -53,9 +53,9 @@ export type SyntheticThreeDConnectorConfig = {
 
 type ValidatedTextInput = {
   prompt: string
-  style: string | undefined
+  style?: string
   outputFormat: ThreeDOutputFormat
-  gpuResourceRequest: GpuResourceRequest | undefined
+  gpuResourceRequest?: GpuResourceRequest
 }
 
 function positiveInteger(value: unknown): number | null { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null }
@@ -101,11 +101,13 @@ function gpuResourceRequest(value: unknown): GpuResourceRequest | undefined {
 
 function textInput(value: unknown): ValidatedTextInput {
   const record = inputRecord(value, ['prompt', 'style', 'outputFormat', 'gpuResourceRequest'])
+  const style = optionalBoundedString(record.style, 160, 'INVALID_THREED_STYLE')
+  const requestedGpu = gpuResourceRequest(record.gpuResourceRequest)
   return {
     prompt: boundedString(record.prompt, 4_000, 'INVALID_THREED_PROMPT'),
-    style: optionalBoundedString(record.style, 160, 'INVALID_THREED_STYLE'),
     outputFormat: outputFormat(record.outputFormat),
-    gpuResourceRequest: gpuResourceRequest(record.gpuResourceRequest),
+    ...(style === undefined ? {} : { style }),
+    ...(requestedGpu === undefined ? {} : { gpuResourceRequest: requestedGpu }),
   }
 }
 
