@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto'
 import { posix as path } from 'node:path'
 import test from 'node:test'
 
-type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7'
+type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8'
 
 type PinnedClosureBlob = {
   path: string
@@ -31,9 +31,9 @@ type Snapshot = {
   registryBlob: string
   hardDeniesLiveOptIn: boolean
   quotaFailureAudited: boolean
-  /** A D6 closure module changed while its public connector remained stable. */
+  /** A package module gets an exact blob pin in addition to its closure scan. */
   pinnedClosureBlobs?: readonly PinnedClosureBlob[]
-  /** A D7 package companion requires source review even when it is not imported by the public connector. */
+  /** A package companion requires review even when it is not imported by the public connector. */
   pinnedSupplementalBlobs?: readonly PinnedSupplementalBlob[]
 }
 
@@ -45,7 +45,7 @@ const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
 const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
 
 /*
- * These are immutable local Git snapshots from the D1 through D7 audit batches.
+ * These are immutable local Git snapshots from the D1 through D8 audit batches.
  * Every source read below is `git show <revision>:<path>`, never the mutable
  * worktree file. This fixture does not import target runtime code, load an
  * env file, open a socket, or make a network request. A missing worktree,
@@ -106,6 +106,14 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D7', name: 'RFID', revision: 'a3ab022', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: '17dd14239097629b78eef8a523c61978acc277b9', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
   { batch: 'D7', name: 'Translation', revision: 'c5ce740', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '542a39d3ac9849469d5a39aca21dd60a58ec374a', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: '5ed64f5eb137e69c614fab7632d3d5c80b43f6bb' }, { path: 'src/gcl/translation-artifacts.ts', blob: '57c9e99c98a932d0ae1c4efde03e2762126322e4' }] },
   { batch: 'D7', name: 'Camera', revision: 'f0a524c', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '06c7d713ed66b80139436e27e46f9637a2cc0825', registryBlob: 'b8787e9af75503bb5b1f5b0c8269545846dfaa95', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D8', name: 'RA OCR', revision: '86f8055', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: 'cf55a607c4ceefac204cb90c881fec0e6216b328', registryBlob: '684026b637562c2b820bc7c4ae49d5a2b4bb4598', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D8', name: 'RA image', revision: '04b945d', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: '88618cf02fad7fdd484358d157c9dd87992ec01c', registryBlob: '76221dc13d588bd7a042735badf6bc825b573ca3', hardDeniesLiveOptIn: false, quotaFailureAudited: false, pinnedClosureBlobs: [{ path: 'src/gcl/image-candidate-ledger.ts', blob: '0d6cdddb6292c4172d38137c6f99e2da079343d7' }] },
+  { batch: 'D8', name: 'RA 3D/game', revision: '986fd50', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: '89c26246bff92af76ee50f28b25aeac53d326a40', registryBlob: '384f768b9b28a244ca64aa2ebddb959decd5ec8c', hardDeniesLiveOptIn: false, quotaFailureAudited: false, pinnedClosureBlobs: [{ path: 'src/gcl/result-boundary.ts', blob: 'ba5a80dc6c255cbea66b9a1813df1b17077fb13b' }], pinnedSupplementalBlobs: [{ path: 'src/gcl/game-engine.ts', blob: 'c8e9711e9604272486ce2353a1eb9a3424a8742c' }] },
+  { batch: 'D8', name: 'RA market', revision: 'bd75c31', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: '1d3db9ffd0f47fd2383389e0fa980df40c19bd7e', registryBlob: '4df08cd04321797b8522029a4754926f4fa715df', hardDeniesLiveOptIn: true, quotaFailureAudited: false, pinnedClosureBlobs: [{ path: 'src/gcl/market-review-ledger.ts', blob: '7ff009bc87e25cc7fb4017cb7a1a9f3cfc261b83' }] },
+  { batch: 'D8', name: 'RFID', revision: '89889f7', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: '7878aed832361912db5ec31464f20f36ef4d0269', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D8', name: 'Translation', revision: 'c9094d7', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '542a39d3ac9849469d5a39aca21dd60a58ec374a', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: '9354ab43694a6e9e21036c9c92fcf433c6bef784' }, { path: 'src/gcl/translation-artifacts.ts', blob: '37422b5aba1786d8cce4d0dae40875bf6d3421a0' }] },
+  { batch: 'D8', name: 'Language education', revision: 'df82e56', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: 'a79fef5d49912bd91a33bd4d53f2fdaaeacc7c39', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: 'ae74185cb5ec48eccc892f7d1100431d9104f1b1' }] },
+  { batch: 'D8', name: 'Camera', revision: '7420369', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: 'b23dd98c3bbfa2dcf006b1ff8385204be295873b', registryBlob: 'b8787e9af75503bb5b1f5b0c8269545846dfaa95', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
 ]
 
 function repositoryFor(snapshot: Snapshot): string {
@@ -170,7 +178,7 @@ function sourceCode(source: string): string {
 
 function assertNoRuntimeEscape(source: string, name: string): void {
   const code = sourceCode(source)
-  assert.doesNotMatch(code, /\b(?:require|createRequire|eval|Function)\b|\bimport\s*(?:\?\.)?\s*\(|\bimport\s*\.\s*meta\b|\bmodule\s*(?:\.|\?\.)\s*(?:require|constructor\s*(?:\.|\?\.)\s*_load)\b|\bprocess\s*(?:\.|\?\.)\s*(?:getBuiltinModule|binding|dlopen|mainModule)\b/, `${name} must not dynamically load or evaluate a runtime module`)
+  assert.doesNotMatch(code, /\b(?:require|createRequire|eval|Function)\b|\bimport\s*(?:\?\.)?\s*\(|\bimport\s*\.\s*meta\b|\bmodule\s*(?:\.|\?\.)\s*(?:require|constructor\s*(?:\.|\?\.)\s*_load)\b|\b(?:process|module)\s*(?:\.|\?\.)\s*(?:getBuiltinModule|binding|dlopen|mainModule|constructor)\b/, `${name} must not dynamically load or evaluate a runtime module`)
   assert.doesNotMatch(code, /\b(?:globalThis|global|window|Bun|Deno)\b|\bself\s*(?:\?\.|\.)|\bself\s*\[/, `${name} must not access a global runtime capability`)
   assert.doesNotMatch(code, /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|WebTransport|navigator|sendBeacon|axios|undici|node-fetch)\b/, `${name} must not retain an egress capability by direct or aliased access`)
   assert.doesNotMatch(code, /\bReflect\s*(?:\?\.)?\s*(?:\.\s*get|\[\s*['"`]get['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not reflectively obtain a runtime or environment capability`)
@@ -179,6 +187,7 @@ function assertNoRuntimeEscape(source: string, name: string): void {
   assert.doesNotMatch(code, /\bprocess\s*(?:\.|\?\.)\s*env\s*(?:\?\.)?\s*\[/, `${name} must not use computed environment access`)
   assert.doesNotMatch(code, /(?:process\s*(?:\.|\?\.)\s*env|environment)\s*(?:\?\.)?\s*\[\s*['"`][^'"`]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|BEARER)[^'"`]*['"`]\s*\]/i, `${name} must not read a credential-like environment variable by bracket access`)
   assert.doesNotMatch(code, /(?:process\s*(?:\.|\?\.)\s*env|environment)\s*(?:\.|\?\.)\s*[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|BEARER)[A-Z0-9_]*/i, `${name} must not read a credential-like environment variable`)
+  assert.doesNotMatch(code, /\b(?:const|let|var)\s+(?:[A-Za-z_$][A-Za-z0-9_$]*|\{[^}\n]*\}|\[[^\]\n]*\])\s*=\s*\(?\s*process\s*(?:\.|\?\.)\s*env\b|\b(?:const|let|var)\s+(?:[A-Za-z_$][A-Za-z0-9_$]*|\{[^}\n]*\}|\[[^\]\n]*\])\s*=\s*\(?\s*process\b(?!\s*(?:\.|\?\.))/, `${name} must not alias a Node runtime or its environment for later capability recovery`)
 }
 
 function allImportsOf(source: string, importedPath: string): readonly string[] {
@@ -245,7 +254,7 @@ function ownerDenialPrecedesReservations(registry: string): boolean {
   return ownerGate >= 0 && ownerGate < preflight && preflight < requestedAudit && requestedAudit < quota
 }
 
-test('D1/D2/D3/D4/D5/D6/D7 source fixture pins every audited connector and its governance runner to local Git objects', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
     assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
@@ -262,7 +271,7 @@ test('D1/D2/D3/D4/D5/D6/D7 source fixture pins every audited connector and its g
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
     const closure = [...sourceClosure(snapshot).values()].join('\n')
@@ -281,7 +290,7 @@ test('D1/D2/D3/D4/D5/D6/D7 synthetic source closure has no egress, privileged co
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
@@ -351,4 +360,17 @@ test('D7 fail-closed safety checks reject native-loader, import-meta, and altern
     "const listener = Deno.serve(() => new Response('fixture'))",
   ]) assert.throws(() => assertNoRuntimeEscape(source, `D7 negative probe: ${source}`))
   assert.doesNotThrow(() => assertNoRuntimeEscape("const enabled = environment.GCL_CAMERA_SYNTHETIC_ENABLED === 'true'", 'D7 allowed synthetic configuration'))
+})
+
+test('D8 fail-closed safety checks reject Node runtime/environment aliases and constructor recovery', () => {
+  for (const source of [
+    'const environment = process.env',
+    'const environment = process?.env',
+    'const environment = (process.env)',
+    'const { env } = process',
+    'const runtime = process',
+    "const factory = process.constructor.constructor('return 1')()",
+    "const factory = module?.constructor?.constructor('return 1')()",
+  ]) assert.throws(() => assertNoRuntimeEscape(source, `D8 negative probe: ${source}`))
+  assert.doesNotThrow(() => assertNoRuntimeEscape("const enabled = environment.GCL_LANGEDU_SYNTHETIC_ENABLED === 'true'", 'D8 allowed synthetic configuration'))
 })
