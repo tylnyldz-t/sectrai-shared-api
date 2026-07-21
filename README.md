@@ -2,6 +2,8 @@
 
 Shared, product-scoped persistence API for Sectrai synthetic demo products. It uses one Neon Postgres database and one Render web service. It never connects to Sektral, Xontainer, Yapıborsası, or any other database.
 
+It also contains the L0 Governed Connector Layer (GCL) foundation. GCL starts disabled and is fail-closed until its owner gate, quotas, and a connector’s deployment configuration exist. See [the GCL contract](docs/GCL_CONTRACT.md) and [the synthetic market contract](docs/GCL_MARKET_CONTRACT.md).
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:
@@ -36,7 +38,7 @@ DATABASE_URL='your Neon URL' npm run db:migrate
 DATABASE_URL='your Neon URL' SHARED_API_KEY_HEALTH='...' npm start
 ```
 
-`npm test` is a real Neon integration test. It creates records only under the temporary `sectrai-integration-test` product, verifies create → list → edit → a new Prisma connection → delete, and cleans those records up.
+`npm test` includes offline GCL contract tests. When `DATABASE_URL` is set, it additionally runs the real Neon integration test: it creates records only under the temporary `sectrai-integration-test` product, verifies create → list → edit → a new Prisma connection → delete, and cleans those records up.
 
 ## Product adaptation guide
 
@@ -50,3 +52,9 @@ DATABASE_URL='your Neon URL' SHARED_API_KEY_HEALTH='...' npm start
 ## Safety boundary
 
 The service stores only product-owned synthetic demo records. It does not make AI calls, execute product actions, or interpret `values`. Product-level Vercel admin gates remain the outer authentication layer; this API key is a second product boundary, not a replacement for user authentication.
+
+The GCL `market` connector is proposal-only. It accepts no provider
+credentials, does not query Hub Connect or any capacity market, and cannot
+reserve capacity, book a load, publish a listing, or start a background sync.
+It remains `LIVE_DISABLED`; setting its environment live flag to `true`
+closes the route.
