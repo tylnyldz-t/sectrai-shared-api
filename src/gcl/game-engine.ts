@@ -77,10 +77,24 @@ function connectorConfig(value: GameEngineConnectorConfig): GameEngineConnectorC
 }
 
 function inputFrom(value: unknown): GameEngineBuildInput {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError('GAME_ENGINE_INVALID_INPUT')
-  const input = value as Record<string, unknown>
-  const allowed = new Set(['tier', 'engine', 'projectId', 'brief', 'target', 'gpuMinutes'])
-  if (Object.keys(input).some((key) => !allowed.has(key))) throw new ConnectorInputError('GAME_ENGINE_INVALID_INPUT')
+  let input: Record<string, unknown>
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError('GAME_ENGINE_INVALID_INPUT')
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length > 0) throw new ConnectorInputError('GAME_ENGINE_INVALID_INPUT')
+    const names = Object.getOwnPropertyNames(value)
+    const allowed = new Set(['tier', 'engine', 'projectId', 'brief', 'target', 'gpuMinutes'])
+    if (names.some((name) => !allowed.has(name))) throw new ConnectorInputError('GAME_ENGINE_INVALID_INPUT')
+    input = Object.create(null) as Record<string, unknown>
+    for (const name of names) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, name)
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) throw new ConnectorInputError('GAME_ENGINE_INVALID_INPUT')
+      input[name] = descriptor.value
+    }
+  } catch (error) {
+    if (error instanceof ConnectorInputError) throw error
+    throw new ConnectorInputError('GAME_ENGINE_INVALID_INPUT')
+  }
   if (input.tier !== 'economic' && input.tier !== 'premium') throw new ConnectorInputError('GAME_ENGINE_INVALID_TIER')
   if (input.engine !== 'godot' && input.engine !== 'unreal' && input.engine !== 'blender') throw new ConnectorInputError('GAME_ENGINE_INVALID_ENGINE')
   if (typeof input.projectId !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(input.projectId)) throw new ConnectorInputError('GAME_ENGINE_INVALID_PROJECT_ID')

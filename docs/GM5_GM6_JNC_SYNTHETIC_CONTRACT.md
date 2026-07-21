@@ -124,6 +124,29 @@ unknown configuration field is rejected at construction. The adapters always
 instantiate the local contract-only mapper; ADOS rule 10 remains a
 responsibility boundary, not a runtime import or a pluggable execution seam.
 
+### D2 policy lock: governance and media input are own data only
+
+Before preflight, audit, quota, or adapter execution, the governed runner
+copies only the exact documented request fields from own, enumerable data
+descriptors. Inherited fields, symbols, hidden properties, sparse scope arrays,
+and getters are rejected. Consequently an accessor cannot manufacture owner
+approval, change a scope, or change cost/item values while validation is in
+progress; rejection happens before an audit record or quota reservation.
+
+GM5 and GM6 repeat the same rule at their direct adapter boundary for every
+accepted 3D/game input and nested image reference. They read only own,
+enumerable data descriptors from plain (or null-prototype) objects and build a
+fresh normalized value for the review snapshot. Inherited prompt, project,
+GPU, asset hash, or media-type values; accessors; symbols; and non-enumerable
+fields fail closed as input errors. This is a local data-shape control, not a
+transport, file, process, provider, or engine capability.
+
+The HTTP parser remains an earlier request-shape boundary. D2 deliberately
+also covers direct TypeScript/internal calls so those calls cannot bypass the
+same synthetic-only input semantics. It does not add a credential, live mode,
+provider endpoint, executable path, filesystem write, JNC dispatch, or
+publication route.
+
 ## Synthetic result egress boundary
 
 After an adapter returns, the governed runner performs one final, local-only

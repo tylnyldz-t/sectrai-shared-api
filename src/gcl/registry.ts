@@ -19,9 +19,58 @@ function positiveInteger(value: number): boolean { return Number.isSafeInteger(v
 const PRODUCT_PATTERN = /^sectrai-[a-z0-9-]{1,80}$/
 const WORKSPACE_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
+const RUN_REQUEST_KEYS = ['connectorId', 'input', 'product', 'workspaceId', 'actor', 'ownerApproved', 'scopes', 'costCapCents', 'requestedItems'] as const
 
-function validContext(request: RunConnectorRequest): boolean {
-  return PRODUCT_PATTERN.test(request.product) && WORKSPACE_PATTERN.test(request.workspaceId) && ACTOR_PATTERN.test(request.actor)
+type DataRecord = Record<string, unknown>
+type ValidRunContext = DataRecord & { product: string; workspaceId: string; actor: string }
+
+/**
+ * Governance fields may be supplied to the runner directly by future
+ * internal callers. Read only own enumerable data descriptors so inherited
+ * or accessor-backed approval, scope, or quota values never reach audit,
+ * quota, or a connector.
+ */
+function runRequestRecord(value: unknown): DataRecord | null {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length > 0) return null
+    const names = Object.getOwnPropertyNames(value)
+    if (names.length !== RUN_REQUEST_KEYS.length || names.some((name) => !(RUN_REQUEST_KEYS as readonly string[]).includes(name))) return null
+    const output = Object.create(null) as DataRecord
+    for (const name of RUN_REQUEST_KEYS) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, name)
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return null
+      output[name] = descriptor.value
+    }
+    return output
+  } catch {
+    return null
+  }
+}
+
+function strictScopeArray(value: unknown): string[] | null {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
+    const names = Object.getOwnPropertyNames(value)
+    const length = value.length
+    if (!Number.isSafeInteger(length) || length < 1 || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return null
+    const output: string[] = []
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor) || typeof descriptor.value !== 'string') return null
+      output.push(descriptor.value)
+    }
+    return output
+  } catch {
+    return null
+  }
+}
+
+function validContext(request: DataRecord): request is ValidRunContext {
+  return typeof request.product === 'string' && PRODUCT_PATTERN.test(request.product) &&
+    typeof request.workspaceId === 'string' && WORKSPACE_PATTERN.test(request.workspaceId) &&
+    typeof request.actor === 'string' && ACTOR_PATTERN.test(request.actor)
 }
 
 /** Audit error details are stable codes, never an adapter's arbitrary message. */
@@ -59,25 +108,28 @@ export class GovernedConnectorRunner {
   ) {}
 
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
-    const connector = this.registry.get(request.connectorId)
-    if (request.ownerApproved !== true) throw new OwnerGateError()
-    if (!validContext(request)) throw new ConnectorInputError('CONNECTOR_INVALID_CONTEXT')
-    if (!positiveInteger(request.costCapCents)) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
-    if (!positiveInteger(request.requestedItems)) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
-    if (!Array.isArray(request.scopes) || request.scopes.length === 0 || request.scopes.some((scope) => typeof scope !== 'string' || !connector.scopes.includes(scope)) || new Set(request.scopes).size !== request.scopes.length) throw new ScopeError()
+    const safeRequest = runRequestRecord(request)
+    if (!safeRequest || typeof safeRequest.connectorId !== 'string') throw new ConnectorInputError('CONNECTOR_INVALID_CONTEXT')
+    const connector = this.registry.get(safeRequest.connectorId)
+    if (safeRequest.ownerApproved !== true) throw new OwnerGateError()
+    if (!validContext(safeRequest)) throw new ConnectorInputError('CONNECTOR_INVALID_CONTEXT')
+    if (typeof safeRequest.costCapCents !== 'number' || !positiveInteger(safeRequest.costCapCents)) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
+    if (typeof safeRequest.requestedItems !== 'number' || !positiveInteger(safeRequest.requestedItems)) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
+    const scopes = strictScopeArray(safeRequest.scopes)
+    if (!scopes || scopes.some((scope) => !connector.scopes.includes(scope)) || new Set(scopes).size !== scopes.length) throw new ScopeError()
 
     const occurredAt = this.now()
     const context: ConnectorRunContext = {
-      product: request.product,
-      workspaceId: request.workspaceId,
-      actor: request.actor,
-      ownerApproved: request.ownerApproved,
-      scopes: [...request.scopes].sort(),
-      costCapCents: request.costCapCents,
-      requestedItems: request.requestedItems,
+      product: safeRequest.product,
+      workspaceId: safeRequest.workspaceId,
+      actor: safeRequest.actor,
+      ownerApproved: true,
+      scopes: scopes.sort(),
+      costCapCents: safeRequest.costCapCents,
+      requestedItems: safeRequest.requestedItems,
       now: this.now,
     }
-    await connector.preflight?.(request.input, context)
+    await connector.preflight?.(safeRequest.input, context)
     const requestedAudit = await this.auditLog.append({
       type: 'connector.run.requested', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId,
       actor: context.actor, scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,
@@ -85,7 +137,7 @@ export class GovernedConnectorRunner {
     })
     await this.quota.consume({ ...context, connectorId: connector.id, occurredAt })
     try {
-      const result = validatedSyntheticConnectorResult(await connector.run(request.input, context), connector.id)
+      const result = validatedSyntheticConnectorResult(await connector.run(safeRequest.input, context), connector.id)
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId,
         actor: context.actor, scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,

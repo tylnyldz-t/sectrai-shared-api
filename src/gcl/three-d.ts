@@ -85,10 +85,23 @@ function connectorConfig(value: SyntheticThreeDConnectorConfig): SyntheticThreeD
 }
 
 function inputRecord(value: unknown, permittedKeys: readonly string[]): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError()
-  const record = value as Record<string, unknown>
-  if (Object.keys(record).some((key) => !permittedKeys.includes(key))) throw new ConnectorInputError('UNEXPECTED_THREED_INPUT_FIELD')
-  return record
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError()
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length > 0) throw new ConnectorInputError()
+    const names = Object.getOwnPropertyNames(value)
+    if (names.some((name) => !permittedKeys.includes(name))) throw new ConnectorInputError('UNEXPECTED_THREED_INPUT_FIELD')
+    const record = Object.create(null) as Record<string, unknown>
+    for (const name of names) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, name)
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) throw new ConnectorInputError()
+      record[name] = descriptor.value
+    }
+    return record
+  } catch (error) {
+    if (error instanceof ConnectorInputError) throw error
+    throw new ConnectorInputError()
+  }
 }
 
 function boundedString(value: unknown, maximumLength: number, error: string): string {

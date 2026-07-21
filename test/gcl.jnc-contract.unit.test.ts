@@ -373,6 +373,59 @@ test('direct runner calls reject malformed governance context before audit or qu
   assert.equal(governed.quota.reservations.length, 0)
 })
 
+test('GM5/GM6 inputs and direct runner governance read only own data descriptors', async () => {
+  const threeD = new SyntheticTextToThreeDConnector(threeDConfig())
+  const inheritedThreeDInput = Object.create({ prompt: 'Inherited synthetic proposal must not be accepted' })
+  await assert.rejects(threeD.run(inheritedThreeDInput, directContext()), ConnectorInputError)
+
+  let threeDGetterReads = 0
+  const accessorThreeDInput: Record<string, unknown> = {}
+  Object.defineProperty(accessorThreeDInput, 'prompt', {
+    enumerable: true,
+    get() { threeDGetterReads += 1; return 'Accessor-backed synthetic proposal must not be accepted' },
+  })
+  await assert.rejects(threeD.run(accessorThreeDInput as unknown as import('../src/gcl/three-d.js').TextToThreeDInput, directContext()), ConnectorInputError)
+  assert.equal(threeDGetterReads, 0)
+
+  const hiddenThreeDInput: Record<string, unknown> = {}
+  Object.defineProperty(hiddenThreeDInput, 'prompt', { enumerable: false, value: 'Hidden synthetic proposal must not be accepted' })
+  await assert.rejects(threeD.run(hiddenThreeDInput as unknown as import('../src/gcl/three-d.js').TextToThreeDInput, directContext()), ConnectorInputError)
+
+  const inheritedImageReference = Object.create({ assetId: 'local-only', sha256: 'a'.repeat(64), mediaType: 'image/png' })
+  await assert.rejects(
+    new SyntheticImageTextToThreeDConnector(threeDConfig()).run({ prompt: 'A local-only reference', image: inheritedImageReference } as unknown as import('../src/gcl/three-d.js').ImageTextToThreeDInput, directContext()),
+    ConnectorInputError,
+  )
+
+  const game = new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 30 })
+  const gameContext = directContext({ scopes: ['game:project:build'], costCapCents: 100, requestedItems: 12 })
+  await assert.rejects(game.run(Object.create(premiumUnreal) as GameEngineBuildInput, gameContext), (error: unknown) => error instanceof ConnectorInputError && error.message === 'GAME_ENGINE_INVALID_INPUT')
+
+  let gameGetterReads = 0
+  const accessorGameInput = { ...premiumUnreal } as Record<string, unknown>
+  Object.defineProperty(accessorGameInput, 'brief', {
+    enumerable: true,
+    get() { gameGetterReads += 1; return premiumUnreal.brief },
+  })
+  await assert.rejects(game.run(accessorGameInput as GameEngineBuildInput, gameContext), (error: unknown) => error instanceof ConnectorInputError && error.message === 'GAME_ENGINE_INVALID_INPUT')
+  assert.equal(gameGetterReads, 0)
+
+  const governed = runner(new SyntheticTextToThreeDConnector(threeDConfig()))
+  let governanceGetterReads = 0
+  const accessorRequest = request() as unknown as Record<string, unknown>
+  Object.defineProperty(accessorRequest, 'costCapCents', {
+    enumerable: true,
+    get() { governanceGetterReads += 1; return 50 },
+  })
+  await assert.rejects(governed.run.run(accessorRequest as unknown as RunConnectorRequest), (error: unknown) => error instanceof ConnectorInputError && error.message === 'CONNECTOR_INVALID_CONTEXT')
+  assert.equal(governanceGetterReads, 0)
+  const sparseScopes = ['3d:generate'] as string[]
+  sparseScopes.length = 2
+  await assert.rejects(governed.run.run(request({ scopes: sparseScopes })), ScopeError)
+  assert.equal(governed.audit.entries.length, 0)
+  assert.equal(governed.quota.reservations.length, 0)
+})
+
 test('failed adapter messages are never copied into the durable audit chain', async () => {
   const untrustedMessage = `untrusted-adapter-message-${'x'.repeat(600)}`
   const connector: Connector = {
