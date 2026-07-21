@@ -1,13 +1,15 @@
 import { createHash } from 'node:crypto'
 import { types as nodeTypes } from 'node:util'
+import { hashAuditEvent } from './audit.js'
 import { CameraConsentError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError } from './errors.js'
-import type { AuditLog, Connector, ConnectorResult, ConnectorRunContext } from './types.js'
+import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export const CAMERA_CONNECTOR_ID = 'camera-observation'
 export const CAMERA_LIVE_STATUS = 'LIVE_DISABLED' as const
 export const CAMERA_SCOPE = 'camera:observe' as const
 export const CAMERA_REVIEW_PACKET_VERSION = 'synthetic-camera-review-packet-v1' as const
 export const CAMERA_REVIEW_RECEIPT_VERSION = 'synthetic-camera-review-receipt-v1' as const
+export const CAMERA_REVIEW_AUDIT_WITNESS_VERSION = 'synthetic-camera-review-audit-witness-v1' as const
 
 export type AdosCameraControl = {
   id: `ADOS-${string}`
@@ -27,8 +29,8 @@ export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.free
   { id: 'ADOS-05', control: 'PURPOSE_BOUND_CONSENT', enforcement: 'A granted synthetic KVKK consent assertion must match the selected fixture and purpose.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'The governed run requires owner approval and separate request/check actors; review rejects the original maker.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIAL_INTERFACE', enforcement: 'The adapter has no camera SDK, network client, stream URL, credential, or provider configuration surface.' },
-  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain.' },
-  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review records only an approved or rejected decision; action, notification, publication, and handoff remain not sent.' },
+  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D4 only read-checks a caller-supplied entry.' },
+  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipt, and D4 witness record only an approved or rejected decision; action, notification, publication, and handoff remain not sent.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or camera connection is part of this connector.' },
 ])
 
@@ -112,6 +114,22 @@ export type SyntheticCameraReviewReceipt = {
   publication: 'NOT_PUBLISHED'
   auditHash: string
   integrityDigest: string
+}
+
+/**
+ * D4's minimized return value after a caller-supplied audit entry has been
+ * checked. It is not durable evidence, an authorization, or an action token.
+ */
+export type CameraReviewAuditWitness = {
+  version: typeof CAMERA_REVIEW_AUDIT_WITNESS_VERSION
+  reviewId: string
+  auditHash: string
+  previousAuditHash: string | null
+  state: 'SYNTHETIC_REVIEW_AUDIT_ENTRY_VERIFIED_NO_ACTION'
+  rawMediaIncluded: false
+  automaticAction: false
+  notification: 'NOT_SENT'
+  publication: 'NOT_PUBLISHED'
 }
 
 export type ReviewedCameraObservation = {
@@ -204,6 +222,24 @@ function exactObject(value: unknown, allowed: readonly string[], error: string):
     const descriptor = descriptors[key]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError(error)
     normalized[key] = descriptor.value
+  }
+  return normalized
+}
+
+/** Accepts a dense, ordinary array of own enumerable data strings only. */
+function exactStringArray(value: unknown, error: string, maximumItems: number, maximumItemLength: number): string[] {
+  if (!Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new ConnectorInputError(error)
+  if (value.length > maximumItems || Object.getOwnPropertySymbols(value).length > 0) throw new ConnectorInputError(error)
+  const names = Object.getOwnPropertyNames(value)
+  if (names.length !== value.length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+    throw new ConnectorInputError(error)
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const normalized: string[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = descriptors[String(index)]
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError(error)
+    normalized.push(requiredString(descriptor.value, error, maximumItemLength))
   }
   return normalized
 }
@@ -543,6 +579,81 @@ export function validateCameraReviewReceipt(sourceResult: unknown, value: unknow
     throw new ConnectorInputError('CAMERA_REVIEW_RECEIPT_INTEGRITY_MISMATCH')
   }
   return { ...candidate.reviewed, reviewReceipt: expected }
+}
+
+type CameraReviewAuditEntry = {
+  event: ConnectorAuditEvent
+  previousHash: string | null
+  hash: string
+}
+
+function cameraReviewAuditEntry(value: unknown): CameraReviewAuditEntry {
+  const entry = exactObject(value, ['event', 'previousHash', 'hash'], 'UNEXPECTED_CAMERA_REVIEW_AUDIT_FIELD')
+  const event = exactObject(entry.event, ['type', 'connectorId', 'product', 'workspaceId', 'requestedBy', 'checkedBy', 'correlationId', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'], 'UNEXPECTED_CAMERA_REVIEW_AUDIT_EVENT_FIELD')
+  const type = requiredString(event.type, 'INVALID_CAMERA_REVIEW_AUDIT', 80)
+  const connectorId = requiredString(event.connectorId, 'INVALID_CAMERA_REVIEW_AUDIT', 80)
+  const product = requiredString(event.product, 'INVALID_CAMERA_REVIEW_AUDIT', 120)
+  const workspaceId = requiredString(event.workspaceId, 'INVALID_CAMERA_REVIEW_AUDIT', 120)
+  const requestedBy = normalizedActor(event.requestedBy)
+  const checkedBy = normalizedActor(event.checkedBy)
+  const correlationId = requiredString(event.correlationId, 'INVALID_CAMERA_REVIEW_AUDIT', 120)
+  const scopes = exactStringArray(event.scopes, 'INVALID_CAMERA_REVIEW_AUDIT_SCOPES', 12, 80)
+  const costCapCents = positiveInteger(event.costCapCents)
+  const requestedItems = positiveInteger(event.requestedItems)
+  const occurredAt = canonicalIsoInstant(event.occurredAt, 'INVALID_CAMERA_REVIEW_AUDIT')
+  const detail = exactObject(event.detail, ['reviewId', 'decision', 'observationDigest', 'reviewPacketIntegrityDigest', 'rawMediaIncluded', 'action', 'notification', 'publication', 'handoff'], 'UNEXPECTED_CAMERA_REVIEW_AUDIT_DETAIL_FIELD')
+  const reviewId = requiredString(detail.reviewId, 'INVALID_CAMERA_REVIEW_AUDIT', 64)
+  const observationDigest = requiredString(detail.observationDigest, 'INVALID_CAMERA_REVIEW_AUDIT', 64)
+  const reviewPacketIntegrityDigest = requiredString(detail.reviewPacketIntegrityDigest, 'INVALID_CAMERA_REVIEW_AUDIT', 64)
+  const previousHash = entry.previousHash
+  const hash = requiredString(entry.hash, 'INVALID_CAMERA_REVIEW_AUDIT', 64)
+  if (!requestedBy || requestedBy !== event.requestedBy || !checkedBy || checkedBy !== event.checkedBy || !SCOPE_ID_PATTERN.test(product) || !SCOPE_ID_PATTERN.test(workspaceId) || !SCOPE_ID_PATTERN.test(correlationId) || !costCapCents || !requestedItems || !CAMERA_REVIEW_ID_PATTERN.test(reviewId) || !SHA256_PATTERN.test(observationDigest) || !SHA256_PATTERN.test(reviewPacketIntegrityDigest) || (previousHash !== null && (typeof previousHash !== 'string' || !SHA256_PATTERN.test(previousHash))) || !SHA256_PATTERN.test(hash)) {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_AUDIT')
+  }
+  if ((detail.decision !== 'approved' && detail.decision !== 'rejected') || detail.rawMediaIncluded !== false || detail.action !== 'NOT_EXECUTED' || detail.notification !== 'NOT_SENT' || detail.publication !== 'NOT_PUBLISHED' || detail.handoff !== 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED') {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_AUDIT')
+  }
+  return {
+    event: {
+      type: type as ConnectorAuditEvent['type'], connectorId, product, workspaceId, requestedBy, checkedBy, correlationId, scopes,
+      costCapCents, requestedItems, occurredAt,
+      detail: { reviewId, decision: detail.decision, observationDigest, reviewPacketIntegrityDigest, rawMediaIncluded: false, action: 'NOT_EXECUTED', notification: 'NOT_SENT', publication: 'NOT_PUBLISHED', handoff: 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED' },
+    },
+    previousHash,
+    hash,
+  }
+}
+
+/**
+ * D4 matches a caller-supplied, already-read hash-chain entry to a D1/D2
+ * review. It is fully read-only: it neither queries the audit store nor proves
+ * that a supplied predecessor exists, and it never grants an action capability.
+ */
+export function validateCameraReviewAuditWitness(sourceResult: unknown, reviewedResult: unknown, auditEntry: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): CameraReviewAuditWitness {
+  const source = validateCameraObservationForReview(sourceResult, context)
+  const reviewed = validateCameraReviewReceipt(source, reviewedResult, context)
+  const entry = cameraReviewAuditEntry(auditEntry)
+  const requestedBy = reviewRequester(context.requestedBy)
+  const correlationId = requiredString(context.correlationId, 'INVALID_CAMERA_REVIEW_CONTEXT', 120)
+  const costCapCents = positiveInteger(context.costCapCents)
+  const requestedItems = positiveInteger(context.requestedItems)
+  if (!SCOPE_ID_PATTERN.test(correlationId) || !costCapCents || !requestedItems) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CONTEXT')
+  if (entry.hash !== hashAuditEvent(entry.event, entry.previousHash)) throw new ConnectorInputError('CAMERA_REVIEW_AUDIT_HASH_MISMATCH')
+  const detail = entry.event.detail
+  if (entry.event.type !== 'connector.camera.owner_reviewed' || entry.event.connectorId !== CAMERA_CONNECTOR_ID || entry.event.product !== context.product || entry.event.workspaceId !== context.workspaceId || entry.event.requestedBy !== requestedBy || entry.event.checkedBy !== reviewed.ownerReview.reviewer || entry.event.correlationId !== correlationId || entry.event.scopes.length !== 1 || entry.event.scopes[0] !== CAMERA_SCOPE || entry.event.costCapCents !== costCapCents || entry.event.requestedItems !== requestedItems || entry.event.occurredAt !== reviewed.ownerReview.occurredAt || detail.reviewId !== source.reviewPacket.reviewId || detail.decision !== reviewed.decision || detail.observationDigest !== source.reviewPacket.observationDigest || detail.reviewPacketIntegrityDigest !== source.reviewPacket.integrityDigest || entry.hash !== reviewed.auditHash) {
+    throw new ConnectorInputError('CAMERA_REVIEW_AUDIT_MISMATCH')
+  }
+  return {
+    version: CAMERA_REVIEW_AUDIT_WITNESS_VERSION,
+    reviewId: source.reviewPacket.reviewId,
+    auditHash: entry.hash,
+    previousAuditHash: entry.previousHash,
+    state: 'SYNTHETIC_REVIEW_AUDIT_ENTRY_VERIFIED_NO_ACTION',
+    rawMediaIncluded: false,
+    automaticAction: false,
+    notification: 'NOT_SENT',
+    publication: 'NOT_PUBLISHED',
+  }
 }
 
 /**

@@ -1,12 +1,12 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
+import { InMemoryHashChainAuditLog, hashAuditEvent } from '../src/gcl/audit.js'
 import { CameraConsentError, ConnectorInputError, ConnectorUnavailableError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
 import { ownerTokenMatches } from '../src/gcl/owner.js'
 import { cameraDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import type { ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
-import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
+import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_AUDIT_WITNESS_VERSION, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewAuditWitness, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
 const context: ConnectorRunContext = {
@@ -281,6 +281,87 @@ test('D3 strict data boundary rejects hidden, symbol, proxy, and accessor-shaped
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_RECEIPT_FIELD',
   )
   assert.equal(receiptAccessorRead, false)
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
+})
+
+test('D4 audit witness matches only the supplied review event and rejects hash, semantic, and shaped evidence without writes', async () => {
+  const setup = runnerFor()
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
+  const storedAuditEntry = setup.audit.entries[2]
+  assert.ok(storedAuditEntry)
+  const auditEntry = () => structuredClone(storedAuditEntry)
+
+  const witness = validateCameraReviewAuditWitness(result.data, reviewed, auditEntry(), context)
+  assert.equal(witness.version, CAMERA_REVIEW_AUDIT_WITNESS_VERSION)
+  assert.equal(witness.reviewId, reviewed.reviewId)
+  assert.equal(witness.auditHash, reviewed.auditHash)
+  assert.equal(witness.previousAuditHash, setup.audit.entries[1]?.hash)
+  assert.equal(witness.state, 'SYNTHETIC_REVIEW_AUDIT_ENTRY_VERIFIED_NO_ACTION')
+  assert.equal(witness.rawMediaIncluded, false)
+  assert.equal(witness.automaticAction, false)
+  assert.equal(witness.notification, 'NOT_SENT')
+  assert.equal(witness.publication, 'NOT_PUBLISHED')
+
+  const alteredHash = auditEntry()
+  alteredHash.hash = '0'.repeat(64)
+  assert.throws(
+    () => validateCameraReviewAuditWitness(result.data, reviewed, alteredHash, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_REVIEW_AUDIT_HASH_MISMATCH',
+  )
+
+  const alteredDecision = auditEntry()
+  alteredDecision.event.detail.decision = 'rejected'
+  alteredDecision.hash = hashAuditEvent(alteredDecision.event, alteredDecision.previousHash)
+  assert.throws(
+    () => validateCameraReviewAuditWitness(result.data, reviewed, alteredDecision, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_REVIEW_AUDIT_MISMATCH',
+  )
+
+  const crossWorkspace = auditEntry()
+  crossWorkspace.event.workspaceId = 'another-workspace'
+  crossWorkspace.hash = hashAuditEvent(crossWorkspace.event, crossWorkspace.previousHash)
+  assert.throws(
+    () => validateCameraReviewAuditWitness(result.data, reviewed, crossWorkspace, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_REVIEW_AUDIT_MISMATCH',
+  )
+
+  const hiddenRawMedia = auditEntry() as typeof setup.audit.entries[number] & { event: typeof setup.audit.entries[number]['event'] & { detail: Record<string, unknown> } }
+  Object.defineProperty(hiddenRawMedia.event.detail, 'snapshot', { value: 'data:image/png;base64,not-accepted', enumerable: false })
+  assert.throws(
+    () => validateCameraReviewAuditWitness(result.data, reviewed, hiddenRawMedia, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_AUDIT_DETAIL_FIELD',
+  )
+
+  const symbolShaped = auditEntry()
+  Object.defineProperty(symbolShaped.event, Symbol('device-address'), { value: 'rtsp://not-accepted.example.test/stream', enumerable: true })
+  assert.throws(
+    () => validateCameraReviewAuditWitness(result.data, reviewed, symbolShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_AUDIT_EVENT_FIELD',
+  )
+
+  const accessorShaped = auditEntry()
+  let accessorRead = false
+  Object.defineProperty(accessorShaped.event, 'correlationId', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validateCameraReviewAuditWitness(result.data, reviewed, accessorShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_AUDIT_EVENT_FIELD',
+  )
+  assert.equal(accessorRead, false)
+
+  let proxyTrapRead = false
+  const proxyShaped = new Proxy(auditEntry(), {
+    get() { proxyTrapRead = true; throw new Error('PROXY_TRAP_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validateCameraReviewAuditWitness(result.data, reviewed, proxyShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_AUDIT_FIELD',
+  )
+  assert.equal(proxyTrapRead, false)
   assert.equal((setup.quota as TestQuota).requests.length, 1)
   assert.equal(setup.audit.entries.length, 3)
 })
