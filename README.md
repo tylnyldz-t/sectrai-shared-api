@@ -50,3 +50,11 @@ DATABASE_URL='your Neon URL' SHARED_API_KEY_HEALTH='...' npm start
 ## Safety boundary
 
 The service stores only product-owned synthetic demo records. It does not make AI calls, execute product actions, or interpret `values`. Product-level Vercel admin gates remain the outer authentication layer; this API key is a second product boundary, not a replacement for user authentication.
+
+## GM5 3D connector boundary
+
+`src/gcl/three-d.ts` provides the Text→3D and Görsel+Metin→3D contracts. Both adapters are deterministic synthetic proposals only: `GCL_3D_LIVE_MODE` must be exactly `LIVE_DISABLED`; there is no provider credential field, HTTP client, or real model call. A missing flag or missing governance limit fails closed before audit and quota reservation.
+
+Run requests pass through the shared GCL runner, which requires an owner approval flag, `3d:generate` scope, a request cost cap within the configured ceiling, daily quota, and SHA-256 audit-chain entries. A returned artifact is always `OWNER_REVIEW_REQUIRED` and `NOT_PUBLISHED`.
+
+The optional `jarvis-node-controller` integration is contract-only. It produces a GPU resource card with `autostart: false`, `NOT_DISPATCHED`, and a separate owner-approval requirement. It does not import, probe, invoke, lease, schedule, or start JARVIS. `createGovernedThreeDRunner` is a composition root only; this API exposes no GM5 HTTP route.
