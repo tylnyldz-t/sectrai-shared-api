@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { readFileSync } from 'node:fs'
+import { posix as path } from 'node:path'
 import test from 'node:test'
 
 type Snapshot = {
@@ -14,11 +15,15 @@ type Snapshot = {
   quotaFailureAudited: boolean
 }
 
+const AUDIT_WORKTREE_ROOT = '/home/tayla/projects/_wt'
+const GCL_ROOT = 'src/gcl/'
+
 /*
- * These are immutable local worktree snapshots from the D1 audit batch. The
- * expected Git blob IDs make a modified source fail the audit. This test does
- * not import their runtime, load an env file, open a socket, or make a network
- * request. A missing snapshot is an audit failure, not permission to skip it.
+ * These are immutable local Git snapshots from the D1 audit batch. Every
+ * source read below is `git show <revision>:<path>`, never the mutable
+ * worktree file. This fixture does not import target runtime code, load an
+ * env file, open a socket, or make a network request. A missing worktree,
+ * revision, blob, or local GCL dependency is an audit failure.
  */
 const snapshots: readonly Snapshot[] = [
   { name: 'RA voice', revision: '80a1cc6', directory: 'night-ra-voice', connectorPath: 'src/gcl/voice.ts', connectorBlob: '1c232082a4bf8f6595afb2f6410f9f4d6c75fda0', registryBlob: 'bde353ad8e3896800b3d3d5da4660480719c5aea', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
@@ -32,51 +37,106 @@ const snapshots: readonly Snapshot[] = [
   { name: 'Camera', revision: '0c166df', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '6682bf3b5b7ff73d14e3d1aed74a98ce2d32c63c', registryBlob: 'b8787e9af75503bb5b1f5b0c8269545846dfaa95', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
 ]
 
+function repositoryFor(snapshot: Snapshot): string {
+  if (!/^[a-z0-9-]+$/.test(snapshot.directory)) throw new Error(`D1_AUDIT_INVALID_WORKTREE:${snapshot.name}`)
+  if (!/^[a-f0-9]{7,40}$/.test(snapshot.revision)) throw new Error(`D1_AUDIT_INVALID_REVISION:${snapshot.name}`)
+  return path.join(AUDIT_WORKTREE_ROOT, snapshot.directory)
+}
+
+function gitAt(snapshot: Snapshot, args: readonly string[]): string {
+  try {
+    return execFileSync('git', ['-C', repositoryFor(snapshot), ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] })
+  } catch {
+    throw new Error(`D1_AUDIT_SNAPSHOT_UNAVAILABLE:${snapshot.name}:${args.join(' ')}`)
+  }
+}
+
 function sourceAt(snapshot: Snapshot, relativePath: string): string {
-  return readFileSync(`/home/tayla/projects/_wt/${snapshot.directory}/${relativePath}`, 'utf8')
+  if (!relativePath.startsWith(GCL_ROOT) || !relativePath.endsWith('.ts')) throw new Error(`D1_AUDIT_INVALID_SOURCE_PATH:${snapshot.name}:${relativePath}`)
+  return gitAt(snapshot, ['show', `${snapshot.revision}:${relativePath}`])
 }
 
 function gitBlobId(source: string): string {
   return createHash('sha1').update(`blob ${Buffer.byteLength(source, 'utf8')}\0`).update(source).digest('hex')
 }
 
+function localGclImportPaths(relativePath: string, source: string): readonly string[] {
+  const imports = new Set<string>()
+  for (const match of source.matchAll(/\bfrom\s+['"](\.{1,2}\/[^'"]+)['"]/g)) {
+    const resolved = path.normalize(path.join(path.dirname(relativePath), match[1])).replace(/\.js$/, '.ts')
+    if (!resolved.startsWith(GCL_ROOT) || !resolved.endsWith('.ts')) throw new Error(`D1_AUDIT_GCL_BOUNDARY_ESCAPE:${relativePath}:${match[1]}`)
+    imports.add(resolved)
+  }
+  return [...imports]
+}
+
+function sourceClosure(snapshot: Snapshot): ReadonlyMap<string, string> {
+  const pending = [snapshot.connectorPath, 'src/gcl/registry.ts']
+  const sources = new Map<string, string>()
+  while (pending.length > 0) {
+    const relativePath = pending.pop()
+    if (!relativePath || sources.has(relativePath)) continue
+    const source = sourceAt(snapshot, relativePath)
+    sources.set(relativePath, source)
+    pending.push(...localGclImportPaths(relativePath, source))
+  }
+  return sources
+}
+
 function auditCapturesQuotaFailure(registry: string): boolean {
   const requestedAudit = registry.indexOf('const requestedAudit')
-  const quota = registry.indexOf('await this.quota.consume', requestedAudit)
   const protectedExecution = registry.indexOf('try {', requestedAudit)
+  const quota = registry.indexOf('await this.quota.consume', requestedAudit)
   const failureAudit = Math.max(
     registry.indexOf("type: 'connector.run.failed'", quota),
     registry.indexOf("this.event('connector.run.failed'", quota),
   )
-  return requestedAudit >= 0 && quota > requestedAudit && protectedExecution > requestedAudit && protectedExecution < quota && failureAudit > quota
+  const requestedLink = registry.indexOf('requestedAuditHash: requestedAudit.hash', failureAudit)
+  return requestedAudit >= 0 && protectedExecution > requestedAudit && protectedExecution < quota && failureAudit > quota && requestedLink > failureAudit
 }
 
 function hardDeniesLiveOptIn(connector: string): boolean {
   return /if \((?:this\.)?config\.liveEnabled\) throw new ConnectorUnavailableError/.test(connector)
 }
 
-test('D1 source fixture pins every audited connector and its governance runner', () => {
+function ownerDenialPrecedesReservations(registry: string): boolean {
+  const ownerGate = registry.search(/if \(!(?:request|context)\.ownerApproved\) throw new OwnerGateError/)
+  const preflight = registry.indexOf('await connector.preflight')
+  const requestedAudit = registry.indexOf('const requestedAudit')
+  const quota = registry.indexOf('await this.quota.consume')
+  return ownerGate >= 0 && ownerGate < preflight && preflight < requestedAudit && requestedAudit < quota
+}
+
+test('D1 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
+    const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
+    assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
     assert.equal(gitBlobId(sourceAt(snapshot, snapshot.connectorPath)), snapshot.connectorBlob, `${snapshot.name} connector source changed from ${snapshot.revision}`)
     assert.equal(gitBlobId(sourceAt(snapshot, 'src/gcl/registry.ts')), snapshot.registryBlob, `${snapshot.name} runner source changed from ${snapshot.revision}`)
   }
 })
 
-test('D1 synthetic boundary has no egress surface and hard-denies every live opt-in it exposes', () => {
+test('D1 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
+    const closure = [...sourceClosure(snapshot).values()].join('\n')
     assert.match(connector, /LIVE_DISABLED/, `${snapshot.name} must declare a permanent disabled state`)
-    assert.doesNotMatch(connector, /\bfetch\s*\(/, `${snapshot.name} must not introduce an HTTP client`)
-    assert.doesNotMatch(connector, /\b(?:XMLHttpRequest|WebSocket|https?\.request)\b/, `${snapshot.name} must not introduce an egress client`)
+    assert.doesNotMatch(closure, /\b(?:fetch|XMLHttpRequest|WebSocket|axios|undici|node-fetch|https?\.request)\s*\(/, `${snapshot.name} must not introduce an egress client`)
+    // SVG's non-network XML namespace is the sole allowed URL-shaped literal.
+    assert.doesNotMatch(closure.replaceAll('http://www.w3.org/2000/svg', ''), /\bhttps?:\/\//, `${snapshot.name} must not embed a provider endpoint`)
+    assert.doesNotMatch(closure, /\b(?:exec|execFile|spawn|fork|Bun\.spawn|Deno\.Command)\s*\(/, `${snapshot.name} must not launch a provider or local worker`)
+    assert.doesNotMatch(closure, /(?:process\.env|environment)\.[A-Z0-9_]*(?:API_KEY|TOKEN|SECRET|PASSWORD|CREDENTIAL|AUTHORIZATION|BEARER)[A-Z0-9_]*/i, `${snapshot.name} must not read a credential-like environment variable`)
+    assert.doesNotMatch(closure, /\b(?:autoPublish|automaticPublication)\s*:\s*true\b/, `${snapshot.name} must not automatically publish output`)
     const hasLiveEnableEnvironment = /GCL_[A-Z0-9_]+_LIVE_ENABLED/.test(connector)
     assert.equal(hasLiveEnableEnvironment, snapshot.hardDeniesLiveOptIn, `${snapshot.name} live-enable surface changed`)
     if (snapshot.hardDeniesLiveOptIn) assert.equal(hardDeniesLiveOptIn(connector), true, `${snapshot.name} must reject a true live flag`)
   }
 })
 
-test('D1 quota-rejection edge case is classified without overstating conformance', () => {
+test('D1 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
+    assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
     assert.equal(auditCapturesQuotaFailure(registry), snapshot.quotaFailureAudited, `${snapshot.name} quota-failure audit classification changed`)
   }
 })
