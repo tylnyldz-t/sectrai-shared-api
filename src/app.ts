@@ -170,10 +170,11 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
     const scope = workspaceScopeFrom(request)
     const actor = ownerActorFrom(request)
     const decision = translationArtifactApprovalFrom(request.body)
+    const decisionNow = now()
     const artifactAuditContext: ArtifactAuditContext = {
-      scopes: ['translation:artifact:approve'], costCapCents: 0, requestedItems: 0, occurredAt: now().toISOString(),
+      scopes: ['translation:artifact:approve'], costCapCents: 0, requestedItems: 0, occurredAt: decisionNow.toISOString(),
     }
-    const persisted = await artifacts.decideAndAudit({ ...scope, id: recordIdFrom(request), actor, decision: decision.decision, reviewDigest: decision.reviewDigest, now: now(), audit: artifactAuditContext })
+    const persisted = await artifacts.decideAndAudit({ ...scope, id: recordIdFrom(request), actor, decision: decision.decision, reviewDigest: decision.reviewDigest, now: decisionNow, audit: artifactAuditContext })
     if (!persisted.artifact || !persisted.auditHash) return response.status(404).json({ error: 'TRANSLATION_ARTIFACT_NOT_FOUND', code: 'translation_artifact_not_found' })
     return response.json({ artifact: persisted.artifact, auditHash: persisted.auditHash })
   }))

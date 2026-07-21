@@ -58,6 +58,11 @@ function canonicalActor(value: unknown): value is string {
   return typeof value === 'string' && value.trim() === value && Boolean(value) && /^[a-zA-Z0-9:_@. -]{1,160}$/.test(value)
 }
 
+function canonicalNow(value: unknown): string | null {
+  if (!(value instanceof Date) || Number.isNaN(value.valueOf())) return null
+  return value.toISOString()
+}
+
 function validArtifactBinding(input: Pick<TranslationArtifactRecord, 'connectorId' | 'kind' | 'mediaType' | 'source'>): boolean {
   return (input.connectorId === 'translation-text-synthetic' && input.kind === 'translated-text' && input.mediaType === 'text/plain' && input.source === 'synthetic-text-translation')
     || (input.connectorId === 'translation-speech-synthetic' && input.kind === 'translated-speech' && input.mediaType === 'audio/wav' && input.source === 'synthetic-speech-translation')
@@ -125,7 +130,7 @@ function storedArtifact(value: unknown): StoredArtifact | null {
   if (!validArtifactBinding({ connectorId: input.connectorId, kind: input.kind, mediaType: input.mediaType, source: input.source }) || input.synthetic !== true || input.autoPublish !== false || input.reviewPolicyVersion !== REVIEW_POLICY_VERSION || !canonicalTimestamp(input.reviewExpiresAt)) return null
   if (input.approvalState !== 'pending-checker-approval' && input.approvalState !== 'approved' && input.approvalState !== 'rejected') return null
   if (input.approvalState === 'pending-checker-approval' && (input.decidedAt !== undefined || input.decidedBy !== undefined)) return null
-  if (input.approvalState !== 'pending-checker-approval' && (!canonicalTimestamp(input.decidedAt) || typeof input.decidedBy !== 'string' || !input.decidedBy.trim())) return null
+  if (input.approvalState !== 'pending-checker-approval' && (!canonicalTimestamp(input.decidedAt) || !canonicalActor(input.decidedBy))) return null
   const artifact: StoredArtifact = {
     connectorId: input.connectorId,
     kind: input.kind,
@@ -142,6 +147,20 @@ function storedArtifact(value: unknown): StoredArtifact | null {
     ...(input.approvalState !== 'pending-checker-approval' ? { decidedAt: input.decidedAt, decidedBy: input.decidedBy } : {}),
   }
   return constantTimeEqual(artifact.reviewDigest, translationArtifactReviewDigest(artifact)) ? artifact : null
+}
+
+/** A decision's durable row and audit event must share one canonical instant. */
+function validDecisionAuditInput(input: { actor: string; decision: TranslationArtifactDecision; now: Date; audit: ArtifactAuditContext }): boolean {
+  const decidedAt = canonicalNow(input.now)
+  return Boolean(decidedAt)
+    && canonicalActor(input.actor)
+    && (input.decision === 'approved' || input.decision === 'rejected')
+    && Array.isArray(input.audit.scopes)
+    && input.audit.scopes.length === 1
+    && input.audit.scopes[0] === 'translation:artifact:approve'
+    && input.audit.costCapCents === 0
+    && input.audit.requestedItems === 0
+    && input.audit.occurredAt === decidedAt
 }
 
 /** A record envelope is part of the artifact state: values alone are not trusted. */
@@ -248,6 +267,8 @@ export class PrismaTranslationArtifactStore {
 
   /** The compare-and-set decision and its audit row share one transaction. */
   async decideAndAudit(input: { product: string; workspaceId: string; id: string; actor: string; decision: TranslationArtifactDecision; reviewDigest: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord | null; auditHash?: string }> {
+    if (!validDecisionAuditInput(input)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_DECISION_AUDIT_INVALID')
+    const decidedAt = input.now.toISOString()
     return this.prisma.$transaction(async (transaction) => {
       const record = await transaction.record.findFirst({ where: { id: input.id, product: input.product, workspaceId: input.workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID } })
       if (!record) return { artifact: null }
@@ -259,7 +280,6 @@ export class PrismaTranslationArtifactStore {
       if (!constantTimeEqual(input.reviewDigest, artifact.reviewDigest)) throw new ArtifactReviewBindingError()
       if (new Date(artifact.reviewExpiresAt).valueOf() <= input.now.valueOf()) throw new ArtifactReviewExpiredError()
       const approvalState = input.decision
-      const decidedAt = input.now.toISOString()
       const next: TranslationArtifactRecord = { ...artifact, approvalState, decidedAt, decidedBy: input.actor }
       const updated = await transaction.record.updateMany({
         where: { id: record.id, product: input.product, workspaceId: input.workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID, status: 'pending-checker-approval' },

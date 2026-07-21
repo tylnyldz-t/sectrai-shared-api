@@ -276,9 +276,11 @@ export async function requireTranslationArtifactLifecycleAudit(transaction: Pris
     || decision.index <= created.index
     || decision.entry.event.type !== expectedType
     || decision.entry.event.actor !== artifact.decidedBy
+    || decision.entry.event.actor === artifact.createdBy
     || !sameScopes(decision.entry.event.scopes, ['translation:artifact:approve'])
     || decision.entry.event.costCapCents !== 0
     || decision.entry.event.requestedItems !== 0
+    || artifact.decidedAt !== decision.entry.event.occurredAt
     || !artifactEventMatches(decision.entry.event, artifact, artifact.approvalState)) {
     throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
   }
