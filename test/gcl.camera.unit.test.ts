@@ -6,7 +6,7 @@ import { ownerTokenMatches } from '../src/gcl/owner.js'
 import { cameraDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import type { ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
-import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_AUDIT_WITNESS_VERSION, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewAuditWitness, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
+import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, CAMERA_REVIEW_AUDIT_WITNESS_VERSION, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewAuditTrailWitness, validateCameraReviewAuditWitness, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
 const context: ConnectorRunContext = {
@@ -360,6 +360,93 @@ test('D4 audit witness matches only the supplied review event and rejects hash, 
   assert.throws(
     () => validateCameraReviewAuditWitness(result.data, reviewed, proxyShaped, context),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_AUDIT_FIELD',
+  )
+  assert.equal(proxyTrapRead, false)
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
+})
+
+test('D5 audit-trail witness matches the supplied requested/succeeded/review segment and rejects discontinuous or shaped evidence without writes', async () => {
+  const setup = runnerFor()
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
+  const requestedEntry = setup.audit.entries[0]
+  const succeededEntry = setup.audit.entries[1]
+  const ownerReviewEntry = setup.audit.entries[2]
+  assert.ok(requestedEntry)
+  assert.ok(succeededEntry)
+  assert.ok(ownerReviewEntry)
+  const trail = () => ({
+    requestedRun: structuredClone(requestedEntry),
+    succeededRun: structuredClone(succeededEntry),
+    ownerReview: structuredClone(ownerReviewEntry),
+  })
+
+  const witness = validateCameraReviewAuditTrailWitness(result.data, reviewed, trail(), context)
+  assert.equal(witness.version, CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION)
+  assert.equal(witness.reviewId, reviewed.reviewId)
+  assert.equal(witness.requestedAuditHash, setup.audit.entries[0]?.hash)
+  assert.equal(witness.succeededAuditHash, setup.audit.entries[1]?.hash)
+  assert.equal(witness.reviewAuditHash, reviewed.auditHash)
+  assert.equal(witness.predecessorHash, null)
+  assert.equal(witness.state, 'SYNTHETIC_REVIEW_AUDIT_TRAIL_VERIFIED_NO_ACTION')
+  assert.equal(witness.rawMediaIncluded, false)
+  assert.equal(witness.automaticAction, false)
+  assert.equal(witness.notification, 'NOT_SENT')
+  assert.equal(witness.publication, 'NOT_PUBLISHED')
+
+  const discontinuous = trail()
+  discontinuous.succeededRun.previousHash = '0'.repeat(64)
+  discontinuous.succeededRun.hash = hashAuditEvent(discontinuous.succeededRun.event, discontinuous.succeededRun.previousHash)
+  assert.throws(
+    () => validateCameraReviewAuditTrailWitness(result.data, reviewed, discontinuous, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_AUDIT_TRAIL_CHAIN_MISMATCH',
+  )
+
+  const semanticMismatch = trail()
+  semanticMismatch.succeededRun.event.checkedBy = 'other-checker@example.test'
+  semanticMismatch.succeededRun.hash = hashAuditEvent(semanticMismatch.succeededRun.event, semanticMismatch.succeededRun.previousHash)
+  assert.throws(
+    () => validateCameraReviewAuditTrailWitness(result.data, reviewed, semanticMismatch, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_AUDIT_TRAIL_MISMATCH',
+  )
+
+  const reversedTime = trail()
+  reversedTime.succeededRun.event.occurredAt = '2026-07-22T11:59:59.000Z'
+  reversedTime.succeededRun.hash = hashAuditEvent(reversedTime.succeededRun.event, reversedTime.succeededRun.previousHash)
+  reversedTime.ownerReview.previousHash = reversedTime.succeededRun.hash
+  reversedTime.ownerReview.hash = hashAuditEvent(reversedTime.ownerReview.event, reversedTime.ownerReview.previousHash)
+  assert.throws(
+    () => validateCameraReviewAuditTrailWitness(result.data, reviewed, reversedTime, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_AUDIT_TRAIL_TIME_MISMATCH',
+  )
+
+  const hiddenMedia = trail() as ReturnType<typeof trail> & { requestedRun: typeof setup.audit.entries[number] & { event: typeof setup.audit.entries[number]['event'] & { detail: Record<string, unknown> } } }
+  Object.defineProperty(hiddenMedia.requestedRun.event.detail, 'snapshot', { value: 'data:image/png;base64,not-accepted', enumerable: false })
+  assert.throws(
+    () => validateCameraReviewAuditTrailWitness(result.data, reviewed, hiddenMedia, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_AUDIT_TRAIL_REQUESTED_DETAIL_FIELD',
+  )
+
+  const accessorTrail = trail()
+  let accessorRead = false
+  Object.defineProperty(accessorTrail.succeededRun, 'hash', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validateCameraReviewAuditTrailWitness(result.data, reviewed, accessorTrail, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_AUDIT_TRAIL_ENTRY_FIELD',
+  )
+  assert.equal(accessorRead, false)
+
+  let proxyTrapRead = false
+  const proxyTrail = new Proxy(trail(), {
+    get() { proxyTrapRead = true; throw new Error('PROXY_TRAP_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validateCameraReviewAuditTrailWitness(result.data, reviewed, proxyTrail, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_AUDIT_TRAIL_FIELD',
   )
   assert.equal(proxyTrapRead, false)
   assert.equal((setup.quota as TestQuota).requests.length, 1)

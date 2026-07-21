@@ -102,9 +102,39 @@ not a signature, credential, authorization, handoff, publication, or action
 capability. A scoped durable audit lookup remains a separate, future
 product-owned owner decision and is not implemented here.
 
+## D5 — read-only three-event audit-trail witness
+
+`validateCameraReviewAuditTrailWitness(sourceResult, reviewedResult, trail,
+context)` is a library-only check of exactly three caller-supplied events:
+`connector.run.requested`, `connector.run.succeeded`, and
+`connector.camera.owner_reviewed`. Every entry must have the strict D3
+data-only shape and a valid SHA-256 hash. D5 requires the requested hash to be
+the succeeded event's predecessor and `requestedAuditHash`, then requires the
+succeeded hash to be the owner-review event's predecessor. It additionally
+binds both run events to the product/workspace, maker/checker, correlation ID,
+sole `camera:observe` scope, cost/item bounds, canonical event ordering, and
+the existing D1/D2/D4 review result.
+
+The only successful return is a minimized fixed-no-action witness carrying the
+three hashes, review ID, and the first entry's supplied predecessor hash. It
+does not return observations, consent, fixture IDs, raw media, device data, or
+actor identities. Hidden/symbol/Proxy/accessor/inherited fields, media/device
+shapes, duplicate/missing events, non-canonical timestamps, changed hashes,
+chain discontinuity, or cross-scope/actor/cost semantics fail closed before a
+result is returned.
+
+D5 verifies continuity only inside that caller-supplied segment. It does
+**not** query a database, establish that the supplied events were ever stored,
+prove that the segment's first predecessor exists, append an event, consume
+quota, create a route, authenticate a person, send a handoff, or authorize an
+action. Like D1–D4, every digest is unkeyed mutation evidence—not a signature,
+credential, delivery instruction, or capability. A durable audit lookup and
+any product action remain separate future owner decisions and are not
+implemented here.
+
 ## Audit and storage boundary
 
-The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1/D2/D3/D4 add no migration and no new persistence model.
+The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1/D2/D3/D4/D5 add no migration and no new persistence model.
 
 ## ADOS 10-rule conformance
 
@@ -115,8 +145,8 @@ The existing shared `gcl-audit` and `gcl-usage` records use the product/workspac
 5. Purpose-bound synthetic KVKK consent must match the fixture.
 6. Owner approval plus maker–checker separation are required; D1 rejects the original maker as reviewer and D2 minimizes that review evidence.
 7. The code has no device SDK, transport, network client, credential, or provider interface.
-8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D4 can only read-check a caller-supplied entry.
-9. Owner review, its D2 receipt, and D4 witness record no handoff, command, notification, publication, or automatic action; D3/D4 validate them without executing accessors or adding a write path.
+8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment.
+9. Owner review, its D2 receipt, and D4/D5 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5 validate them without executing accessors or adding a write path.
 10. This branch contains no live launch, production migration, main/prod write, or camera hardware path.
 
 ## Explicit non-goals

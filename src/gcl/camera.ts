@@ -676,6 +676,109 @@ export function validateCameraReviewAuditWitness(sourceResult: unknown, reviewed
   }
 }
 
+type CameraGovernedRunAuditEntry = {
+  event: ConnectorAuditEvent
+  previousHash: string | null
+  hash: string
+}
+
+function cameraGovernedRunAuditEntry(value: unknown, expectedType: 'connector.run.requested' | 'connector.run.succeeded'): CameraGovernedRunAuditEntry {
+  const entry = exactObject(value, ['event', 'previousHash', 'hash'], 'UNEXPECTED_CAMERA_AUDIT_TRAIL_ENTRY_FIELD')
+  const event = exactObject(entry.event, ['type', 'connectorId', 'product', 'workspaceId', 'requestedBy', 'checkedBy', 'correlationId', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'], 'UNEXPECTED_CAMERA_AUDIT_TRAIL_EVENT_FIELD')
+  const type = requiredString(event.type, 'INVALID_CAMERA_AUDIT_TRAIL', 80)
+  const connectorId = requiredString(event.connectorId, 'INVALID_CAMERA_AUDIT_TRAIL', 80)
+  const product = requiredString(event.product, 'INVALID_CAMERA_AUDIT_TRAIL', 120)
+  const workspaceId = requiredString(event.workspaceId, 'INVALID_CAMERA_AUDIT_TRAIL', 120)
+  const requestedBy = normalizedActor(event.requestedBy)
+  const checkedBy = normalizedActor(event.checkedBy)
+  const correlationId = requiredString(event.correlationId, 'INVALID_CAMERA_AUDIT_TRAIL', 120)
+  const scopes = exactStringArray(event.scopes, 'INVALID_CAMERA_AUDIT_TRAIL_SCOPES', 12, 80)
+  const costCapCents = positiveInteger(event.costCapCents)
+  const requestedItems = positiveInteger(event.requestedItems)
+  const occurredAt = canonicalIsoInstant(event.occurredAt, 'INVALID_CAMERA_AUDIT_TRAIL')
+  const detail = expectedType === 'connector.run.requested'
+    ? exactObject(event.detail, [], 'UNEXPECTED_CAMERA_AUDIT_TRAIL_REQUESTED_DETAIL_FIELD')
+    : exactObject(event.detail, ['requestedAuditHash'], 'UNEXPECTED_CAMERA_AUDIT_TRAIL_SUCCEEDED_DETAIL_FIELD')
+  const previousHash = entry.previousHash
+  const hash = requiredString(entry.hash, 'INVALID_CAMERA_AUDIT_TRAIL', 64)
+  const requestedAuditHash = expectedType === 'connector.run.succeeded'
+    ? requiredString(detail.requestedAuditHash, 'INVALID_CAMERA_AUDIT_TRAIL', 64)
+    : undefined
+
+  if (type !== expectedType || connectorId !== CAMERA_CONNECTOR_ID || !requestedBy || requestedBy !== event.requestedBy || !checkedBy || checkedBy !== event.checkedBy || !SCOPE_ID_PATTERN.test(product) || !SCOPE_ID_PATTERN.test(workspaceId) || !SCOPE_ID_PATTERN.test(correlationId) || !costCapCents || !requestedItems || (previousHash !== null && (typeof previousHash !== 'string' || !SHA256_PATTERN.test(previousHash))) || !SHA256_PATTERN.test(hash) || (requestedAuditHash !== undefined && !SHA256_PATTERN.test(requestedAuditHash))) {
+    throw new ConnectorInputError('INVALID_CAMERA_AUDIT_TRAIL')
+  }
+
+  return {
+    event: {
+      type: expectedType, connectorId, product, workspaceId, requestedBy, checkedBy, correlationId, scopes,
+      costCapCents, requestedItems, occurredAt,
+      detail: expectedType === 'connector.run.requested' ? {} : { requestedAuditHash },
+    },
+    previousHash,
+    hash,
+  }
+}
+
+function auditTrailContext(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'checkedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): { product: string; workspaceId: string; requestedBy: string; checkedBy: string; correlationId: string; costCapCents: number; requestedItems: number } {
+  const scope = cameraReviewContext(context)
+  const requestedBy = normalizedActor(context.requestedBy)
+  const checkedBy = normalizedActor(context.checkedBy)
+  const correlationId = typeof context.correlationId === 'string' ? context.correlationId : ''
+  const costCapCents = positiveInteger(context.costCapCents)
+  const requestedItems = positiveInteger(context.requestedItems)
+  if (!requestedBy || requestedBy !== context.requestedBy || !checkedBy || checkedBy !== context.checkedBy || requestedBy === checkedBy || !SCOPE_ID_PATTERN.test(correlationId) || !costCapCents || !requestedItems) {
+    throw new ConnectorInputError('INVALID_CAMERA_AUDIT_TRAIL_CONTEXT')
+  }
+  return { ...scope, requestedBy, checkedBy, correlationId, costCapCents, requestedItems }
+}
+
+function governedRunEventMatches(entry: CameraGovernedRunAuditEntry, context: ReturnType<typeof auditTrailContext>): boolean {
+  return entry.event.connectorId === CAMERA_CONNECTOR_ID && entry.event.product === context.product && entry.event.workspaceId === context.workspaceId && entry.event.requestedBy === context.requestedBy && entry.event.checkedBy === context.checkedBy && entry.event.correlationId === context.correlationId && entry.event.scopes.length === 1 && entry.event.scopes[0] === CAMERA_SCOPE && entry.event.costCapCents === context.costCapCents && entry.event.requestedItems === context.requestedItems
+}
+
+/**
+ * D5 verifies only a caller-supplied three-entry audit segment: governed run
+ * requested, governed run succeeded, then D1 owner review. It does not query
+ * or write storage, consume quota, prove a durable predecessor, authenticate
+ * a reviewer, send a handoff, or authorize an action.
+ */
+export function validateCameraReviewAuditTrailWitness(sourceResult: unknown, reviewedResult: unknown, auditTrail: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'checkedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): CameraReviewAuditTrailWitness {
+  const trail = exactObject(auditTrail, ['requestedRun', 'succeededRun', 'ownerReview'], 'UNEXPECTED_CAMERA_AUDIT_TRAIL_FIELD')
+  const requested = cameraGovernedRunAuditEntry(trail.requestedRun, 'connector.run.requested')
+  const succeeded = cameraGovernedRunAuditEntry(trail.succeededRun, 'connector.run.succeeded')
+  const reviewed = cameraReviewAuditEntry(trail.ownerReview)
+  const trailContext = auditTrailContext(context)
+
+  if (requested.hash !== hashAuditEvent(requested.event, requested.previousHash) || succeeded.hash !== hashAuditEvent(succeeded.event, succeeded.previousHash) || reviewed.hash !== hashAuditEvent(reviewed.event, reviewed.previousHash)) {
+    throw new ConnectorInputError('CAMERA_AUDIT_TRAIL_HASH_MISMATCH')
+  }
+  if (!governedRunEventMatches(requested, trailContext) || !governedRunEventMatches(succeeded, trailContext)) {
+    throw new ConnectorInputError('CAMERA_AUDIT_TRAIL_MISMATCH')
+  }
+  if (succeeded.event.detail.requestedAuditHash !== requested.hash || succeeded.previousHash !== requested.hash || reviewed.previousHash !== succeeded.hash) {
+    throw new ConnectorInputError('CAMERA_AUDIT_TRAIL_CHAIN_MISMATCH')
+  }
+  if (new Date(requested.event.occurredAt).getTime() > new Date(succeeded.event.occurredAt).getTime() || new Date(succeeded.event.occurredAt).getTime() > new Date(reviewed.event.occurredAt).getTime()) {
+    throw new ConnectorInputError('CAMERA_AUDIT_TRAIL_TIME_MISMATCH')
+  }
+
+  const witness = validateCameraReviewAuditWitness(sourceResult, reviewedResult, trail.ownerReview, context)
+  return {
+    version: CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION,
+    reviewId: witness.reviewId,
+    requestedAuditHash: requested.hash,
+    succeededAuditHash: succeeded.hash,
+    reviewAuditHash: witness.auditHash,
+    predecessorHash: requested.previousHash,
+    state: 'SYNTHETIC_REVIEW_AUDIT_TRAIL_VERIFIED_NO_ACTION',
+    rawMediaIncluded: false,
+    automaticAction: false,
+    notification: 'NOT_SENT',
+    publication: 'NOT_PUBLISHED',
+  }
+}
+
 /**
  * Records an independent synthetic-only review decision. It never mutates a
  * camera result, starts an action, contacts a device, sends a handoff, or
