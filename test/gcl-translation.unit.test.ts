@@ -3,7 +3,7 @@ import test from 'node:test'
 import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
 import { ArtifactStateError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError } from '../src/gcl/errors.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
-import { InMemoryTranslationArtifactStore } from '../src/gcl/translation-artifacts.js'
+import { InMemoryTranslationArtifactStore, PrismaTranslationArtifactStore } from '../src/gcl/translation-artifacts.js'
 import { LIVE_DISABLED, SPEECH_TRANSLATION_CONNECTOR_ID, SYNTHETIC_TRANSLATION_ONLY, SyntheticSpeechTranslationConnector, SyntheticTextTranslationConnector, TEXT_TRANSLATION_CONNECTOR_ID, type SpeechTranslationData, type SpeechTranslationInput, type TextTranslationData, type TextTranslationInput, type TranslationConnectorConfig } from '../src/gcl/translation.js'
 import type { ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
 
@@ -135,4 +135,69 @@ test('speech translation returns only a synthetic audio reference and a distinct
   assert.equal(approved?.approvalState, 'approved')
   assert.equal(approved?.decidedBy, 'checker@example.test')
   await assert.rejects(() => artifacts.decide({ ...context, id: proposed.id, actor: 'second-checker@example.test', decision: 'rejected', now: now() }), (error: unknown) => error instanceof ArtifactStateError)
+})
+
+test('artifact storage rejects forged connector bindings, hashes, and content-bearing fields, then fails closed on malformed stored decisions', async () => {
+  const connector = new SyntheticTextTranslationConnector(config)
+  const result = await connector.run(textInput(), context)
+  const proposal = result.artifact!
+  const artifacts = new InMemoryTranslationArtifactStore()
+  const runAuditHash = 'b'.repeat(64)
+  const input = { product: context.product, workspaceId: context.workspaceId, actor: context.actor, connectorId: TEXT_TRANSLATION_CONNECTOR_ID, proposal, runAuditHash }
+
+  await assert.rejects(() => artifacts.propose({ ...input, connectorId: SPEECH_TRANSLATION_CONNECTOR_ID }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_PROPOSAL_INVALID')
+  await assert.rejects(() => artifacts.propose({ ...input, proposal: { ...proposal, contentHash: `sha256:${'A'.repeat(64)}` } }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_PROPOSAL_INVALID')
+  await assert.rejects(() => artifacts.propose({ ...input, proposal: { ...proposal, translatedText: 'must never persist' } as unknown as typeof proposal }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_PROPOSAL_INVALID')
+  await assert.rejects(() => artifacts.propose({ ...input, runAuditHash: 'not-a-hash' }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_PROPOSAL_INVALID')
+  assert.equal(artifacts.entries.length, 0)
+
+  const proposed = await artifacts.propose(input)
+  artifacts.entries[0] = { ...proposed, approvalState: 'approved' }
+  await assert.rejects(() => artifacts.get(context.product, context.workspaceId, proposed.id), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_STORAGE_INVALID')
+})
+
+test('durable artifact decisions use compare-and-set so simultaneous checkers cannot overwrite one another', async () => {
+  let status = 'pending-checker-approval'
+  let values: Record<string, unknown> = {
+    connectorId: TEXT_TRANSLATION_CONNECTOR_ID,
+    kind: 'translated-text',
+    contentHash: `sha256:${'c'.repeat(64)}`,
+    mediaType: 'text/plain',
+    source: 'synthetic-text-translation',
+    synthetic: true,
+    approvalState: 'pending-checker-approval',
+    autoPublish: false,
+    runAuditHash: 'd'.repeat(64),
+  }
+  const record = {
+    id: 'translation-artifact-race', product: context.product, workspaceId: context.workspaceId,
+    moduleId: 'gcl-translation-artifacts', createdAt: now(), createdBy: context.actor,
+  }
+  const durablePrisma = {
+    record: {
+      findFirst: async () => ({ ...record, values: { ...values }, status }),
+      updateMany: async (argument: { where: { status?: string }; data: { status: string; values: Record<string, unknown> } }) => {
+        await Promise.resolve()
+        if (argument.where.status !== status) return { count: 0 }
+        status = argument.data.status
+        values = { ...argument.data.values }
+        return { count: 1 }
+      },
+    },
+  }
+  const artifacts = new PrismaTranslationArtifactStore(durablePrisma as never)
+  const decisions = await Promise.allSettled([
+    artifacts.decide({ product: context.product, workspaceId: context.workspaceId, id: record.id, actor: 'checker-one@example.test', decision: 'approved', now: now() }),
+    artifacts.decide({ product: context.product, workspaceId: context.workspaceId, id: record.id, actor: 'checker-two@example.test', decision: 'rejected', now: now() }),
+  ])
+
+  assert.equal(decisions.filter((decision) => decision.status === 'fulfilled').length, 1)
+  assert.equal(decisions.filter((decision) => decision.status === 'rejected').length, 1)
+  const rejected = decisions.find((decision) => decision.status === 'rejected')
+  assert.equal(rejected?.status, 'rejected')
+  if (rejected?.status === 'rejected') assert.equal(rejected.reason instanceof ArtifactStateError, true)
+  const final = await artifacts.get(context.product, context.workspaceId, record.id)
+  assert.ok(final)
+  assert.equal(final.approvalState === 'approved' || final.approvalState === 'rejected', true)
+  assert.equal(final.decidedBy === 'checker-one@example.test' || final.decidedBy === 'checker-two@example.test', true)
 })

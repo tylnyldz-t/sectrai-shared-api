@@ -110,6 +110,30 @@ An approval body is exactly `{ "decision": "approved" }` or
 `maker_checker_separation_required`; only a distinct checker can decide it. A
 non-pending proposal returns a conflict. No decision can publish content.
 
+## Artifact integrity and decision race boundary
+
+Before metadata is stored, the registry accepts only one of these complete
+bindings; fields cannot be mixed across rows:
+
+| Connector | Artifact kind | Media type | Source |
+| --- | --- | --- | --- |
+| `translation-text-synthetic` | `translated-text` | `text/plain` | `synthetic-text-translation` |
+| `translation-speech-synthetic` | `translated-speech` | `audio/wav` | `synthetic-speech-translation` |
+
+`contentHash` is an explicitly prefixed, lowercase `sha256:<64 hex>` value;
+the linked run-audit hash is the lowercase 64-hex chain value. The metadata
+object is exact: additional fields (including source text, translated text,
+transcripts, audio, URLs, provider details, or credentials) cause the proposal
+to be rejected. A malformed stored artifact fails closed as unavailable rather
+than being returned or decided.
+
+Each approval is a conditional `pending-checker-approval` → `approved` or
+`rejected` transition. If two distinct checkers race, one can win; the other
+gets a conflict and cannot overwrite the first decision. A terminal decision
+must retain a canonical UTC decision time and checker identity; a pending
+artifact cannot carry either field. This is lifecycle integrity only: it never
+creates a publish, send, provider, media-byte, or live execution path.
+
 ## ADOS boundary checklist
 
 - Product/workspace scope is retained; this module makes no cross-product DB
@@ -117,7 +141,8 @@ non-pending proposal returns a conflict. No decision can publish content.
 - Default deny applies to absent synthetic gates, owner token, actor, scope,
   quota, cost cap, and malformed fixture metadata.
 - Artifacts/audit hold reference hashes and provenance, not raw content.
-- Maker and checker are separated; audit is a per-product/workspace SHA-256
-  chain; no migration is introduced by this module.
+- Maker and checker are separated; terminal artifact decisions are
+  compare-and-set; audit is a per-product/workspace SHA-256 chain; no migration
+  is introduced by this module.
 - `LIVE_DISABLED` synthetic tests and contracts do not authorize production,
   real-data ingestion, real translation, sending, publishing, or launch.
