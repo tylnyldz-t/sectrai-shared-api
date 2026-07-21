@@ -61,3 +61,6 @@ GM5/GM6 outputs are immutable, scope-bound synthetic review snapshots; a
 broken GCL audit chain fails closed rather than being silently restarted. Each
 snapshot additionally includes a deterministic review receipt that records no
 transport, process, artifact write, or publication capability.
+Before a GM5/GM6 result is returned, the runner also verifies the frozen output
+shape and its field-by-field binding to that review snapshot; malformed output
+fails closed and is never serialized.

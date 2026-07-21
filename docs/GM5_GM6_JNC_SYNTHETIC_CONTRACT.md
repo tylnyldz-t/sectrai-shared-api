@@ -124,6 +124,31 @@ unknown configuration field is rejected at construction. The adapters always
 instantiate the local contract-only mapper; ADOS rule 10 remains a
 responsibility boundary, not a runtime import or a pluggable execution seam.
 
+## Synthetic result egress boundary
+
+After an adapter returns, the governed runner performs one final, local-only
+egress check before it writes a `succeeded` audit event or serializes a result.
+It accepts only the GM5 and GM6 result shapes documented in this module. The
+entire `data` tree must be canonical JSON and recursively frozen; its review
+snapshot must verify; and every displayed artifact, GPU card, JNC hand-off,
+pipeline, build output, publication, and build ID must match the corresponding
+field inside that snapshot. GM6 tier, engine, and target must likewise match
+the snapshot input. A separately valid receipt cannot therefore be used to
+decorate a changed outer result.
+
+The result envelope and provenance also admit only own enumerable data fields.
+Getters, inherited values, symbols, hidden fields, nonzero confidence, URL-like
+sources, malformed timestamps, unexpected output fields, and untrusted-content
+markers other than `data-only` / `UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`
+are rejected. The runner copies an accepted envelope into a fresh frozen value
+and only then attaches its durable success-audit hash.
+
+An egress failure is `503 synthetic_result_integrity_invalid`. It occurs after
+the requested audit record and quota reservation, so the runner appends a
+stable `failed` audit event and deliberately does not refund quota. No malformed
+result reaches the HTTP response, and no result validation performs network,
+process, file, or publication work.
+
 Premium GM6 reserves GPU-minute units: `requestedItems` must exactly equal
 `input.gpuMinutes`. GM5 reserves exactly one proposal item. Both outputs mark
 untrusted input as `UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`.
