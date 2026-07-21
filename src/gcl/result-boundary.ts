@@ -290,12 +290,12 @@ function provenanceMatchesSnapshot(data: unknown, provenance: ConnectorResult['p
  * a fresh frozen envelope.
  * This has no I/O and cannot turn a plan into an execution path.
  */
-export function validatedSyntheticConnectorResult(value: unknown, connectorId: string): ConnectorResult {
+export function validatedSyntheticConnectorResult<TData = unknown>(value: unknown, connectorId: string): ConnectorResult<TData> {
   const result = ownDataRecord(value)
   if (!result || !exactKeys(result, RESULT_KEYS) || result.confidence !== 0 || !syntheticDataMatchesSnapshot(result.data, connectorId)) {
     throw new SyntheticResultIntegrityError()
   }
   const provenance = safeProvenance(result.provenance, connectorId)
   if (!provenance || !provenanceMatchesSnapshot(result.data, provenance, connectorId)) throw new SyntheticResultIntegrityError()
-  return deepFreeze({ data: result.data, provenance, confidence: 0 })
+  return deepFreeze({ data: result.data as TData, provenance, confidence: 0 })
 }

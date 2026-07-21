@@ -426,6 +426,32 @@ test('GM5/GM6 inputs and direct runner governance read only own data descriptors
   assert.equal(governed.quota.reservations.length, 0)
 })
 
+test('direct GM5/GM6 calls cross the immutable synthetic egress boundary and reject an invalid clock value', async () => {
+  const threeD = new SyntheticTextToThreeDConnector(threeDConfig())
+  const threeDResult = await threeD.run({ prompt: 'A local synthetic 3D proposal' }, directContext())
+  assert.equal(Object.isFrozen(threeDResult), true)
+  assert.equal(Object.isFrozen(threeDResult.provenance), true)
+  assert.throws(() => { threeDResult.provenance.source = 'synthetic:relabelled' }, TypeError)
+  assert.equal(threeDResult.provenance.source, 'synthetic-3d:text-to-3d')
+
+  const game = new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 30 })
+  const gameResult = await game.run(premiumUnreal, directContext({ scopes: ['game:project:build'], costCapCents: 100, requestedItems: 12 }))
+  assert.equal(Object.isFrozen(gameResult), true)
+  assert.equal(Object.isFrozen(gameResult.provenance.untrustedContent), true)
+  assert.throws(() => { gameResult.provenance.runId = 'synthetic-game-relabelled' }, TypeError)
+
+  let invalidClockReads = 0
+  const invalidClock = () => {
+    invalidClockReads += 1
+    return { toISOString: () => 'not-an-iso-timestamp' } as unknown as Date
+  }
+  await assert.rejects(
+    threeD.run({ prompt: 'A local synthetic 3D proposal' }, directContext({ now: invalidClock })),
+    SyntheticResultIntegrityError,
+  )
+  assert.equal(invalidClockReads, 1)
+})
+
 test('failed adapter messages are never copied into the durable audit chain', async () => {
   const untrustedMessage = `untrusted-adapter-message-${'x'.repeat(600)}`
   const connector: Connector = {

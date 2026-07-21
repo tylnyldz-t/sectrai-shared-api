@@ -1,6 +1,7 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, type JncBlenderPilotHandoff, type JncGpuResourceCard, type JncUnrealPilotHandoff } from './jnc-pilot.js'
 import { deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { validatedSyntheticConnectorResult } from './result-boundary.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
 import type { SyntheticReviewReceipt } from './review-receipt.js'
 import { validatedConnectorRunContext } from './run-context.js'
@@ -219,11 +220,11 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
       ...(gpuResourceCard ? { gpuResourceCard } : {}),
       ...(jncPilotHandoff ? { jncPilotHandoff } : {}),
     })
-    return {
+    return validatedSyntheticConnectorResult<GameEngineBuildPlan>({
       data,
       provenance: { connectorId: this.id, source: 'synthetic-game-engine-plan', retrievedAt: validatedContext.now().toISOString(), runId: id, untrustedContent: isolatedContent(input) },
       confidence: 0,
-    }
+    }, this.id)
   }
 }
 

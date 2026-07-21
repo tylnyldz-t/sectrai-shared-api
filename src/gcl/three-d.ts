@@ -1,6 +1,7 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, type GpuResourceRequest, type JncBlenderPilotHandoff, type JncGpuResourceCard } from './jnc-pilot.js'
 import { deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { validatedSyntheticConnectorResult } from './result-boundary.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
 import type { SyntheticReviewReceipt } from './review-receipt.js'
 import { validatedConnectorRunContext } from './run-context.js'
@@ -246,11 +247,11 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
       gpuResourceCard,
       blenderPilotHandoff,
     })
-    return {
+    return validatedSyntheticConnectorResult<SyntheticThreeDResult>({
       data,
       provenance: { connectorId: this.id, source, retrievedAt: validatedContext.now().toISOString(), untrustedContent: isolatedContent(source, validated) },
       confidence: 0,
-    }
+    }, this.id)
   }
 }
 

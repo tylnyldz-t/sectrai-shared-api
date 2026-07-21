@@ -198,6 +198,22 @@ Premium GM6 reserves GPU-minute units: `requestedItems` must exactly equal
 `input.gpuMinutes`. GM5 reserves exactly one proposal item. Both outputs mark
 untrusted input as `UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`.
 
+### D1 direct-call egress parity
+
+The public `run` methods for GM5 and GM6 also pass their locally constructed
+result through the same final synthetic-result validator used by the governed
+runner. A direct/internal call therefore receives a fresh recursively frozen
+envelope, frozen provenance, and the same snapshot, provenance, confidence,
+and negative-capability policy checks as an HTTP-routed call. It cannot use a
+mutable direct result to relabel a plan after return.
+
+The supplied clock is still a test/internal timestamp seam, not a scheduler or
+transport. Its result must serialize as an exact ISO timestamp; an invalid
+clock value fails closed with `503 synthetic_result_integrity_invalid` before
+a direct caller receives a plan. This parity check performs no network call,
+process launch, artifact write, provider lookup, JNC dispatch, credential
+read, or publication action.
+
 ## Non-secret configuration
 
 `.env.example` shows only placeholders and governance limits. The owner-gate
