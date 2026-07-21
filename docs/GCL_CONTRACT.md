@@ -46,8 +46,10 @@ Every registered connector is governed by these rules:
   receive a canonically reconstructed, independent owner-review packet in the
   same chain; D2's explicitly injected process-local review ledger permits at
   most one terminal decision for its exact plan/packet tuple. D3 can only
-  canonically reconstruct the caller-held receipt for that decision; it does
-  not write or approve execution. Both records remain `NOT_AUTHORIZED`.
+  canonically reconstruct the caller-held receipt for that decision; D4 can
+  locally compare that receipt with one caller-held audit hash link. Neither
+  reads audit storage, writes, nor approves execution. Both records remain
+  `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
   error. There is no local fallback, provider fallback, queue worker, or
@@ -122,9 +124,12 @@ is deliberately not an HTTP action endpoint, a persisted approval workflow,
 or an authorization token. D2's local-only in-memory ledger prevents a
 duplicate receipt only within the injected process; it is not durable,
 cross-process replay prevention. D3's receipt revalidation reads neither that
-ledger nor the audit chain and performs no write; it is only a caller-held
-mutation check. The specific market inputs and output limits are in [the
-synthetic market contract](GCL_MARKET_CONTRACT.md).
+ledger nor the audit chain and performs no write. D4 accepts one caller-held
+audit event and predecessor hash only to recompute the receipt's single
+hash-chain link; it neither reads audit storage nor proves durable retention or
+full-chain integrity. Both are local mutation checks, never signatures,
+credentials, approval workflows, or execution paths. The specific market
+inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
 
 ## Privacy, KVKK, and content boundary
 

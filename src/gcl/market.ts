@@ -32,7 +32,7 @@ export const ADOS_10_MARKET_CONTROLS: readonly AdosMarketControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every plan and review packet is digest-bound to one product and workspace.' },
   { id: 'ADOS-02', control: 'SYNTHETIC_DATA_ONLY', enforcement: 'Only the bounded market request shape is accepted; no market response or provider payload is ingested.' },
   { id: 'ADOS-03', control: 'FAIL_CLOSED_CONFIGURATION', enforcement: 'Only literal GCL_MARKET_LIVE_ENABLED=false permits the synthetic adapter; absent, malformed, and true values deny.' },
-  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan and its process-local terminal ledger rejects unknown, changed, malformed, or replayed packets.' },
+  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, while D3/D4 recheck caller-held receipt and audit-link evidence without a write.' },
   { id: 'ADOS-05', control: 'UNTRUSTED_CONTENT_IS_DATA', enforcement: 'Request values are labelled data-only and cannot become connector instructions.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'A separate canonical owner actor with market:review is required; the plan maker cannot self-review.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIALS', enforcement: 'No network client, provider URL, credential, API key, scheduler, or automatic sync exists in this connector.' },
@@ -303,10 +303,15 @@ function canonicalScopeId(value: unknown): string | null {
 }
 
 function reviewContext(context: unknown): { product: string; workspaceId: string; scopes: readonly string[] } {
-  const candidate = exactMarketObject(context, ['product', 'workspaceId', 'scopes', 'now'], 'INVALID_MARKET_REVIEW_CONTEXT')
+  if (!context || typeof context !== 'object' || Array.isArray(context)) throw new ConnectorInputError('INVALID_MARKET_REVIEW_CONTEXT')
+  const candidate = exactMarketObject(
+    context,
+    Object.hasOwn(context, 'now') ? ['product', 'workspaceId', 'scopes', 'now'] : ['product', 'workspaceId', 'scopes'],
+    'INVALID_MARKET_REVIEW_CONTEXT',
+  )
   const product = canonicalScopeId(candidate.product)
   const workspaceId = canonicalScopeId(candidate.workspaceId)
-  if (!product || !workspaceId || typeof candidate.now !== 'function' || !Array.isArray(candidate.scopes) || candidate.scopes.some((scope) => typeof scope !== 'string' || !MARKET_SCOPES.includes(scope as typeof MARKET_SCOPES[number]))) {
+  if (!product || !workspaceId || (Object.hasOwn(candidate, 'now') && typeof candidate.now !== 'function') || !Array.isArray(candidate.scopes) || candidate.scopes.some((scope) => typeof scope !== 'string' || !MARKET_SCOPES.includes(scope as typeof MARKET_SCOPES[number]))) {
     throw new ConnectorInputError('INVALID_MARKET_REVIEW_CONTEXT')
   }
   return { product, workspaceId, scopes: candidate.scopes }
@@ -658,6 +663,78 @@ export function validateSyntheticMarketReviewReceipt(sourcePlan: unknown, value:
   const expected = reviewReceiptFor(plan, candidate.reviewed)
   if (!canonicallyEqual(receipt, expected)) throw new ConnectorInputError('MARKET_REVIEW_RECEIPT_INTEGRITY_INVALID')
   return { ...candidate.reviewed, reviewReceipt: expected }
+}
+
+function reviewAuditEvent(plan: SyntheticMarketPlan, reviewed: ReviewedSyntheticMarketPlan): ConnectorAuditEvent {
+  return {
+    type: 'connector.market.owner_reviewed',
+    connectorId: MARKET_CONNECTOR_ID,
+    product: plan.binding.product,
+    workspaceId: plan.binding.workspaceId,
+    actor: reviewed.reviewedBy,
+    scopes: ['market:review'],
+    costCapCents: 0,
+    requestedItems: 1,
+    occurredAt: reviewed.reviewedAt,
+    detail: {
+      planId: plan.id,
+      planDigest: plan.integrity.digest,
+      reviewId: plan.reviewPacket.reviewId,
+      reviewPacketIntegrityDigest: plan.reviewPacket.integrity.digest,
+      decision: reviewed.decision,
+      execution: 'NOT_AUTHORIZED',
+      externalNetwork: false,
+      reservation: false,
+      booking: false,
+      publication: false,
+    },
+  }
+}
+
+function marketReviewAuditWitnessForValidation(value: unknown): SyntheticMarketReviewAuditWitness {
+  const candidate = exactMarketObject(value, ['version', 'event', 'previousHash', 'hash'], 'UNEXPECTED_MARKET_REVIEW_AUDIT_WITNESS_FIELD')
+  const previousHash = candidate.previousHash
+  const hash = candidate.hash
+  if (
+    candidate.version !== MARKET_REVIEW_AUDIT_WITNESS_VERSION ||
+    (previousHash !== null && (typeof previousHash !== 'string' || !DIGEST_PATTERN.test(previousHash))) ||
+    typeof hash !== 'string' || !DIGEST_PATTERN.test(hash) ||
+    !candidate.event || typeof candidate.event !== 'object' || Array.isArray(candidate.event) ||
+    Object.getPrototypeOf(candidate.event) !== Object.prototype || Object.getOwnPropertySymbols(candidate.event).length > 0
+  ) throw new ConnectorInputError('INVALID_MARKET_REVIEW_AUDIT_WITNESS')
+  return {
+    version: MARKET_REVIEW_AUDIT_WITNESS_VERSION,
+    event: candidate.event as ConnectorAuditEvent,
+    previousHash,
+    hash,
+  }
+}
+
+/**
+ * D4 verifies a caller-held review audit witness without reading an audit
+ * store. It reconstructs the D3 receipt and expected owner-review event, then
+ * recomputes the one hash-chain link. It does not prove audit persistence or
+ * chain history, append an event, consume quota, contact a provider, send a
+ * handoff, or authorize a market operation.
+ */
+export function validateSyntheticMarketReviewAuditWitness(sourcePlan: unknown, value: unknown, witnessValue: unknown, context: MarketReviewContext): SyntheticMarketReviewAuditWitness {
+  const reviewedContext = reviewContext(context)
+  if (!reviewedContext.scopes.includes('market:review')) throw new ScopeError('MARKET_REVIEW_SCOPE_REQUIRED')
+  const plan = validateSyntheticMarketPlanForReview(sourcePlan, reviewedContext as MarketReviewContext)
+  const reviewed = validateSyntheticMarketReviewReceipt(plan, value, context)
+  const witness = marketReviewAuditWitnessForValidation(witnessValue)
+  const expectedEvent = reviewAuditEvent(plan, reviewed)
+  if (!canonicallyEqual(witness.event, expectedEvent)) throw new ConnectorInputError('MARKET_REVIEW_AUDIT_WITNESS_EVENT_INVALID')
+  const expectedHash = hashAuditEvent(expectedEvent, witness.previousHash)
+  if (witness.hash !== expectedHash || reviewed.auditHash !== expectedHash) {
+    throw new ConnectorInputError('MARKET_REVIEW_AUDIT_WITNESS_HASH_INVALID')
+  }
+  return {
+    version: MARKET_REVIEW_AUDIT_WITNESS_VERSION,
+    event: expectedEvent,
+    previousHash: witness.previousHash,
+    hash: expectedHash,
+  }
 }
 
 /**

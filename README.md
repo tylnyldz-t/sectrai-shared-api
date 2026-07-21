@@ -65,4 +65,8 @@ durable nor an HTTP workflow, and it cannot authorize an action after a
 restart or in another process. D3 canonically reconstructs a caller-held D2
 receipt against its original plan without reading storage or writing audit,
 quota, or ledger state; it is only a local mutation check, never a signature,
-credential, approval workflow, or execution path.
+credential, approval workflow, or execution path. D4 can additionally compare
+that receipt with one caller-held audit event and predecessor hash by
+recomputing its single SHA-256 chain link. It performs no storage lookup or
+write, does not prove durable audit retention or complete-chain integrity, and
+cannot authorize any action.

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
-import { ADOS_10_MARKET_CONTROLS, MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, MARKET_REVIEW_RECEIPT_VERSION, SyntheticMarketConnector, independentlyReviewSyntheticMarketPlan, syntheticMarketConnectorFromEnvironment, validateSyntheticMarketPlanForReview, validateSyntheticMarketReviewReceipt, type MarketCapacityQuoteInput, type MarketReviewContext, type SyntheticMarketConnectorConfig, type SyntheticMarketPlan } from '../src/gcl/market.js'
+import { ADOS_10_MARKET_CONTROLS, MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, MARKET_REVIEW_AUDIT_WITNESS_VERSION, MARKET_REVIEW_RECEIPT_VERSION, SyntheticMarketConnector, independentlyReviewSyntheticMarketPlan, syntheticMarketConnectorFromEnvironment, validateSyntheticMarketPlanForReview, validateSyntheticMarketReviewAuditWitness, validateSyntheticMarketReviewReceipt, type MarketCapacityQuoteInput, type MarketReviewContext, type SyntheticMarketConnectorConfig, type SyntheticMarketPlan } from '../src/gcl/market.js'
 import { InMemorySyntheticMarketReviewLedger } from '../src/gcl/market-review-ledger.js'
 import { dailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
@@ -293,6 +293,68 @@ test('D3 receipt validation is local-only and rejects receipt, plan, scope, spar
   assert.throws(
     () => validateSyntheticMarketReviewReceipt(plan, reviewed, { ...reviewContext, scopes: ['market:discover'] }),
     (error: unknown) => error instanceof ScopeError && error.message === 'MARKET_REVIEW_SCOPE_REQUIRED',
+  )
+  assert.equal(setup.reviews.entries.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
+  assert.equal(setup.quota.requests.length, 1)
+})
+
+test('D4 audit-witness validation is local-only and rejects event, chain-link, context, and credential-shaped drift', async () => {
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const plan = result.data as SyntheticMarketPlan
+  const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
+  const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext)
+  const auditEntry = setup.audit.entries[2]
+  assert.ok(auditEntry)
+  const witness = {
+    version: MARKET_REVIEW_AUDIT_WITNESS_VERSION,
+    event: structuredClone(auditEntry.event),
+    previousHash: auditEntry.previousHash,
+    hash: auditEntry.hash,
+  }
+  assert.deepEqual(validateSyntheticMarketReviewAuditWitness(plan, reviewed, witness, reviewContext), witness)
+
+  const mustReject = (candidate: unknown, message: string) => assert.throws(
+    () => validateSyntheticMarketReviewAuditWitness(plan, reviewed, candidate, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === message,
+  )
+
+  const injected = structuredClone(witness) as typeof witness & { providerCredential?: string }
+  injected.providerCredential = 'synthetic-not-accepted'
+  mustReject(injected, 'UNEXPECTED_MARKET_REVIEW_AUDIT_WITNESS_FIELD')
+
+  const hiddenField = structuredClone(witness)
+  Object.defineProperty(hiddenField, 'providerEndpoint', { value: 'synthetic-not-accepted' })
+  mustReject(hiddenField, 'UNEXPECTED_MARKET_REVIEW_AUDIT_WITNESS_FIELD')
+
+  const prototypeEvent = structuredClone(witness)
+  Object.setPrototypeOf(prototypeEvent.event, { providerAddress: 'synthetic-not-accepted' })
+  mustReject(prototypeEvent, 'INVALID_MARKET_REVIEW_AUDIT_WITNESS')
+
+  const actionDrift = structuredClone(witness)
+  actionDrift.event.detail.booking = true
+  mustReject(actionDrift, 'MARKET_REVIEW_AUDIT_WITNESS_EVENT_INVALID')
+
+  const injectedDetail = structuredClone(witness)
+  injectedDetail.event.detail.providerCredential = 'synthetic-not-accepted'
+  mustReject(injectedDetail, 'MARKET_REVIEW_AUDIT_WITNESS_EVENT_INVALID')
+
+  const priorHashDrift = structuredClone(witness)
+  priorHashDrift.previousHash = 'a'.repeat(64)
+  mustReject(priorHashDrift, 'MARKET_REVIEW_AUDIT_WITNESS_HASH_INVALID')
+
+  const hashDrift = structuredClone(witness)
+  hashDrift.hash = 'a'.repeat(64)
+  mustReject(hashDrift, 'MARKET_REVIEW_AUDIT_WITNESS_HASH_INVALID')
+
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditWitness(plan, reviewed, witness, Object.create(reviewContext)),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REVIEW_CONTEXT',
+  )
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditWitness(plan, reviewed, witness, { ...reviewContext, providerCredential: 'synthetic-not-accepted' } as never),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REVIEW_CONTEXT',
   )
   assert.equal(setup.reviews.entries.length, 1)
   assert.equal(setup.audit.entries.length, 3)

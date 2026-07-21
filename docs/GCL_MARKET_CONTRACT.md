@@ -166,6 +166,41 @@ any receipt/plan/integrity drift. The request parser applies the same
 plain-object and exact-field boundary, so inherited or hidden request fields
 cannot become synthetic market input.
 
+## D4 — caller-held review audit-witness link check
+
+`validateSyntheticMarketReviewAuditWitness(sourcePlan, reviewResult, witness,
+context)` is a library-only, read-only check for a caller-held audit record of
+the shape below:
+
+```ts
+{
+  version: 'synthetic-market-review-audit-witness-v1',
+  event: ConnectorAuditEvent,
+  previousHash: string | null,
+  hash: string,
+}
+```
+
+It first runs the D3 receipt reconstruction, then reconstructs the one allowed
+`connector.market.owner_reviewed` event from that result. That event has the
+exact `market:review` scope, zero cost, one requested item, canonical reviewer
+and time, the plan/packet digests, and all market-action flags set to `false`.
+Finally it recomputes `hashAuditEvent(event, previousHash)` and requires the
+result to equal both the witness hash and the receipt audit hash.
+
+D4 default-denies unknown, hidden, inherited, prototype-shaped, or
+credential-shaped witness fields; any event, action flag, predecessor hash,
+receipt, product/workspace, reviewer, scope, or hash drift is rejected. Its
+review context is now also an exact plain object, so inherited or injected
+context properties cannot be used at this boundary.
+
+This is a **single caller-held link check**, not audit-store lookup or chain
+verification. A syntactically valid witness does not prove that a durable audit
+store retained the event, that a preceding event really exists, or that a full
+chain is intact. D4 reads no audit/ledger storage, writes no event, consumes no
+quota, and remains neither a signature, credential, authorization, workflow,
+nor execution token.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -230,17 +265,19 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
-integrity, D2 terminal-ledger paths, and D3 local receipt reconstruction.
+integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
+caller-held audit-witness link reconstruction.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
 attempts, missing ledger, invalid review clock, malformed audit result,
-malformed direct-run context, malformed receipt execution/integrity, and
-sequential/concurrent replay attempts. D3 rejection produces no extra review
-event, quota item, or local terminal entry.
+malformed direct-run context, malformed receipt execution/integrity, malformed
+or credential-shaped D4 witnesses, changed audit events/action flags,
+predecessor/hash drift, and sequential/concurrent replay attempts. D3/D4
+rejection produces no extra review event, quota item, or local terminal entry.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -249,8 +286,9 @@ event, quota item, or local terminal entry.
    synthetic adapter.
 4. Full canonical reconstruction rejects changed, malformed, unknown,
    prototype-shaped, and sparse packet fields; D2 permits one process-local
-   terminal receipt only after a valid audit append, and D3 rechecks its local
-   receipt without a write.
+   terminal receipt only after a valid audit append, D3 rechecks its local
+   receipt without a write, and D4 rechecks one caller-held audit hash link
+   without reading or writing audit storage.
 5. Request content is explicitly data-only, never an instruction.
 6. Owner gate, `market:review`, and maker–checker separation are mandatory.
 7. The module has no network client, provider URL, credential/API-key field,
@@ -267,4 +305,4 @@ event, quota item, or local terminal entry.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3.
+`main`/production in D1/D2/D3/D4.
