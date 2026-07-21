@@ -62,4 +62,7 @@ digest-bound, canonically validated independent-review packet; its receipt is
 always `NOT_AUTHORIZED` and cannot authorize any action. D2 can place exactly
 one such receipt in an injected process-local synthetic ledger; it is neither
 durable nor an HTTP workflow, and it cannot authorize an action after a
-restart or in another process.
+restart or in another process. D3 canonically reconstructs a caller-held D2
+receipt against its original plan without reading storage or writing audit,
+quota, or ledger state; it is only a local mutation check, never a signature,
+credential, approval workflow, or execution path.

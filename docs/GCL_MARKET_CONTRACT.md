@@ -140,6 +140,32 @@ decision, legal/ToS, and execution rules—and must fail closed until it does.
 D2 never turns a receipt into an offer, quote, reservation, booking,
 publication, handoff, notification, provider call, or sending action.
 
+## D3 — local receipt reconstruction and mutation check
+
+Once D2 has returned its single terminal decision,
+`independentlyReviewSyntheticMarketPlan()` also returns a deterministic
+`synthetic-market-review-receipt-v1`. It binds digests of the original
+product/workspace, plan, packet, reviewer, terminal decision, canonical review
+time, and audit hash. Its only execution object remains exactly
+`NOT_AUTHORIZED`, with all egress, reservation, booking, and publication flags
+set to `false`.
+
+`validateSyntheticMarketReviewReceipt(sourcePlan, reviewResult, context)` is a
+library-only, read-only revalidation seam. It first reconstructs the original
+plan, requires `market:review`, reconstructs the expected receipt from the D2
+result, and compares the complete canonical form. It does **not** query the
+in-memory ledger or audit chain, append an event, consume quota, contact a
+provider, send a handoff, or authorize a market action. It is a mutation check
+for caller-held evidence, not audit-chain verification, a signature,
+authentication credential, durable approval, or an execution token.
+
+The verifier default-denies unknown or hidden fields, non-plain/prototype-shaped
+objects, symbol fields, sparse arrays, altered execution flags, malformed
+timestamps or digest shapes, cross-scope inputs, maker-as-checker evidence, and
+any receipt/plan/integrity drift. The request parser applies the same
+plain-object and exact-field boundary, so inherited or hidden request fields
+cannot become synthetic market input.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -204,24 +230,27 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2 test evidence and ADOS 10-rule conformance
+## D1/D2/D3 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
-integrity, and D2 terminal-ledger paths. Negative tests reject injected
-provider-shaped fields, source-state drift, invented quote data, action-flag
-drift, cross-workspace use, whitespace-based maker/reviewer bypass attempts,
-missing ledger, invalid review clock, malformed audit result, malformed direct
-run context, and sequential/concurrent replay attempts before another review
-event or quota item can be created.
+integrity, D2 terminal-ledger paths, and D3 local receipt reconstruction.
+Negative tests reject inherited/prototype-shaped input, injected or hidden
+provider-shaped fields, sparse arrays, source-state drift, invented quote data,
+action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
+attempts, missing ledger, invalid review clock, malformed audit result,
+malformed direct-run context, malformed receipt execution/integrity, and
+sequential/concurrent replay attempts. D3 rejection produces no extra review
+event, quota item, or local terminal entry.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
    ingested.
 3. Configuration default-denies; only exact `LIVE_ENABLED=false` permits this
    synthetic adapter.
-4. Full canonical reconstruction rejects changed, malformed, and unknown
-   packet fields; D2 permits one process-local terminal receipt only after a
-   valid audit append.
+4. Full canonical reconstruction rejects changed, malformed, unknown,
+   prototype-shaped, and sparse packet fields; D2 permits one process-local
+   terminal receipt only after a valid audit append, and D3 rechecks its local
+   receipt without a write.
 5. Request content is explicitly data-only, never an instruction.
 6. Owner gate, `market:review`, and maker–checker separation are mandatory.
 7. The module has no network client, provider URL, credential/API-key field,
@@ -238,4 +267,4 @@ event or quota item can be created.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2.
+`main`/production in D1/D2/D3.

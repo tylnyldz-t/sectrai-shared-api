@@ -45,8 +45,9 @@ Every registered connector is governed by these rules:
   PostgreSQL advisory transaction lock. A synthetic market plan may also
   receive a canonically reconstructed, independent owner-review packet in the
   same chain; D2's explicitly injected process-local review ledger permits at
-  most one terminal receipt for its exact plan/packet tuple. That receipt
-  records only `NOT_AUTHORIZED`, never an execution approval.
+  most one terminal decision for its exact plan/packet tuple. D3 can only
+  canonically reconstruct the caller-held receipt for that decision; it does
+  not write or approve execution. Both records remain `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
   error. There is no local fallback, provider fallback, queue worker, or
@@ -120,8 +121,10 @@ Setting any value other than `GCL_MARKET_LIVE_ENABLED=false` returns
 is deliberately not an HTTP action endpoint, a persisted approval workflow,
 or an authorization token. D2's local-only in-memory ledger prevents a
 duplicate receipt only within the injected process; it is not durable,
-cross-process replay prevention. The specific market inputs and output limits
-are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
+cross-process replay prevention. D3's receipt revalidation reads neither that
+ledger nor the audit chain and performs no write; it is only a caller-held
+mutation check. The specific market inputs and output limits are in [the
+synthetic market contract](GCL_MARKET_CONTRACT.md).
 
 ## Privacy, KVKK, and content boundary
 
