@@ -18,6 +18,7 @@ const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 
 function isSafePositiveInteger(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 }
+function isSafeActor(value: unknown): value is string { return typeof value === 'string' && !!value.trim() && ACTOR_PATTERN.test(value) }
 
 export class ConnectorRegistry {
   private readonly connectors = new Map<string, Connector>()
@@ -47,7 +48,7 @@ export class GovernedConnectorRunner {
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
     const connector = this.registry.get(request.connectorId)
     if (!request.ownerApproved) throw new OwnerGateError()
-    if (!SCOPE_ID_PATTERN.test(request.product) || !SCOPE_ID_PATTERN.test(request.workspaceId) || !ACTOR_PATTERN.test(request.actor)) throw new ConnectorInputError('INVALID_CONNECTOR_CONTEXT')
+    if (!SCOPE_ID_PATTERN.test(request.product) || !SCOPE_ID_PATTERN.test(request.workspaceId) || !isSafeActor(request.actor)) throw new ConnectorInputError('INVALID_CONNECTOR_CONTEXT')
     if (!isSafePositiveInteger(request.costCapCents)) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
     if (!isSafePositiveInteger(request.requestedItems)) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
     if (request.scopes.length === 0 || request.scopes.some((scope) => !SCOPE_PATTERN.test(scope) || !connector.scopes.includes(scope))) throw new ScopeError()
@@ -56,7 +57,7 @@ export class GovernedConnectorRunner {
     const context: ConnectorRunContext = {
       product: request.product,
       workspaceId: request.workspaceId,
-      actor: request.actor,
+      actor: request.actor.trim(),
       ownerApproved: true,
       scopes: [...new Set(request.scopes)].sort(),
       costCapCents: request.costCapCents,
