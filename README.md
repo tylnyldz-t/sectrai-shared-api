@@ -50,3 +50,10 @@ DATABASE_URL='your Neon URL' SHARED_API_KEY_HEALTH='...' npm start
 ## Safety boundary
 
 The service stores only product-owned synthetic demo records. It does not make AI calls, execute product actions, or interpret `values`. Product-level Vercel admin gates remain the outer authentication layer; this API key is a second product boundary, not a replacement for user authentication.
+
+## GM5/GM6 synthetic connectors
+
+The optional GCL routes expose only reviewable GM5 3D proposals and GM6 game
+engine plans. Their JNC Blender/Unreal mapping is contract-only: no provider,
+GPU, Blender, Unreal, shell, credential, or publication path exists. See
+[`docs/GM5_GM6_JNC_SYNTHETIC_CONTRACT.md`](docs/GM5_GM6_JNC_SYNTHETIC_CONTRACT.md).
