@@ -4,6 +4,30 @@ import type { AuditLog, Connector, ConnectorResult, ConnectorRunContext } from '
 
 export const MARKET_CONNECTOR_ID = 'market'
 export const MARKET_LIVE_STATUS = 'MARKET_LIVE_DISABLED'
+const MARKET_REVIEW_PACKET_VERSION = 'synthetic-market-review-packet-v1'
+
+export type AdosMarketControl = {
+  id: `ADOS-${string}`
+  control: string
+  enforcement: string
+}
+
+/**
+ * The review packet remains an in-process, synthetic boundary. These controls
+ * are exported so its safety claims stay testable instead of documentation-only.
+ */
+export const ADOS_10_MARKET_CONTROLS: readonly AdosMarketControl[] = Object.freeze([
+  { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every plan and review packet is digest-bound to one product and workspace.' },
+  { id: 'ADOS-02', control: 'SYNTHETIC_DATA_ONLY', enforcement: 'Only the bounded market request shape is accepted; no market response or provider payload is ingested.' },
+  { id: 'ADOS-03', control: 'FAIL_CLOSED_CONFIGURATION', enforcement: 'Only literal GCL_MARKET_LIVE_ENABLED=false permits the synthetic adapter; absent, malformed, and true values deny.' },
+  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan and rejects unknown, changed, or malformed fields.' },
+  { id: 'ADOS-05', control: 'UNTRUSTED_CONTENT_IS_DATA', enforcement: 'Request values are labelled data-only and cannot become connector instructions.' },
+  { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'A separate canonical owner actor with market:review is required; the plan maker cannot self-review.' },
+  { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIALS', enforcement: 'No network client, provider URL, credential, API key, scheduler, or automatic sync exists in this connector.' },
+  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory.' },
+  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet and review receipt permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
+  { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or market-provider integration is part of this connector.' },
+])
 
 export type MarketOperation = 'freight-discovery' | 'capacity-discovery' | 'capacity-quote'
 export type MarketTransportMode = 'road' | 'sea' | 'rail' | 'air'
@@ -57,6 +81,26 @@ export type MarketOwnerReview = {
   decisionAuthorizesExecution: false
 }
 
+export type MarketReviewPacket = {
+  version: typeof MARKET_REVIEW_PACKET_VERSION
+  reviewId: string
+  state: 'PENDING_INDEPENDENT_OWNER_REVIEW'
+  planDigest: string
+  bindingDigest: string
+  integrity: {
+    algorithm: 'sha256'
+    digest: string
+  }
+  automaticAction: false
+  execution: {
+    state: 'NOT_AUTHORIZED'
+    externalNetwork: false
+    reservation: false
+    booking: false
+    publication: false
+  }
+}
+
 export type SyntheticMarketPlan = {
   id: string
   mode: 'SYNTHETIC'
@@ -83,12 +127,15 @@ export type SyntheticMarketPlan = {
     publication: false
   }
   ownerReview: MarketOwnerReview
+  reviewPacket: MarketReviewPacket
 }
 
 export type MarketReviewDecision = 'acknowledged' | 'rejected'
 
 export type ReviewedSyntheticMarketPlan = {
   planId: string
+  reviewId: string
+  reviewPacketIntegrityDigest: string
   decision: MarketReviewDecision
   reviewedBy: string
   reviewedAt: string
@@ -184,11 +231,26 @@ function normalizedScopes(scopes: readonly string[]): string[] {
   return [...new Set(scopes)].sort()
 }
 
+function canonicalActor(value: unknown): string | null {
+  return typeof value === 'string' && value === value.trim() && OWNER_ACTOR_PATTERN.test(value) ? value : null
+}
+
+function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (value && typeof value === 'object') {
+    const record = value as Record<string, unknown>
+    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+  }
+  return JSON.stringify(value)
+}
+
 function planBinding(ctx: ConnectorRunContext): MarketPlanBinding {
+  const requestedBy = canonicalActor(ctx.actor)
+  if (!requestedBy) throw new OwnerGateError('MARKET_REQUESTER_REQUIRED')
   return {
     product: ctx.product,
     workspaceId: ctx.workspaceId,
-    requestedBy: ctx.actor,
+    requestedBy,
     scopes: normalizedScopes(ctx.scopes),
     costCapCents: ctx.costCapCents,
     requestedItems: ctx.requestedItems,
@@ -203,8 +265,41 @@ function marketPlanDigest(binding: MarketPlanBinding, request: SyntheticMarketIn
   return createHash('sha256').update(marketPlanMaterial(binding, request)).digest('hex')
 }
 
+function marketBindingDigest(binding: MarketPlanBinding): string {
+  return createHash('sha256').update(canonicalJson(binding)).digest('hex')
+}
+
 function planId(binding: MarketPlanBinding, request: SyntheticMarketInput): string {
   return 'synthetic-market-' + marketPlanDigest(binding, request).slice(0, 24)
+}
+
+function reviewId(binding: MarketPlanBinding, request: SyntheticMarketInput): string {
+  return 'synthetic-market-review-' + marketPlanDigest(binding, request).slice(0, 24)
+}
+
+function reviewExecution(): MarketReviewPacket['execution'] {
+  return { state: 'NOT_AUTHORIZED', externalNetwork: false, reservation: false, booking: false, publication: false }
+}
+
+function reviewPacketMaterial(packet: Omit<MarketReviewPacket, 'integrity'>): string {
+  return canonicalJson(packet)
+}
+
+function reviewPacket(binding: MarketPlanBinding, request: SyntheticMarketInput): MarketReviewPacket {
+  const planDigest = marketPlanDigest(binding, request)
+  const packet: Omit<MarketReviewPacket, 'integrity'> = {
+    version: MARKET_REVIEW_PACKET_VERSION,
+    reviewId: reviewId(binding, request),
+    state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
+    planDigest,
+    bindingDigest: marketBindingDigest(binding),
+    automaticAction: false,
+    execution: reviewExecution(),
+  }
+  return {
+    ...packet,
+    integrity: { algorithm: 'sha256', digest: createHash('sha256').update(reviewPacketMaterial(packet)).digest('hex') },
+  }
 }
 
 function requiredScope(request: SyntheticMarketInput): 'market:discover' | 'market:capacity:quote' {
@@ -213,28 +308,77 @@ function requiredScope(request: SyntheticMarketInput): 'market:discover' | 'mark
 
 function validatedRequest(config: SyntheticMarketConnectorConfig, input: unknown, ctx: ConnectorRunContext): SyntheticMarketInput {
   const limits = configured(config, ctx)
+  if (!canonicalActor(ctx.actor)) throw new OwnerGateError('MARKET_REQUESTER_REQUIRED')
   const request = parse(input, limits)
   if (request.requestedListings !== ctx.requestedItems) throw new CostCapError('MARKET_LISTINGS_MUST_MATCH_REQUESTED_ITEMS')
   if (!ctx.scopes.includes(requiredScope(request))) throw new ConnectorInputError('MARKET_OPERATION_SCOPE_REQUIRED')
   return request
 }
 
-function isReviewablePlan(plan: SyntheticMarketPlan, context: MarketReviewContext): boolean {
-  if (!plan || typeof plan !== 'object' || !plan.binding || !plan.integrity || !plan.request) return false
-  const { binding } = plan
-  if (binding.product !== context.product || binding.workspaceId !== context.workspaceId || typeof binding.requestedBy !== 'string') return false
-  if (!Array.isArray(binding.scopes) || binding.scopes.length === 0 || binding.scopes.some((scope) => typeof scope !== 'string')) return false
-  if (JSON.stringify(binding.scopes) !== JSON.stringify(normalizedScopes(binding.scopes))) return false
-  if (!positiveInteger(binding.costCapCents) || !positiveInteger(binding.requestedItems)) return false
-  if (plan.mode !== 'SYNTHETIC' || plan.liveStatus !== 'LIVE_DISABLED' || plan.state !== 'OWNER_REVIEW_REQUIRED') return false
-  if (plan.ownerReview?.state !== 'PENDING_INDEPENDENT_OWNER_REVIEW' || plan.ownerReview.requiredScope !== 'market:review' || plan.ownerReview.makerCanReview !== false || plan.ownerReview.automaticAction !== false || plan.ownerReview.decisionAuthorizesExecution !== false) return false
-  if (plan.sideEffects?.externalNetwork !== false || plan.sideEffects.reservation !== false || plan.sideEffects.booking !== false || plan.sideEffects.publication !== false) return false
-  try {
-    const digest = marketPlanDigest(binding, plan.request)
-    return plan.integrity.algorithm === 'sha256' && plan.integrity.digest === digest && plan.id === `synthetic-market-${digest.slice(0, 24)}`
-  } catch {
-    return false
+function syntheticMarketPlan(binding: MarketPlanBinding, request: SyntheticMarketInput): SyntheticMarketPlan {
+  const digest = marketPlanDigest(binding, request)
+  return {
+    id: planId(binding, request),
+    mode: 'SYNTHETIC',
+    liveStatus: 'LIVE_DISABLED',
+    state: 'OWNER_REVIEW_REQUIRED',
+    binding,
+    integrity: { algorithm: 'sha256', digest },
+    request,
+    sources: [
+      { id: 'internal-capacity-market', state: 'NOT_QUERIED', autoSync: false, credentialsAccepted: false },
+      { id: 'hub-connect', state: 'NOT_CONTACTED', autoSync: false, credentialsAccepted: false },
+    ],
+    quote: request.operation === 'capacity-quote'
+      ? { state: 'NOT_QUOTED', reason: 'SYNTHETIC_MARKET_HAS_NO_CAPACITY_OFFERS' }
+      : null,
+    sideEffects: { externalNetwork: false, reservation: false, booking: false, publication: false },
+    ownerReview: { state: 'PENDING_INDEPENDENT_OWNER_REVIEW', requiredScope: 'market:review', makerCanReview: false, automaticAction: false, decisionAuthorizesExecution: false },
+    reviewPacket: reviewPacket(binding, request),
   }
+}
+
+/**
+ * Reconstructs the entire reviewable plan instead of trusting a caller-held
+ * object. This is deliberately stricter than checking the plan digest alone:
+ * source, quote, side-effect, and review-packet fields are all canonical.
+ */
+export function validateSyntheticMarketPlanForReview(plan: unknown, context: MarketReviewContext): SyntheticMarketPlan {
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
+  const candidate = plan as Record<string, unknown>
+  const bindingValue = candidate.binding
+  if (!bindingValue || typeof bindingValue !== 'object' || Array.isArray(bindingValue)) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
+  const bindingCandidate = bindingValue as Record<string, unknown>
+  const requestedBy = canonicalActor(bindingCandidate.requestedBy)
+  const costCapCents = positiveInteger(bindingCandidate.costCapCents)
+  const requestedItems = positiveInteger(bindingCandidate.requestedItems)
+  if (
+    bindingCandidate.product !== context.product || bindingCandidate.workspaceId !== context.workspaceId || !requestedBy ||
+    !Array.isArray(bindingCandidate.scopes) || bindingCandidate.scopes.length === 0 || bindingCandidate.scopes.some((scope) => typeof scope !== 'string') ||
+    canonicalJson(bindingCandidate.scopes) !== canonicalJson(normalizedScopes(bindingCandidate.scopes as string[])) ||
+    !costCapCents || !requestedItems
+  ) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
+
+  let request: SyntheticMarketInput
+  try {
+    request = parse(candidate.request, { maxCostCapCents: Number.MAX_SAFE_INTEGER, maxItems: Number.MAX_SAFE_INTEGER, maxCapacityUnits: Number.MAX_SAFE_INTEGER })
+  } catch {
+    throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
+  }
+  const binding: MarketPlanBinding = {
+    product: bindingCandidate.product,
+    workspaceId: bindingCandidate.workspaceId,
+    requestedBy,
+    scopes: bindingCandidate.scopes as string[],
+    costCapCents,
+    requestedItems,
+  }
+  if (request.requestedListings !== binding.requestedItems || !binding.scopes.includes(requiredScope(request))) {
+    throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
+  }
+  const expected = syntheticMarketPlan(binding, request)
+  if (canonicalJson(candidate) !== canonicalJson(expected)) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
+  return expected
 }
 
 /**
@@ -259,25 +403,7 @@ export class SyntheticMarketConnector implements Connector<SyntheticMarketInput,
   async run(input: SyntheticMarketInput, ctx: ConnectorRunContext): Promise<ConnectorResult<SyntheticMarketPlan>> {
     const request = validatedRequest(this.config, input, ctx)
     const binding = planBinding(ctx)
-    const digest = marketPlanDigest(binding, request)
-    const plan: SyntheticMarketPlan = {
-      id: planId(binding, request),
-      mode: 'SYNTHETIC',
-      liveStatus: 'LIVE_DISABLED',
-      state: 'OWNER_REVIEW_REQUIRED',
-      binding,
-      integrity: { algorithm: 'sha256', digest },
-      request,
-      sources: [
-        { id: 'internal-capacity-market', state: 'NOT_QUERIED', autoSync: false, credentialsAccepted: false },
-        { id: 'hub-connect', state: 'NOT_CONTACTED', autoSync: false, credentialsAccepted: false },
-      ],
-      quote: request.operation === 'capacity-quote'
-        ? { state: 'NOT_QUOTED', reason: 'SYNTHETIC_MARKET_HAS_NO_CAPACITY_OFFERS' }
-        : null,
-      sideEffects: { externalNetwork: false, reservation: false, booking: false, publication: false },
-      ownerReview: { state: 'PENDING_INDEPENDENT_OWNER_REVIEW', requiredScope: 'market:review', makerCanReview: false, automaticAction: false, decisionAuthorizesExecution: false },
-    }
+    const plan = syntheticMarketPlan(binding, request)
     return {
       data: plan,
       provenance: {
@@ -305,11 +431,12 @@ export class SyntheticMarketConnector implements Connector<SyntheticMarketInput,
  */
 export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMarketPlan, decision: MarketReviewDecision, ownerApproved: boolean, reviewer: string, auditLog: AuditLog, context: MarketReviewContext): Promise<ReviewedSyntheticMarketPlan> {
   if (!ownerApproved) throw new OwnerGateError()
-  if (!OWNER_ACTOR_PATTERN.test(reviewer)) throw new OwnerGateError('MARKET_REVIEWER_REQUIRED')
+  const canonicalReviewer = canonicalActor(reviewer)
+  if (!canonicalReviewer) throw new OwnerGateError('MARKET_REVIEWER_REQUIRED')
   if (!context.scopes.includes('market:review')) throw new ScopeError('MARKET_REVIEW_SCOPE_REQUIRED')
   if (decision !== 'acknowledged' && decision !== 'rejected') throw new ConnectorInputError('INVALID_MARKET_REVIEW_DECISION')
-  if (!isReviewablePlan(plan, context)) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
-  if (reviewer === plan.binding.requestedBy) throw new MakerCheckerError('MARKET_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
+  const validatedPlan = validateSyntheticMarketPlanForReview(plan, context)
+  if (canonicalReviewer === validatedPlan.binding.requestedBy) throw new MakerCheckerError('MARKET_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
 
   const reviewedAt = context.now().toISOString()
   const audit = await auditLog.append({
@@ -317,15 +444,16 @@ export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMark
     connectorId: MARKET_CONNECTOR_ID,
     product: context.product,
     workspaceId: context.workspaceId,
-    actor: reviewer,
+    actor: canonicalReviewer,
     scopes: ['market:review'],
     costCapCents: 0,
     requestedItems: 1,
     occurredAt: reviewedAt,
     detail: {
-      planId: plan.id,
-      planDigest: plan.integrity.digest,
-      maker: plan.binding.requestedBy,
+      planId: validatedPlan.id,
+      planDigest: validatedPlan.integrity.digest,
+      reviewId: validatedPlan.reviewPacket.reviewId,
+      reviewPacketIntegrityDigest: validatedPlan.reviewPacket.integrity.digest,
       decision,
       execution: 'NOT_AUTHORIZED',
       externalNetwork: false,
@@ -335,12 +463,14 @@ export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMark
     },
   })
   return {
-    planId: plan.id,
+    planId: validatedPlan.id,
+    reviewId: validatedPlan.reviewPacket.reviewId,
+    reviewPacketIntegrityDigest: validatedPlan.reviewPacket.integrity.digest,
     decision,
-    reviewedBy: reviewer,
+    reviewedBy: canonicalReviewer,
     reviewedAt,
     mode: 'SYNTHETIC',
-    execution: { state: 'NOT_AUTHORIZED', externalNetwork: false, reservation: false, booking: false, publication: false },
+    execution: reviewExecution(),
     auditHash: audit.hash,
   }
 }

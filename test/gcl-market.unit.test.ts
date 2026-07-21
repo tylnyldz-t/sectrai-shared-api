@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
-import { MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, SyntheticMarketConnector, independentlyReviewSyntheticMarketPlan, syntheticMarketConnectorFromEnvironment, type MarketCapacityQuoteInput, type MarketReviewContext, type SyntheticMarketConnectorConfig, type SyntheticMarketPlan } from '../src/gcl/market.js'
+import { ADOS_10_MARKET_CONTROLS, MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, SyntheticMarketConnector, independentlyReviewSyntheticMarketPlan, syntheticMarketConnectorFromEnvironment, validateSyntheticMarketPlanForReview, type MarketCapacityQuoteInput, type MarketReviewContext, type SyntheticMarketConnectorConfig, type SyntheticMarketPlan } from '../src/gcl/market.js'
 import { dailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import type { ConnectorQuota, ConnectorRunContext } from '../src/gcl/types.js'
@@ -68,6 +68,13 @@ test('synthetic market returns only an owner-review plan and never a quote, book
   assert.equal(plan.ownerReview.state, 'PENDING_INDEPENDENT_OWNER_REVIEW')
   assert.equal(plan.ownerReview.makerCanReview, false)
   assert.equal(plan.ownerReview.decisionAuthorizesExecution, false)
+  assert.equal(plan.reviewPacket.version, 'synthetic-market-review-packet-v1')
+  assert.equal(plan.reviewPacket.state, 'PENDING_INDEPENDENT_OWNER_REVIEW')
+  assert.equal(plan.reviewPacket.planDigest, plan.integrity.digest)
+  assert.match(plan.reviewPacket.reviewId, /^synthetic-market-review-[a-f0-9]{24}$/)
+  assert.match(plan.reviewPacket.bindingDigest, /^[a-f0-9]{64}$/)
+  assert.match(plan.reviewPacket.integrity.digest, /^[a-f0-9]{64}$/)
+  assert.deepEqual(plan.reviewPacket.execution, { state: 'NOT_AUTHORIZED', externalNetwork: false, reservation: false, booking: false, publication: false })
   assert.equal(plan.request.originCountry, 'TR')
   assert.deepEqual(plan.quote, { state: 'NOT_QUOTED', reason: 'SYNTHETIC_MARKET_HAS_NO_CAPACITY_OFFERS' })
   assert.deepEqual(plan.sources, [
@@ -198,11 +205,67 @@ test('a distinct owner can audit a market review, but neither decision can autho
   assert.equal(reviewed.decision, 'acknowledged')
   assert.equal(reviewed.reviewedBy, 'checker@example.test')
   assert.equal(reviewed.mode, 'SYNTHETIC')
+  assert.equal(reviewed.reviewId, plan.reviewPacket.reviewId)
+  assert.equal(reviewed.reviewPacketIntegrityDigest, plan.reviewPacket.integrity.digest)
   assert.deepEqual(reviewed.execution, { state: 'NOT_AUTHORIZED', externalNetwork: false, reservation: false, booking: false, publication: false })
   assert.equal(reviewed.auditHash, setup.audit.entries[2]?.hash)
   assert.equal(setup.audit.entries[2]?.previousHash, setup.audit.entries[1]?.hash)
   assert.equal(setup.audit.entries[2]?.event.type, 'connector.market.owner_reviewed')
+  assert.equal(setup.audit.entries[2]?.event.detail.maker, undefined)
+  assert.equal(setup.audit.entries[2]?.event.detail.reviewPacketIntegrityDigest, plan.reviewPacket.integrity.digest)
   assert.equal(setup.quota.requests.length, 1)
+})
+
+test('D1 review packet reconstruction rejects injection, source/quote/action drift, scope drift, and whitespace identity bypasses before audit append', async () => {
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const plan = result.data as SyntheticMarketPlan
+  const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
+  const clone = (): SyntheticMarketPlan => structuredClone(plan)
+  const mustReject = (candidate: unknown) => assert.throws(
+    () => validateSyntheticMarketPlanForReview(candidate, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID',
+  )
+
+  const injected = clone() as SyntheticMarketPlan & { providerCredential?: string }
+  injected.providerCredential = 'not-accepted'
+  mustReject(injected)
+
+  const sourcePlan = clone()
+  const sourceDrift = { ...sourcePlan, sources: [{ ...sourcePlan.sources[0]!, state: 'NOT_CONTACTED' }, ...sourcePlan.sources.slice(1)] }
+  mustReject(sourceDrift)
+
+  const quoteDrift = clone()
+  quoteDrift.quote = { state: 'NOT_QUOTED', reason: 'INVENTED_REASON' } as never
+  mustReject(quoteDrift)
+
+  const actionDrift = clone()
+  actionDrift.reviewPacket.execution.booking = true as never
+  mustReject(actionDrift)
+
+  assert.throws(
+    () => validateSyntheticMarketPlanForReview(clone(), { ...reviewContext, workspaceId: 'another-workspace' }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID',
+  )
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(clone(), 'acknowledged', true, ` ${context.actor}`, setup.audit, reviewContext),
+    (error: unknown) => error instanceof OwnerGateError && error.message === 'MARKET_REVIEWER_REQUIRED',
+  )
+  await assert.rejects(
+    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context, actor: ` ${context.actor}` }),
+    (error: unknown) => error instanceof OwnerGateError && error.message === 'MARKET_REQUESTER_REQUIRED',
+  )
+  assert.equal(setup.audit.entries.length, 2)
+  assert.equal(setup.quota.requests.length, 1)
+})
+
+test('ADOS 10 controls are complete and explicitly prohibit egress and production launch', () => {
+  assert.equal(ADOS_10_MARKET_CONTROLS.length, 10)
+  assert.deepEqual(ADOS_10_MARKET_CONTROLS.map((control) => control.id), [
+    'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
+  ])
+  assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 
 test('market quota configuration is separately fail-closed and cannot share Apify limits by accident', () => {
