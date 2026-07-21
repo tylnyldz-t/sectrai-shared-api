@@ -14,6 +14,7 @@ export const MARKET_REVIEW_RECEIPT_VERSION = 'synthetic-market-review-receipt-v1
 export const MARKET_REVIEW_AUDIT_WITNESS_VERSION = 'synthetic-market-review-audit-witness-v1'
 export const MARKET_REVIEW_AUDIT_TRAIL_WITNESS_VERSION = 'synthetic-market-review-audit-trail-witness-v1'
 export const MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION = 'synthetic-market-review-audit-trail-receipt-v1'
+export const MARKET_REVIEW_EVIDENCE_MANIFEST_VERSION = 'synthetic-market-review-evidence-manifest-v1'
 const MARKET_SCOPES = ['market:discover', 'market:capacity:quote', 'market:review'] as const
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
@@ -21,6 +22,7 @@ const PLAN_ID_PATTERN = /^synthetic-market-[a-f0-9]{24}$/
 const REVIEW_ID_PATTERN = /^synthetic-market-review-[a-f0-9]{24}$/
 const REVIEW_RECEIPT_ID_PATTERN = /^synthetic-market-review-receipt-[a-f0-9]{24}$/
 const REVIEW_AUDIT_TRAIL_RECEIPT_ID_PATTERN = /^synthetic-market-review-audit-trail-receipt-[a-f0-9]{24}$/
+const REVIEW_EVIDENCE_MANIFEST_ID_PATTERN = /^synthetic-market-review-evidence-manifest-[a-f0-9]{24}$/
 
 export type AdosMarketControl = {
   id: `ADOS-${string}`
@@ -36,12 +38,12 @@ export const ADOS_10_MARKET_CONTROLS: readonly AdosMarketControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every plan and review packet is digest-bound to one product and workspace.' },
   { id: 'ADOS-02', control: 'SYNTHETIC_DATA_ONLY', enforcement: 'Only the bounded market request shape is accepted; no market response or provider payload is ingested.' },
   { id: 'ADOS-03', control: 'FAIL_CLOSED_CONFIGURATION', enforcement: 'Only literal GCL_MARKET_LIVE_ENABLED=false permits the synthetic adapter; absent, malformed, and true values deny.' },
-  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, while D3/D4/D5 recheck caller-held receipt and audit evidence without a write.' },
+  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, while D3/D4/D5/D6/D7 recheck caller-held evidence without a write.' },
   { id: 'ADOS-05', control: 'UNTRUSTED_CONTENT_IS_DATA', enforcement: 'Request values are labelled data-only and cannot become connector instructions.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'A separate canonical owner actor with market:review is required; the plan maker cannot self-review.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIALS', enforcement: 'No network client, provider URL, credential, API key, scheduler, or automatic sync exists in this connector.' },
-  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory; D5 only read-checks a caller-supplied three-event segment.' },
-  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet, review receipt, and D4/D5 witnesses permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
+  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory; D5 reconstructs one caller-supplied segment, while D6/D7 only minimize and recheck derived evidence.' },
+  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet, review receipt, and D4/D5/D6/D7 evidence permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or market-provider integration is part of this connector.' },
 ])
 
@@ -258,6 +260,38 @@ export type SyntheticMarketReviewAuditTrailReceipt = {
   mode: 'SYNTHETIC'
   liveStatus: 'LIVE_DISABLED'
   state: 'SYNTHETIC_MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERIFIED_NO_ACTION'
+  execution: {
+    state: 'NOT_AUTHORIZED'
+    externalNetwork: false
+    reservation: false
+    booking: false
+    publication: false
+  }
+  integrity: {
+    algorithm: 'sha256'
+    digest: string
+  }
+}
+
+/**
+ * A D7 compact binding of independently reconstructed D3 and D6 evidence.
+ * It deliberately omits the request, actor identities, decision, audit
+ * hashes, provider details, and every market-action capability.
+ */
+export type SyntheticMarketReviewEvidenceManifest = {
+  version: typeof MARKET_REVIEW_EVIDENCE_MANIFEST_VERSION
+  manifestId: string
+  scopeBinding: {
+    productDigest: string
+    workspaceDigest: string
+  }
+  planId: string
+  reviewId: string
+  reviewReceiptIntegrityDigest: string
+  auditTrailReceiptIntegrityDigest: string
+  mode: 'SYNTHETIC'
+  liveStatus: 'LIVE_DISABLED'
+  state: 'SYNTHETIC_MARKET_REVIEW_EVIDENCE_MANIFEST_VERIFIED_NO_ACTION'
   execution: {
     state: 'NOT_AUTHORIZED'
     externalNetwork: false
@@ -1047,6 +1081,114 @@ export function validateSyntheticMarketReviewAuditTrailReceipt(sourcePlan: unkno
   }
   if (receipt.integrity.digest !== sha256(reviewAuditTrailReceiptMaterial(material)) || !canonicallyEqual(receipt, expected)) {
     throw new ConnectorInputError('MARKET_AUDIT_TRAIL_RECEIPT_INTEGRITY_INVALID')
+  }
+  return expected
+}
+
+function reviewEvidenceManifestMaterial(manifest: Omit<SyntheticMarketReviewEvidenceManifest, 'manifestId' | 'integrity'>): string {
+  return canonicalJson(manifest)
+}
+
+function reviewEvidenceManifestFor(reviewed: ReviewedSyntheticMarketPlan, auditTrailReceipt: SyntheticMarketReviewAuditTrailReceipt, context: MarketReviewContext): SyntheticMarketReviewEvidenceManifest {
+  const scope = reviewContext(context)
+  const material: Omit<SyntheticMarketReviewEvidenceManifest, 'manifestId' | 'integrity'> = {
+    version: MARKET_REVIEW_EVIDENCE_MANIFEST_VERSION,
+    scopeBinding: {
+      productDigest: sha256(scope.product),
+      workspaceDigest: sha256(scope.workspaceId),
+    },
+    planId: reviewed.planId,
+    reviewId: reviewed.reviewId,
+    reviewReceiptIntegrityDigest: reviewed.reviewReceipt.integrity.digest,
+    auditTrailReceiptIntegrityDigest: auditTrailReceipt.integrity.digest,
+    mode: 'SYNTHETIC',
+    liveStatus: 'LIVE_DISABLED',
+    state: 'SYNTHETIC_MARKET_REVIEW_EVIDENCE_MANIFEST_VERIFIED_NO_ACTION',
+    execution: reviewExecution(),
+  }
+  const integrityDigest = sha256(reviewEvidenceManifestMaterial(material))
+  return {
+    ...material,
+    manifestId: `synthetic-market-review-evidence-manifest-${sha256(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
+    integrity: { algorithm: 'sha256', digest: integrityDigest },
+  }
+}
+
+function marketReviewEvidenceManifestForValidation(value: unknown): SyntheticMarketReviewEvidenceManifest {
+  const manifest = exactMarketObject(value, ['version', 'manifestId', 'scopeBinding', 'planId', 'reviewId', 'reviewReceiptIntegrityDigest', 'auditTrailReceiptIntegrityDigest', 'mode', 'liveStatus', 'state', 'execution', 'integrity'], 'UNEXPECTED_MARKET_REVIEW_EVIDENCE_MANIFEST_FIELD')
+  const scopeBinding = exactMarketObject(manifest.scopeBinding, ['productDigest', 'workspaceDigest'], 'INVALID_MARKET_REVIEW_EVIDENCE_MANIFEST_SCOPE')
+  const integrity = exactMarketObject(manifest.integrity, ['algorithm', 'digest'], 'INVALID_MARKET_REVIEW_EVIDENCE_MANIFEST_INTEGRITY')
+  const manifestId = manifest.manifestId
+  const planId = manifest.planId
+  const reviewId = manifest.reviewId
+  const reviewReceiptIntegrityDigest = manifest.reviewReceiptIntegrityDigest
+  const auditTrailReceiptIntegrityDigest = manifest.auditTrailReceiptIntegrityDigest
+  const productDigest = scopeBinding.productDigest
+  const workspaceDigest = scopeBinding.workspaceDigest
+  const integrityDigest = integrity.digest
+  if (
+    manifest.version !== MARKET_REVIEW_EVIDENCE_MANIFEST_VERSION ||
+    typeof manifestId !== 'string' || !REVIEW_EVIDENCE_MANIFEST_ID_PATTERN.test(manifestId) ||
+    typeof planId !== 'string' || !PLAN_ID_PATTERN.test(planId) ||
+    typeof reviewId !== 'string' || !REVIEW_ID_PATTERN.test(reviewId) ||
+    typeof reviewReceiptIntegrityDigest !== 'string' || !DIGEST_PATTERN.test(reviewReceiptIntegrityDigest) ||
+    typeof auditTrailReceiptIntegrityDigest !== 'string' || !DIGEST_PATTERN.test(auditTrailReceiptIntegrityDigest) ||
+    typeof productDigest !== 'string' || !DIGEST_PATTERN.test(productDigest) ||
+    typeof workspaceDigest !== 'string' || !DIGEST_PATTERN.test(workspaceDigest) ||
+    manifest.mode !== 'SYNTHETIC' || manifest.liveStatus !== 'LIVE_DISABLED' ||
+    manifest.state !== 'SYNTHETIC_MARKET_REVIEW_EVIDENCE_MANIFEST_VERIFIED_NO_ACTION' ||
+    integrity.algorithm !== 'sha256' || typeof integrityDigest !== 'string' || !DIGEST_PATTERN.test(integrityDigest)
+  ) throw new ConnectorInputError('INVALID_MARKET_REVIEW_EVIDENCE_MANIFEST')
+  return {
+    version: MARKET_REVIEW_EVIDENCE_MANIFEST_VERSION,
+    manifestId,
+    scopeBinding: { productDigest, workspaceDigest },
+    planId,
+    reviewId,
+    reviewReceiptIntegrityDigest,
+    auditTrailReceiptIntegrityDigest,
+    mode: 'SYNTHETIC',
+    liveStatus: 'LIVE_DISABLED',
+    state: 'SYNTHETIC_MARKET_REVIEW_EVIDENCE_MANIFEST_VERIFIED_NO_ACTION',
+    execution: reviewExecutionForReceipt(manifest.execution),
+    integrity: { algorithm: 'sha256', digest: integrityDigest },
+  }
+}
+
+/**
+ * D7 derives a compact evidence manifest only after D3 and D6 independently
+ * reconstruct the same caller-held review and audit segment. It is
+ * library-only and read-only: no storage read/write, quota use, route,
+ * provider contact, handoff, notification, or market action occurs.
+ */
+export function createSyntheticMarketReviewEvidenceManifest(sourcePlan: unknown, value: unknown, auditTrail: unknown, context: MarketReviewContext): SyntheticMarketReviewEvidenceManifest {
+  const auditTrailReceipt = createSyntheticMarketReviewAuditTrailReceipt(sourcePlan, value, auditTrail, context)
+  const reviewed = validateSyntheticMarketReviewReceipt(sourcePlan, value, context)
+  return reviewEvidenceManifestFor(reviewed, auditTrailReceipt, context)
+}
+
+/**
+ * D7 checks a caller-held manifest against freshly reconstructed D3 and D6
+ * evidence. Its SHA-256 value is unkeyed mutation evidence, never a
+ * signature, credential, durable proof, authorization, or execution token.
+ */
+export function validateSyntheticMarketReviewEvidenceManifest(sourcePlan: unknown, value: unknown, auditTrail: unknown, manifestValue: unknown, context: MarketReviewContext): SyntheticMarketReviewEvidenceManifest {
+  const manifest = marketReviewEvidenceManifestForValidation(manifestValue)
+  const expected = createSyntheticMarketReviewEvidenceManifest(sourcePlan, value, auditTrail, context)
+  const material: Omit<SyntheticMarketReviewEvidenceManifest, 'manifestId' | 'integrity'> = {
+    version: manifest.version,
+    scopeBinding: manifest.scopeBinding,
+    planId: manifest.planId,
+    reviewId: manifest.reviewId,
+    reviewReceiptIntegrityDigest: manifest.reviewReceiptIntegrityDigest,
+    auditTrailReceiptIntegrityDigest: manifest.auditTrailReceiptIntegrityDigest,
+    mode: manifest.mode,
+    liveStatus: manifest.liveStatus,
+    state: manifest.state,
+    execution: manifest.execution,
+  }
+  if (manifest.integrity.digest !== sha256(reviewEvidenceManifestMaterial(material)) || !canonicallyEqual(manifest, expected)) {
+    throw new ConnectorInputError('MARKET_REVIEW_EVIDENCE_MANIFEST_INTEGRITY_INVALID')
   }
   return expected
 }
