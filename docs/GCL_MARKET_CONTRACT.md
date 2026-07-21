@@ -73,12 +73,29 @@ understate its quota use. Country values are normalized two-letter codes.
 `market:review` is a separate scope. It cannot run discovery or quote by
 itself, and it cannot authorize any market action.
 
-## Independent review receipt
+## D1 — canonical independent review packet
 
-The returned plan contains its maker, product/workspace binding, normalized
-run scopes and limits, plus a deterministic SHA-256 digest. This lets the
-local review helper reject an accidentally changed or cross-workspace plan
-before it appends a `connector.market.owner_reviewed` audit event.
+The returned plan now contains `synthetic-market-review-packet-v1`. It binds
+the plan digest, a product/workspace/maker/scopes/cost/item binding digest,
+and an independently derived packet digest to a deterministic review ID. Its
+only execution state is permanently `NOT_AUTHORIZED`, with external network,
+reservation, booking, and publication all `false`.
+
+`validateSyntheticMarketPlanForReview()` reconstructs the complete canonical
+plan before the local review helper appends a
+`connector.market.owner_reviewed` event. It does not merely compare the
+top-level plan digest. The reconstructed result must also have the exact
+synthetic source states, `NOT_QUOTED` shape, side-effect flags, owner-review
+flags, packet fields, normalized scope ordering, and packet integrity digest.
+An added field (including a credential/provider-shaped field), changed source
+state, invented quote, action flag, malformed packet, changed maker, or
+cross-product/workspace packet is rejected before the review audit append.
+
+Maker and reviewer identifiers are canonical at this boundary: valid values
+cannot have leading or trailing whitespace. That prevents a whitespace variant
+of the maker from bypassing the independent-review check. Identity
+canonicalization beyond this bounded string rule remains the responsibility of
+the authenticated product host.
 
 A review requires all of the following:
 
@@ -92,10 +109,12 @@ The receipt is deliberately limited to `NOT_AUTHORIZED`. Both decisions keep
 external network, reservation, booking and publication at `false`. In
 particular, `acknowledged` is not “approved”, is not a consent to execute,
 and cannot create an offer or reservation. The digest is a deterministic
-binding check, not a signature, durable approval record, or authorization
-token. Because this synthetic package owns no review storage, a future
-durable, owner-designed workflow must handle mutable review state, idempotency
-and final-decision rules separately.
+binding check, not a signature, durable approval record, replay-prevention
+mechanism, or authorization token. Because this synthetic package owns no
+review storage, a future durable, owner-designed workflow must fail closed
+until it supplies its own scoped mutable review state, idempotency/replay
+rules, and final-decision rules. D1 has no such state transition: a receipt
+can never make a market action available.
 
 ## Synthetic-only boundary
 
@@ -114,6 +133,18 @@ publication code. A successful run returns only an owner-review plan:
     "makerCanReview": false,
     "automaticAction": false,
     "decisionAuthorizesExecution": false
+  },
+  "reviewPacket": {
+    "version": "synthetic-market-review-packet-v1",
+    "state": "PENDING_INDEPENDENT_OWNER_REVIEW",
+    "automaticAction": false,
+    "execution": {
+      "state": "NOT_AUTHORIZED",
+      "externalNetwork": false,
+      "reservation": false,
+      "booking": false,
+      "publication": false
+    }
   },
   "sources": [
     { "id": "internal-capacity-market", "state": "NOT_QUERIED" },
@@ -148,3 +179,35 @@ GCL_MARKET_MAX_CAPACITY_UNITS=10
 GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
+
+## D1 test evidence and ADOS 10-rule conformance
+
+`test/gcl-market.unit.test.ts` covers the normal synthetic packet and the D1
+negative path. The negative path rejects injected provider-shaped fields,
+source-state drift, invented quote data, action-flag drift, cross-workspace
+use, and whitespace-based maker/reviewer bypass attempts before it can append
+a review event or consume another quota item.
+
+1. Every plan and packet is bound to exactly one product/workspace data plane.
+2. Only the bounded synthetic request is accepted; no provider response is
+   ingested.
+3. Configuration default-denies; only exact `LIVE_ENABLED=false` permits this
+   synthetic adapter.
+4. Full canonical reconstruction rejects changed, malformed, and unknown
+   packet fields.
+5. Request content is explicitly data-only, never an instruction.
+6. Owner gate, `market:review`, and maker–checker separation are mandatory.
+7. The module has no network client, provider URL, credential/API-key field,
+   scheduler, or automatic sync.
+8. Preflight, cost caps, independent grouped quotas, and the scoped SHA-256
+   audit chain bound every run.
+9. A review cannot quote, reserve, book, publish, hand off, notify, or trigger
+   an automatic action.
+10. This package has no production migration, `main`/production write, live
+    launch, or market-provider integration.
+
+## Explicit non-goals
+
+There is no real credential/API key, live/provider call, sending, capacity
+lookup, quote, reservation, booking, publication, handoff, background worker,
+production migration, live launch, or write to `main`/production in D1.

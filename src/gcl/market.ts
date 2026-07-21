@@ -5,6 +5,7 @@ import type { AuditLog, Connector, ConnectorResult, ConnectorRunContext } from '
 export const MARKET_CONNECTOR_ID = 'market'
 export const MARKET_LIVE_STATUS = 'MARKET_LIVE_DISABLED'
 const MARKET_REVIEW_PACKET_VERSION = 'synthetic-market-review-packet-v1'
+const MARKET_SCOPES = ['market:discover', 'market:capacity:quote', 'market:review'] as const
 
 export type AdosMarketControl = {
   id: `ADOS-${string}`
@@ -239,9 +240,18 @@ function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>
-    return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+    if (Object.getOwnPropertySymbols(record).length > 0) return '{"$unsupportedSymbolFields":true}'
+    return `{${Object.getOwnPropertyNames(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
   }
   return JSON.stringify(value)
+}
+
+function canonicallyEqual(left: unknown, right: unknown): boolean {
+  try {
+    return canonicalJson(left) === canonicalJson(right)
+  } catch {
+    return false
+  }
 }
 
 function planBinding(ctx: ConnectorRunContext): MarketPlanBinding {
@@ -354,7 +364,7 @@ export function validateSyntheticMarketPlanForReview(plan: unknown, context: Mar
   const requestedItems = positiveInteger(bindingCandidate.requestedItems)
   if (
     bindingCandidate.product !== context.product || bindingCandidate.workspaceId !== context.workspaceId || !requestedBy ||
-    !Array.isArray(bindingCandidate.scopes) || bindingCandidate.scopes.length === 0 || bindingCandidate.scopes.some((scope) => typeof scope !== 'string') ||
+    !Array.isArray(bindingCandidate.scopes) || bindingCandidate.scopes.length === 0 || bindingCandidate.scopes.some((scope) => typeof scope !== 'string' || !MARKET_SCOPES.includes(scope as typeof MARKET_SCOPES[number])) ||
     canonicalJson(bindingCandidate.scopes) !== canonicalJson(normalizedScopes(bindingCandidate.scopes as string[])) ||
     !costCapCents || !requestedItems
   ) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
@@ -377,7 +387,7 @@ export function validateSyntheticMarketPlanForReview(plan: unknown, context: Mar
     throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
   }
   const expected = syntheticMarketPlan(binding, request)
-  if (canonicalJson(candidate) !== canonicalJson(expected)) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
+  if (!canonicallyEqual(candidate, expected)) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
   return expected
 }
 
@@ -392,7 +402,7 @@ export class SyntheticMarketConnector implements Connector<SyntheticMarketInput,
   readonly kind = 'market' as const
   readonly authKind = 'owner-token' as const
   readonly quotaGroup = 'market'
-  readonly scopes = ['market:discover', 'market:capacity:quote', 'market:review'] as const
+  readonly scopes = MARKET_SCOPES
 
   constructor(private readonly config: SyntheticMarketConnectorConfig = {}) {}
 

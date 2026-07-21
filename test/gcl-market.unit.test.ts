@@ -231,6 +231,10 @@ test('D1 review packet reconstruction rejects injection, source/quote/action dri
   injected.providerCredential = 'not-accepted'
   mustReject(injected)
 
+  const hiddenInjection = clone()
+  Object.defineProperty(hiddenInjection, 'hiddenProviderCredential', { value: 'not-accepted' })
+  mustReject(hiddenInjection)
+
   const sourcePlan = clone()
   const sourceDrift = { ...sourcePlan, sources: [{ ...sourcePlan.sources[0]!, state: 'NOT_CONTACTED' }, ...sourcePlan.sources.slice(1)] }
   mustReject(sourceDrift)
