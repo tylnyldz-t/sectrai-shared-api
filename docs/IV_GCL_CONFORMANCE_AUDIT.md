@@ -450,3 +450,84 @@ action; no JARVIS/JNC launch; and no test result is a deployment or live-enable
 decision. D5 performed only local immutable Git-object reads and unit tests;
 it loaded no credential, contacted no provider or network endpoint, sent
 nothing, and made no `main`/production write.
+
+## D6 — next committed connector package
+
+D6 pins the next immutable package after D5: RA OCR `4b2f349`, RA image
+`23de86d`, RA 3D/game `ee6a69b`, RA market `619c34c`, RFID `9ea5603`,
+translation `00ab942`, language education `4b6170b`, and camera `295dc3e`.
+Voice has no later committed connector package and remains D1 evidence. This
+remains a source-only audit: every target file is read as
+`git show <pinned-commit>:<path>` and its Git blob is re-derived locally.
+The fixture neither imports target runtime code nor reads environment files or
+mutable sibling worktree content. This matters for D6 because OCR's sibling
+documentation and camera's source/test worktree have later uncommitted edits;
+they cannot affect the recorded result.
+
+The fixture pins the connector and `src/gcl/registry.ts` blob for every D6
+entry. RA 3D/game's public connector and runner blobs are deliberately
+unchanged from D5, but its audited local closure changed; D6 additionally
+pins `src/gcl/result-boundary.ts` (`85c33bd53000820ba7399457dd22af0b4d509c75`)
+and fails if it is not actually reachable in that closure. This prevents a
+changed policy boundary from being presented as unchanged merely because its
+entrypoint did not move.
+
+Run the complete immutable audit with:
+
+```bash
+npm run test:conformance
+```
+
+| Connector | D6 source-only change/evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D6 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Review packet v7 binds a metadata-only, plain-own-data boundary; inherited, hidden, symbol, and accessor-backed packet data fail before review audit | `requested` only | Pass | Nonconformant |
+| RA image | Candidate IDs and terminal owner decisions bind a bounded canonical review-expiry timestamp; issuance and decision at or after the deadline deny | `requested` only | Pass | Nonconformant |
+| RA 3D/game | The closure-level final-result boundary now revalidates frozen synthetic artifact, GPU-card, JNC handoff, publication, pipeline, and provenance shapes against the review snapshot | `requested` only | Pass | Nonconformant |
+| RA market | Caller-held three-event review trails exact-shape the owner-review audit entry before revalidating the no-action witness | `requested` only | Pass | Nonconformant |
+| RFID | Adds a fixed anonymous data-boundary review: evidence input/ledger write, retention, secondary use, legal attestation, deployment, reader, clock, and network are all absent or denied | `requested`, `failed` | Pass | Conformant |
+| Translation | A present live-enable key is a poison pill even when `false`; quota reservation moved inside the terminal audit lifecycle | `requested`, `failed` | Pass | Conformant |
+| Language education | Adds speaking-practice fixture references only; audio, transcript, utterance, learner profile, assessment, and score inputs/outputs remain denied | `requested`, `failed` | Pass | Conformant |
+| Camera | Produces an integrity-bound, minimized audit-trail receipt only after rechecking the caller-held requested/succeeded/review segment; it is no action capability | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` continues to mean only that the immutable source satisfies this
+synthetic IV governance envelope. It is not approval to configure a provider,
+use an API key, access a camera or RFID reader, process media, execute JNC or
+JARVIS, reserve/book/publish/handoff, write production data, or send anything.
+
+### D6 negative and edge evidence
+
+- The source scanner now rejects Node's `process.getBuiltinModule`,
+  `module.constructor._load`, and `require?.call` recovery paths. It also
+  rejects browser-side `self`, `navigator.sendBeacon`, `EventSource`, and
+  `WebTransport`, so the no-egress boundary does not depend on catching only
+  `fetch` or `WebSocket`.
+- Translation's classification changed only because the pinned runner places
+  `quota.consume` inside the same protected `try` that emits the linked
+  `connector.run.failed` event. This is a source classification, not an
+  inferred successful quota-rejection fixture.
+- D6 preserves the owner-denial ordering check: a false/non-true owner gate
+  must precede preflight, the requested audit, and quota reservation. It also
+  preserves fail-closed import closure rules, credential-like environment
+  read rejection, no endpoint/subprocess/publish surface, and literal
+  `LIVE_DISABLED` evidence.
+- The exact D6 package unit suites were run only from temporary Git archives:
+  OCR, image, 3D/game, both market suites, RFID, both translation suites,
+  language education, and camera. No integration/database test, migration,
+  credential, provider/network/device call, or send/publish operation was run.
+
+### D6 remediation and ADOS boundary
+
+RA OCR, image, 3D/game, and market still reserve quota before the protected
+lifecycle that appends `connector.run.failed`; they require protected quota
+reservation (or an equivalent linked failure path) plus behavioural
+rejecting-quota tests before GCL certification. The historical D1 Apify
+live-opt-in blocker remains separate and unresolved.
+
+All ten ADOS rules remain intact: no product data-plane join; default-deny
+configuration; immutable source/blob pointers only across the audit boundary;
+no inferred owner decision; maker–checker where applicable; audit gaps
+reported rather than invented; no migration; proposal-only outputs; no
+JARVIS/JNC launch; and synthetic test evidence is never a deployment or
+live-enable decision. D6 performs local immutable Git-object reads and
+in-process tests only: no credential load, provider/network/device access,
+send, `main` write, or production write.

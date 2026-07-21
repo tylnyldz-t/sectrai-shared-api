@@ -4,7 +4,12 @@ import { createHash } from 'node:crypto'
 import { posix as path } from 'node:path'
 import test from 'node:test'
 
-type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5'
+type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6'
+
+type PinnedClosureBlob = {
+  path: string
+  blob: string
+}
 
 type Snapshot = {
   batch: AuditBatch
@@ -16,6 +21,8 @@ type Snapshot = {
   registryBlob: string
   hardDeniesLiveOptIn: boolean
   quotaFailureAudited: boolean
+  /** A D6 closure module changed while its public connector remained stable. */
+  pinnedClosureBlobs?: readonly PinnedClosureBlob[]
 }
 
 const AUDIT_WORKTREE_ROOT = '/home/tayla/projects/_wt'
@@ -26,7 +33,7 @@ const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
 const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
 
 /*
- * These are immutable local Git snapshots from the D1 through D5 audit batches.
+ * These are immutable local Git snapshots from the D1 through D6 audit batches.
  * Every source read below is `git show <revision>:<path>`, never the mutable
  * worktree file. This fixture does not import target runtime code, load an
  * env file, open a socket, or make a network request. A missing worktree,
@@ -73,6 +80,14 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D5', name: 'Translation', revision: 'cc63f92', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4bf8b862b22ddb9e0aaeff25f62e3f00123a9345', registryBlob: 'f8ba8b74b1c8945d5ff26a32de776a25cd5221a3', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
   { batch: 'D5', name: 'Language education', revision: 'f1dff88', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '73ae75585a82ec7734c1d3da52bedd48d0a2ef4d', registryBlob: '1c57c070aa37148134e21310aa258857c5500687', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
   { batch: 'D5', name: 'Camera', revision: '9228cd5', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '864abf2b2902d3512d630473ee88c9d111f7391d', registryBlob: 'b8787e9af75503bb5b1f5b0c8269545846dfaa95', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D6', name: 'RA OCR', revision: '4b2f349', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: 'd455b2554791b220f03e2490949c48430a546229', registryBlob: '684026b637562c2b820bc7c4ae49d5a2b4bb4598', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D6', name: 'RA image', revision: '23de86d', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: '9c01996fd63c3d93f2b705c02a492a9395df119e', registryBlob: '76221dc13d588bd7a042735badf6bc825b573ca3', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D6', name: 'RA 3D/game', revision: 'ee6a69b', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: '6e12d3a0d04a72df47f92d248ad5277ca8c9c102', registryBlob: 'd39c1a771ccacb0a13b354626fc054bdeca113f2', hardDeniesLiveOptIn: false, quotaFailureAudited: false, pinnedClosureBlobs: [{ path: 'src/gcl/result-boundary.ts', blob: '85c33bd53000820ba7399457dd22af0b4d509c75' }] },
+  { batch: 'D6', name: 'RA market', revision: '619c34c', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: '2748df68731ca5b1df113f6e9b22cffad1e5cf09', registryBlob: '4df08cd04321797b8522029a4754926f4fa715df', hardDeniesLiveOptIn: true, quotaFailureAudited: false },
+  { batch: 'D6', name: 'RFID', revision: '9ea5603', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: '079aed352d860810b5667b0b037237eac511663c', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D6', name: 'Translation', revision: '00ab942', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '542a39d3ac9849469d5a39aca21dd60a58ec374a', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D6', name: 'Language education', revision: '4b6170b', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '64f7066c7d73d4eb1ca5fa956950be4f2be5f71a', registryBlob: '1c57c070aa37148134e21310aa258857c5500687', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D6', name: 'Camera', revision: '295dc3e', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: 'a71c91d36398d081b4d5b37cad17164db142e933', registryBlob: 'b8787e9af75503bb5b1f5b0c8269545846dfaa95', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
 ]
 
 function repositoryFor(snapshot: Snapshot): string {
@@ -137,9 +152,9 @@ function sourceCode(source: string): string {
 
 function assertNoRuntimeEscape(source: string, name: string): void {
   const code = sourceCode(source)
-  assert.doesNotMatch(code, /\b(?:import|require|createRequire|eval|Function)\s*(?:\?\.)?\s*\(|\bmodule\s*(?:\.|\?\.)\s*require\s*\(/, `${name} must not dynamically load or evaluate a runtime module`)
-  assert.doesNotMatch(code, /\b(?:globalThis|global|window)\b/, `${name} must not access a global runtime capability`)
-  assert.doesNotMatch(code, /\b(?:fetch|XMLHttpRequest|WebSocket|axios|undici|node-fetch)\b/, `${name} must not retain an egress capability by direct or aliased access`)
+  assert.doesNotMatch(code, /\b(?:require|createRequire|eval|Function)\b|\bimport\s*(?:\?\.)?\s*\(|\bmodule\s*(?:\.|\?\.)\s*(?:require|constructor\s*(?:\.|\?\.)\s*_load)\b|\bprocess\s*(?:\.|\?\.)\s*getBuiltinModule\b/, `${name} must not dynamically load or evaluate a runtime module`)
+  assert.doesNotMatch(code, /\b(?:globalThis|global|window)\b|\bself\s*(?:\?\.|\.)|\bself\s*\[/, `${name} must not access a global runtime capability`)
+  assert.doesNotMatch(code, /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|WebTransport|navigator|sendBeacon|axios|undici|node-fetch)\b/, `${name} must not retain an egress capability by direct or aliased access`)
   assert.doesNotMatch(code, /\bReflect\s*(?:\?\.)?\s*(?:\.\s*get|\[\s*['"`]get['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not reflectively obtain a runtime or environment capability`)
   assert.doesNotMatch(code, /\bObject\s*(?:\?\.)?\s*(?:\.\s*getOwnPropertyDescriptors?|\[\s*['"`]getOwnPropertyDescriptors?['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not obtain a runtime or environment capability by descriptor`)
   assert.doesNotMatch(code, /\b(?:process|environment)\s*(?:\?\.)?\s*\[/, `${name} must not use computed environment access`)
@@ -212,16 +227,20 @@ function ownerDenialPrecedesReservations(registry: string): boolean {
   return ownerGate >= 0 && ownerGate < preflight && preflight < requestedAudit && requestedAudit < quota
 }
 
-test('D1/D2/D3/D4/D5 source fixture pins every audited connector and its governance runner to local Git objects', () => {
+test('D1/D2/D3/D4/D5/D6 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
     assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
     assert.equal(gitBlobId(sourceAt(snapshot, snapshot.connectorPath)), snapshot.connectorBlob, `${snapshot.name} connector source changed from ${snapshot.revision}`)
     assert.equal(gitBlobId(sourceAt(snapshot, 'src/gcl/registry.ts')), snapshot.registryBlob, `${snapshot.name} runner source changed from ${snapshot.revision}`)
+    for (const closureBlob of snapshot.pinnedClosureBlobs ?? []) {
+      assert.equal(gitBlobId(sourceAt(snapshot, closureBlob.path)), closureBlob.blob, `${snapshot.name} closure source changed from ${snapshot.revision}`)
+      assert.equal(sourceClosure(snapshot).has(closureBlob.path), true, `${snapshot.name} pinned source is outside the audited local GCL closure`)
+    }
   }
 })
 
-test('D1/D2/D3/D4/D5 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
+test('D1/D2/D3/D4/D5/D6 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
     const closure = [...sourceClosure(snapshot).values()].join('\n')
@@ -240,7 +259,7 @@ test('D1/D2/D3/D4/D5 synthetic source closure has no egress, privileged configur
   }
 })
 
-test('D1/D2/D3/D4/D5 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
+test('D1/D2/D3/D4/D5/D6 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
@@ -283,4 +302,17 @@ test('D5 fail-closed safety checks reject optional reflective descriptors and co
   assert.throws(() => assertAllowedImports("import { PrismaClient } from '@prisma/client'", 'D5 negative probe'))
   assert.doesNotThrow(() => assertAllowedImports("import { type PrismaClient } from '@prisma/client'", 'D5 allowed erased type import'))
   assert.throws(() => localGclImportPaths('src/gcl/connector.ts', "import '../auth.js'"))
+})
+
+test('D6 fail-closed safety checks reject builtin module recovery and non-fetch browser egress capabilities', () => {
+  for (const source of [
+    "const transport = process.getBuiltinModule('node:https')",
+    "const transport = module.constructor._load('node:https')",
+    "const transport = require?.call(undefined, 'node:https')",
+    "const sent = navigator.sendBeacon('https://synthetic.invalid', 'fixture')",
+    "const stream = new EventSource('https://synthetic.invalid')",
+    "const stream = new WebTransport('https://synthetic.invalid')",
+    'const request = self.fetch',
+  ]) assert.throws(() => assertNoRuntimeEscape(source, `D6 negative probe: ${source}`))
+  assert.doesNotThrow(() => assertNoRuntimeEscape("const enabled = environment.GCL_TRANSLATION_SYNTHETIC_ENABLED === 'true'", 'D6 allowed synthetic configuration'))
 })
