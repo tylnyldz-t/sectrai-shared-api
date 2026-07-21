@@ -34,11 +34,25 @@ Each result also carries a deterministic
 `gcl.synthetic-review-receipt.v1`. The receipt binds the connector, exact
 product/workspace scope, and plan digest to four immutable negative controls:
 no transport, no process launcher, no artifact-file write, and no publication.
-`verifiesSyntheticPlanIntegrity` and `verifiesSyntheticReviewReceipt` can be
-used by a review consumer before displaying a snapshot; their asserting forms
-fail closed with `503 synthetic_review_integrity_invalid` when either value is
-malformed or altered. A receipt is still not a signature, a message to JNC, or
-an approval to execute anything.
+Every result additionally carries a recursively frozen `reviewSnapshot`:
+`{ payload, integrity, reviewReceipt }`. Review consumers must use
+`verifiesSyntheticReviewSnapshot` (or its asserting form) before displaying
+plan fields. It recomputes the digest from the exact plan payload and checks
+that its connector and product/workspace scope match the receipt, so a valid
+receipt cannot be grafted onto a different plan or workspace. The individual
+`verifiesSyntheticPlanIntegrity` and `verifiesSyntheticReviewReceipt` helpers
+remain useful component checks; only the snapshot verifier checks their full
+binding. Its asserting form fails closed with `503
+synthetic_review_integrity_invalid` when any value is malformed or altered.
+A receipt is still not a signature, a message to JNC, or an approval to execute
+anything.
+
+Plan hashing accepts only strict, data-only canonical JSON: finite primitive
+values, dense arrays, and plain enumerable data objects. Sparse arrays,
+accessors, symbols, non-enumerable fields, `Date`/class instances, cycles, and
+other JavaScript-only values are rejected rather than being silently collapsed
+to a potentially colliding digest. Verifier predicates return `false` for such
+data; asserting variants fail closed.
 
 GM5 synthetic artifact IDs and integrity hashes include the product and
 workspace scope. The same validated input therefore produces a stable proposal
@@ -115,3 +129,10 @@ GCL_GAME_ENGINE_LIVE_MODE="LIVE_DISABLED"
 Any later live executor, real GPU allocation, production import, or asset
 promotion is outside this scope and requires separate owner approval and a new
 design.
+
+## Synthetic verification
+
+Run `npm run test:synthetic` for the GM5/GM6 contract suite. It uses only
+in-memory audit and quota seams and must not receive a database URL, provider
+credential, engine path, or network target. The repository's separately scoped
+Neon integration test is not part of this connector verification.

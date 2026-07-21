@@ -4,10 +4,11 @@ import { hashAuditEvent, InMemoryHashChainAuditLog, verifiedAuditChainHead } fro
 import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError, SyntheticReviewIntegrityError } from '../src/gcl/errors.js'
 import { gameEngineConnectorFromEnvironment, SyntheticGameEngineConnector, type GameEngineBuildInput, type GameEngineBuildPlan } from '../src/gcl/game-engine.js'
 import { ownerGateError } from '../src/gcl/owner-gate.js'
-import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
+import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, isCanonicalJsonData, syntheticPlanSha256, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
 import { InMemoryDailyConnectorQuota } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner, type RunConnectorRequest } from '../src/gcl/registry.js'
 import { createSyntheticReviewReceipt, verifiesSyntheticReviewReceipt } from '../src/gcl/review-receipt.js'
+import { assertSyntheticReviewSnapshot, createSyntheticReviewSnapshot, verifiesSyntheticReviewSnapshot } from '../src/gcl/review-snapshot.js'
 import { LIVE_DISABLED } from '../src/gcl/safety.js'
 import { syntheticThreeDConnectorsFromEnvironment, SyntheticImageTextToThreeDConnector, SyntheticTextToThreeDConnector, type SyntheticThreeDConnectorConfig, type SyntheticThreeDResult } from '../src/gcl/three-d.js'
 import type { Connector, ConnectorResult } from '../src/gcl/types.js'
@@ -56,12 +57,16 @@ test('GM5 returns only a synthetic proposal, an unleased GPU contract card, and 
   assert.match(result.data.integrity.payloadSha256, /^[a-f0-9]{64}$/)
   assert.equal(result.data.integrity.mutation, 'DEEP_FROZEN')
   assert.equal(verifiesSyntheticReviewReceipt(result.data.reviewReceipt), true)
+  assert.equal(verifiesSyntheticReviewSnapshot(result.data.reviewSnapshot), true)
+  assert.equal(result.data.reviewSnapshot.integrity, result.data.integrity)
+  assert.equal(result.data.reviewSnapshot.reviewReceipt, result.data.reviewReceipt)
   assert.equal(result.data.reviewReceipt.scope.workspaceId, 'gm-workspace')
   assert.equal(result.data.reviewReceipt.execution, 'NOT_EXECUTED')
   assert.equal(result.data.reviewReceipt.externalEffects.network, 'DISABLED_NO_TRANSPORT')
   assert.equal(Object.isFrozen(result.data), true)
   assert.equal(Object.isFrozen(result.data.artifact), true)
   assert.equal(Object.isFrozen(result.data.reviewReceipt.externalEffects), true)
+  assert.equal(Object.isFrozen(result.data.reviewSnapshot), true)
   assert.match(result.data.artifact.syntheticUri, /^synthetic:\/\/gcl-3d\/text-to-3d\//)
   assert.equal(result.data.gpuResourceCard.mode, 'CONTRACT_ONLY')
   assert.equal(result.data.gpuResourceCard.transport, 'NONE')
@@ -120,6 +125,50 @@ test('synthetic review receipts are scope-bound, verify their plan digest, and f
   assert.equal(verifiesSyntheticReviewReceipt({ ...receipt, extra: 'not-allowed' }), false)
 })
 
+test('review snapshots bind the exact canonical plan payload to its receipt and fail closed when grafted or altered', () => {
+  const payload = {
+    connectorId: 'text-to-3d',
+    scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' },
+    artifact: { id: 'synthetic-only', state: 'NOT_PUBLISHED' },
+  }
+  const snapshot = createSyntheticReviewSnapshot({
+    connectorId: 'text-to-3d',
+    scope: payload.scope,
+    payload,
+  })
+  assert.equal(verifiesSyntheticReviewSnapshot(snapshot), true)
+  assert.equal(Object.isFrozen(snapshot.payload), true)
+  assert.equal(verifiesSyntheticReviewSnapshot({
+    ...snapshot,
+    payload: { ...snapshot.payload, artifact: { id: 'synthetic-only', state: 'PUBLISHED' } },
+  }), false)
+  const otherScopeReceipt = createSyntheticReviewReceipt({
+    connectorId: 'text-to-3d',
+    scope: { product: 'sectrai-gm-contract-test', workspaceId: 'other-workspace' },
+    planIntegrity: snapshot.integrity,
+  })
+  assert.equal(verifiesSyntheticReviewSnapshot({ ...snapshot, reviewReceipt: otherScopeReceipt }), false)
+  assert.throws(() => assertSyntheticReviewSnapshot({ ...snapshot, reviewReceipt: otherScopeReceipt }), SyntheticReviewIntegrityError)
+})
+
+test('plan digests reject JavaScript-only values and verifier predicates do not throw on malformed review data', () => {
+  const sparse = ['safe'] as string[]
+  sparse.length = 2
+  const accessorPayload: Record<string, unknown> = { connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' } }
+  Object.defineProperty(accessorPayload, 'artifact', { enumerable: true, get() { return 'synthetic-only' } })
+  const nonPlainPayload = { connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, generatedAt: new Date() }
+  const sparsePayload = { connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, items: sparse }
+
+  assert.equal(isCanonicalJsonData(nonPlainPayload), false)
+  assert.equal(isCanonicalJsonData(accessorPayload), false)
+  assert.equal(isCanonicalJsonData(sparsePayload), false)
+  assert.throws(() => syntheticPlanSha256(sparsePayload), /SYNTHETIC_PLAN_SPARSE_ARRAY/)
+  assert.throws(() => createSyntheticReviewSnapshot({ connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, payload: nonPlainPayload }), /SYNTHETIC_PLAN_NON_PLAIN_OBJECT/)
+  const integrity = createSyntheticPlanIntegrity({ connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' } })
+  assert.equal(verifiesSyntheticPlanIntegrity(integrity, accessorPayload), false)
+  assert.equal(verifiesSyntheticReviewSnapshot({ payload: sparsePayload, integrity, reviewReceipt: {} }), false)
+})
+
 test('GM5 image-plus-text accepts only an immutable local reference and closes before audit for a URL', async () => {
   const invalid = runner(new SyntheticImageTextToThreeDConnector(threeDConfig()))
   await assert.rejects(invalid.run.run(request({
@@ -159,6 +208,7 @@ test('GM6 maps premium Unreal and Blender plans to JNC pilot contracts without s
   assert.equal(unreal.data.execution, 'SYNTHETIC_PLAN_ONLY_NOT_EXECUTED')
   assert.equal(unreal.data.integrity.mutation, 'DEEP_FROZEN')
   assert.equal(verifiesSyntheticReviewReceipt(unreal.data.reviewReceipt), true)
+  assert.equal(verifiesSyntheticReviewSnapshot(unreal.data.reviewSnapshot), true)
   assert.equal(unreal.data.reviewReceipt.execution, 'NOT_EXECUTED')
   assert.equal(unreal.data.reviewReceipt.externalEffects.publication, 'DISABLED_NOT_PUBLISHED')
   assert.equal(Object.isFrozen(unreal.data.pipeline), true)

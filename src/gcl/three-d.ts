@@ -1,7 +1,8 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, type GpuResourceRequest, type JncBlenderPilotHandoff, type JncGpuResourceCard } from './jnc-pilot.js'
-import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
-import { assertSyntheticReviewReceipt, createSyntheticReviewReceipt, type SyntheticReviewReceipt } from './review-receipt.js'
+import { deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
+import type { SyntheticReviewReceipt } from './review-receipt.js'
 import { LIVE_DISABLED, type LiveDisabled } from './safety.js'
 import type { Connector, ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
 
@@ -37,6 +38,7 @@ export type SyntheticThreeDResult = {
   liveMode: LiveDisabled
   integrity: SyntheticPlanIntegrity
   reviewReceipt: SyntheticReviewReceipt
+  reviewSnapshot: SyntheticReviewSnapshot
   artifact: SyntheticThreeDArtifact
   gpuResourceCard: JncGpuResourceCard
   blenderPilotHandoff: JncBlenderPilotHandoff
@@ -185,19 +187,17 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
       gpuResourceCard,
       blenderPilotHandoff,
     }
-    const integrity = createSyntheticPlanIntegrity(planPayload)
-    assertSyntheticPlanIntegrity(integrity, planPayload)
-    const reviewReceipt = createSyntheticReviewReceipt({
+    const reviewSnapshot = createSyntheticReviewSnapshot({
       connectorId: this.id,
       scope: { product: context.product, workspaceId: context.workspaceId },
-      planIntegrity: integrity,
+      payload: planPayload,
     })
-    assertSyntheticReviewReceipt(reviewReceipt)
     const data = deepFreeze<SyntheticThreeDResult>({
       connectorKind: this.connectorKind,
       liveMode: LIVE_DISABLED,
-      integrity,
-      reviewReceipt,
+      integrity: reviewSnapshot.integrity,
+      reviewReceipt: reviewSnapshot.reviewReceipt,
+      reviewSnapshot,
       artifact,
       gpuResourceCard,
       blenderPilotHandoff,
