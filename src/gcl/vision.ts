@@ -15,7 +15,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v9' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v10' as const
 const SYNTHETIC_DOCUMENT_DATA_BOUNDARY = {
   evidenceSource: 'synthetic-fixture',
   inputShape: 'plain-own-data-only',
@@ -29,6 +29,11 @@ const SYNTHETIC_DOCUMENT_COLLECTION_BOUNDARY = {
   collectionShape: 'array-prototype-dense-own-data-only',
   sparseOrInheritedElementsAccepted: false,
   accessorElementsAccepted: false,
+} as const
+const SYNTHETIC_DOCUMENT_STRING_BOUNDARY = {
+  valueEncoding: 'well-formed-unicode-utf8',
+  controlCharactersAccepted: false,
+  unpairedSurrogateCodeUnitsAccepted: false,
 } as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
@@ -123,6 +128,12 @@ export type SyntheticDocumentReviewPacket = {
     sparseOrInheritedElementsAccepted: typeof SYNTHETIC_DOCUMENT_COLLECTION_BOUNDARY.sparseOrInheritedElementsAccepted
     accessorElementsAccepted: typeof SYNTHETIC_DOCUMENT_COLLECTION_BOUNDARY.accessorElementsAccepted
   }
+  /** Text must have one unambiguous UTF-8 representation before it is hashed. */
+  stringBoundaryBinding: {
+    valueEncoding: typeof SYNTHETIC_DOCUMENT_STRING_BOUNDARY.valueEncoding
+    controlCharactersAccepted: typeof SYNTHETIC_DOCUMENT_STRING_BOUNDARY.controlCharactersAccepted
+    unpairedSurrogateCodeUnitsAccepted: typeof SYNTHETIC_DOCUMENT_STRING_BOUNDARY.unpairedSurrogateCodeUnitsAccepted
+  }
   /** Metadata-only freshness limit for the synthetic evidence reference. */
   evidenceBinding: {
     capturedAt: string
@@ -203,6 +214,19 @@ function environmentPositiveInteger(value: string | undefined): number | undefin
   return Number.isSafeInteger(parsed) ? parsed : undefined
 }
 function hasControlCharacter(value: string): boolean { return Array.from(value).some((character) => (character.codePointAt(0) ?? 0) < 32 || character === '\u007f') }
+function hasUnpairedSurrogate(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = value.charCodeAt(index)
+    if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
+      const next = value.charCodeAt(index + 1)
+      if (next < 0xdc00 || next > 0xdfff) return true
+      index += 1
+    } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
+      return true
+    }
+  }
+  return false
+}
 function exactKeys(value: Record<string, unknown>, allowed: readonly string[], error: string): void {
   const ownKeys = Reflect.ownKeys(value)
   if (ownKeys.some((key) => typeof key !== 'string' || !allowed.includes(key))) throw new ConnectorInputError(error)
@@ -235,7 +259,7 @@ function denseOwnDataArray(value: unknown, error: string, maximumLength: number)
   }
 }
 function requiredString(value: unknown, error: string, maxLength: number): string {
-  if (typeof value !== 'string' || !value.trim() || value.length > maxLength || hasControlCharacter(value)) throw new ConnectorInputError(error)
+  if (typeof value !== 'string' || !value.trim() || value.length > maxLength || hasControlCharacter(value) || hasUnpairedSurrogate(value)) throw new ConnectorInputError(error)
   return value.trim()
 }
 function parsedDate(value: unknown, error: string): Date {
@@ -262,6 +286,7 @@ function reviewPacketIntegrityMaterial(
   dataBoundaryBinding: SyntheticDocumentReviewPacket['dataBoundaryBinding'],
   makerCheckerBinding: SyntheticDocumentReviewPacket['makerCheckerBinding'],
   collectionBoundaryBinding: SyntheticDocumentReviewPacket['collectionBoundaryBinding'],
+  stringBoundaryBinding: SyntheticDocumentReviewPacket['stringBoundaryBinding'],
   evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
   reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): Record<string, unknown> {
@@ -282,6 +307,7 @@ function reviewPacketIntegrityMaterial(
     dataBoundaryBinding,
     makerCheckerBinding,
     collectionBoundaryBinding,
+    stringBoundaryBinding,
     evidenceBinding,
     reviewWindow,
   }
@@ -326,17 +352,19 @@ function reviewPacketFor(
   const dataBoundaryBinding = { ...SYNTHETIC_DOCUMENT_DATA_BOUNDARY }
   const makerCheckerBinding = { ...SYNTHETIC_DOCUMENT_MAKER_CHECKER_BOUNDARY }
   const collectionBoundaryBinding = { ...SYNTHETIC_DOCUMENT_COLLECTION_BOUNDARY }
+  const stringBoundaryBinding = { ...SYNTHETIC_DOCUMENT_STRING_BOUNDARY }
   const evidenceBinding = evidenceBindingFor(proposal.evidence, issuedAt, maxEvidenceAgeSeconds)
   const reviewWindow = { issuedAt: issuedAt.toISOString(), reviewBy: reviewByFor(issuedAt, consent.expiresAt, evidenceBinding.expiresAt, maxReviewAgeSeconds).toISOString() }
   return {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
-    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, evidenceBinding, reviewWindow))),
+    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, evidenceBinding, reviewWindow))),
     scopeBinding,
     consentBinding,
     governanceBinding,
     dataBoundaryBinding,
     makerCheckerBinding,
     collectionBoundaryBinding,
+    stringBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
