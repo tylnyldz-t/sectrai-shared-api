@@ -110,6 +110,20 @@ the connector adapter is not run and no quota reservation is made. Once a
 quota reservation exists, it remains accounted for even when a later plan
 construction fails; this intentionally prevents retry-based quota bypass.
 
+The GM5 and GM6 adapters repeat that boundary check when their public `run`
+or `preflight` method is called directly. They accept only an exact, own-data
+context (no inherited fields, accessors, symbols, sparse scopes, duplicate
+scopes, or non-`true` approval), copy it into a frozen value, and fail closed
+before a plan is returned. This is deliberately redundant with the runner:
+the runner protects audit/quota persistence, while the adapter prevents a
+synthetic plan from becoming available through an internal bypass.
+
+Adapter configuration likewise accepts only the documented mode and governance
+limit fields. A custom JNC mapper, transport, endpoint, executable, or other
+unknown configuration field is rejected at construction. The adapters always
+instantiate the local contract-only mapper; ADOS rule 10 remains a
+responsibility boundary, not a runtime import or a pluggable execution seam.
+
 Premium GM6 reserves GPU-minute units: `requestedItems` must exactly equal
 `input.gpuMinutes`. GM5 reserves exactly one proposal item. Both outputs mark
 untrusted input as `UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`.

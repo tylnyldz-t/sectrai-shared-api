@@ -11,7 +11,7 @@ import { createSyntheticReviewReceipt, verifiesSyntheticReviewReceipt } from '..
 import { assertSyntheticReviewSnapshot, createSyntheticReviewSnapshot, verifiesSyntheticReviewSnapshot } from '../src/gcl/review-snapshot.js'
 import { LIVE_DISABLED } from '../src/gcl/safety.js'
 import { syntheticThreeDConnectorsFromEnvironment, SyntheticImageTextToThreeDConnector, SyntheticTextToThreeDConnector, type SyntheticThreeDConnectorConfig, type SyntheticThreeDResult } from '../src/gcl/three-d.js'
-import type { Connector, ConnectorResult } from '../src/gcl/types.js'
+import type { Connector, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
 
 const fixedNow = () => new Date('2026-07-22T10:00:00.000Z')
 
@@ -32,6 +32,13 @@ function request(overrides: Partial<RunConnectorRequest> = {}): RunConnectorRequ
 
 function threeDConfig(overrides: Partial<SyntheticThreeDConnectorConfig> = {}): SyntheticThreeDConnectorConfig {
   return { liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxItems: 1, ...overrides }
+}
+
+function directContext(overrides: Partial<ConnectorRunContext> = {}): ConnectorRunContext {
+  return {
+    product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace', actor: 'synthetic-owner', ownerApproved: true,
+    scopes: ['3d:generate'], costCapCents: 50, requestedItems: 1, now: fixedNow, ...overrides,
+  }
 }
 
 function runner(connector: Connector, quota = new InMemoryDailyConnectorQuota({ dailyRuns: 6, dailyItems: 60 })) {
@@ -243,10 +250,49 @@ test('missing LIVE_DISABLED, owner approval, cost mismatches, and publication in
   assert.equal(game.audit.entries.length, 0)
   assert.equal(game.quota.reservations.length, 0)
 
-  const directContext = { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace', actor: 'synthetic-owner', ownerApproved: true, scopes: ['game:project:build'], costCapCents: 100, requestedItems: 12, now: fixedNow }
+  const directGameContext = directContext({ scopes: ['game:project:build'], costCapCents: 100, requestedItems: 12 })
   await assert.rejects(
-    new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 30 }).run({ ...premiumUnreal, publish: true } as unknown as GameEngineBuildInput, directContext),
+    new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 30 }).run({ ...premiumUnreal, publish: true } as unknown as GameEngineBuildInput, directGameContext),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'GAME_ENGINE_INVALID_INPUT',
+  )
+})
+
+test('direct adapter calls revalidate own governance data and reject mapper injection', async () => {
+  const threeD = new SyntheticTextToThreeDConnector(threeDConfig())
+  const input = { prompt: 'A local synthetic 3D proposal' }
+  await assert.rejects(threeD.run(input, directContext({ ownerApproved: false })), OwnerGateError)
+  await assert.rejects(threeD.run(input, directContext({ scopes: ['game:project:build'] })), ScopeError)
+  const sparseScopes = ['3d:generate'] as string[]
+  sparseScopes.length = 2
+  await assert.rejects(threeD.run(input, directContext({ scopes: sparseScopes })), ScopeError)
+
+  const accessorContext = directContext()
+  let accessorReads = 0
+  Object.defineProperty(accessorContext, 'product', {
+    enumerable: true,
+    get() { accessorReads += 1; return 'sectrai-gm-contract-test' },
+  })
+  await assert.rejects(threeD.run(input, accessorContext), (error: unknown) => error instanceof ConnectorInputError && error.message === 'CONNECTOR_INVALID_CONTEXT')
+  assert.equal(accessorReads, 0)
+
+  const inheritedContext = Object.create(directContext()) as ConnectorRunContext
+  await assert.rejects(threeD.run(input, inheritedContext), (error: unknown) => error instanceof ConnectorInputError && error.message === 'CONNECTOR_INVALID_CONTEXT')
+
+  const game = new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 30 })
+  await assert.rejects(game.run(premiumUnreal, directContext({ ownerApproved: false, scopes: ['game:project:build'], costCapCents: 100, requestedItems: 12 })), OwnerGateError)
+
+  const fakeMapper = {
+    createGpuResourceCard() { throw new Error('CUSTOM_MAPPER_MUST_NEVER_RUN') },
+    createBlenderHandoff() { throw new Error('CUSTOM_MAPPER_MUST_NEVER_RUN') },
+    createUnrealHandoff() { throw new Error('CUSTOM_MAPPER_MUST_NEVER_RUN') },
+  }
+  assert.throws(
+    () => new SyntheticTextToThreeDConnector({ ...threeDConfig(), jncPilotMapper: fakeMapper } as unknown as SyntheticThreeDConnectorConfig),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'THREED_INVALID_SYNTHETIC_CONFIG',
+  )
+  assert.throws(
+    () => new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 30, jncPilotMapper: fakeMapper } as unknown as import('../src/gcl/game-engine.js').GameEngineConnectorConfig),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GAME_ENGINE_INVALID_SYNTHETIC_CONFIG',
   )
 })
 

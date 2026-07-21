@@ -3,6 +3,7 @@ import { ContractOnlyJncPilotMapper, type JncBlenderPilotHandoff, type JncGpuRes
 import { deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
 import type { SyntheticReviewReceipt } from './review-receipt.js'
+import { validatedConnectorRunContext } from './run-context.js'
 import { LIVE_DISABLED, type LiveDisabled } from './safety.js'
 import type { Connector, ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
 
@@ -47,10 +48,33 @@ export type GameEngineConnectorConfig = {
   liveMode?: LiveDisabled
   maxCostCapCents?: number
   maxGpuMinutes?: number
-  jncPilotMapper?: ContractOnlyJncPilotMapper
 }
 
 function positiveInteger(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 }
+
+/** Accept configuration data only; a mapper or transport cannot be injected. */
+function connectorConfig(value: GameEngineConnectorConfig): GameEngineConnectorConfig {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+      throw new ConnectorUnavailableError('GAME_ENGINE_INVALID_SYNTHETIC_CONFIG')
+    }
+    const names = Object.getOwnPropertyNames(value)
+    const allowed = ['liveMode', 'maxCostCapCents', 'maxGpuMinutes']
+    if (names.some((name) => !allowed.includes(name))) throw new ConnectorUnavailableError('GAME_ENGINE_INVALID_SYNTHETIC_CONFIG')
+    const output: GameEngineConnectorConfig = {}
+    for (const name of names) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, name)
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) throw new ConnectorUnavailableError('GAME_ENGINE_INVALID_SYNTHETIC_CONFIG')
+      if (name === 'liveMode' && descriptor.value === LIVE_DISABLED) output.liveMode = LIVE_DISABLED
+      if (name === 'maxCostCapCents' && typeof descriptor.value === 'number') output.maxCostCapCents = descriptor.value
+      if (name === 'maxGpuMinutes' && typeof descriptor.value === 'number') output.maxGpuMinutes = descriptor.value
+    }
+    return Object.freeze(output)
+  } catch (error) {
+    if (error instanceof ConnectorUnavailableError) throw error
+    throw new ConnectorUnavailableError('GAME_ENGINE_INVALID_SYNTHETIC_CONFIG')
+  }
+}
 
 function inputFrom(value: unknown): GameEngineBuildInput {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError('GAME_ENGINE_INVALID_INPUT')
@@ -107,8 +131,11 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
   readonly scopes = ['game:project:build'] as const
   private readonly jncPilotMapper: ContractOnlyJncPilotMapper
 
-  constructor(private readonly config: GameEngineConnectorConfig = {}) {
-    this.jncPilotMapper = config.jncPilotMapper ?? new ContractOnlyJncPilotMapper()
+  private readonly config: GameEngineConnectorConfig
+
+  constructor(config: GameEngineConnectorConfig = {}) {
+    this.config = connectorConfig(config)
+    this.jncPilotMapper = new ContractOnlyJncPilotMapper()
   }
 
   private configured(context: ConnectorRunContext, input: GameEngineBuildInput): void {
@@ -123,13 +150,15 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
   }
 
   preflight(value: GameEngineBuildInput, context: ConnectorRunContext): void {
-    this.configured(context, inputFrom(value))
+    const validatedContext = validatedConnectorRunContext(context, this.scopes)
+    this.configured(validatedContext, inputFrom(value))
   }
 
   async run(value: GameEngineBuildInput, context: ConnectorRunContext): Promise<ConnectorResult<GameEngineBuildPlan>> {
+    const validatedContext = validatedConnectorRunContext(context, this.scopes)
     const input = inputFrom(value)
-    this.configured(context, input)
-    const id = buildId(input, context)
+    this.configured(validatedContext, input)
+    const id = buildId(input, validatedContext)
     const premiumPlan = input.tier === 'premium'
     const gpuResourceCard = premiumPlan ? this.jncPilotMapper.createGpuResourceCard({
       computeTier: 'premium', estimatedVramMiB: 'UNKNOWN', maximumRuntimeSeconds: input.gpuMinutes as number * 60,
@@ -145,7 +174,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
     const publication = { automatic: false as const, state: 'DISABLED_NOT_IMPLEMENTED' as const }
     const planPayload = {
       connectorId: this.id,
-      scope: { product: context.product, workspaceId: context.workspaceId },
+      scope: { product: validatedContext.product, workspaceId: validatedContext.workspaceId },
       input,
       buildId: id,
       pipeline: planPipeline,
@@ -156,7 +185,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
     }
     const reviewSnapshot = createSyntheticReviewSnapshot({
       connectorId: this.id,
-      scope: { product: context.product, workspaceId: context.workspaceId },
+      scope: { product: validatedContext.product, workspaceId: validatedContext.workspaceId },
       payload: planPayload,
     })
     const data = deepFreeze<GameEngineBuildPlan>({
@@ -178,7 +207,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
     })
     return {
       data,
-      provenance: { connectorId: this.id, source: 'synthetic-game-engine-plan', retrievedAt: context.now().toISOString(), runId: id, untrustedContent: isolatedContent(input) },
+      provenance: { connectorId: this.id, source: 'synthetic-game-engine-plan', retrievedAt: validatedContext.now().toISOString(), runId: id, untrustedContent: isolatedContent(input) },
       confidence: 0,
     }
   }

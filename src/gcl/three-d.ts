@@ -3,6 +3,7 @@ import { ContractOnlyJncPilotMapper, type GpuResourceRequest, type JncBlenderPil
 import { deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
 import type { SyntheticReviewReceipt } from './review-receipt.js'
+import { validatedConnectorRunContext } from './run-context.js'
 import { LIVE_DISABLED, type LiveDisabled } from './safety.js'
 import type { Connector, ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
 
@@ -48,7 +49,6 @@ export type SyntheticThreeDConnectorConfig = {
   liveMode?: LiveDisabled
   maxCostCapCents?: number
   maxItems?: number
-  jncPilotMapper?: ContractOnlyJncPilotMapper
 }
 
 type ValidatedTextInput = {
@@ -59,6 +59,30 @@ type ValidatedTextInput = {
 }
 
 function positiveInteger(value: unknown): number | null { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null }
+
+/** Accept configuration data only; a mapper or transport cannot be injected. */
+function connectorConfig(value: SyntheticThreeDConnectorConfig): SyntheticThreeDConnectorConfig {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+      throw new ConnectorUnavailableError('THREED_INVALID_SYNTHETIC_CONFIG')
+    }
+    const names = Object.getOwnPropertyNames(value)
+    const allowed = ['liveMode', 'maxCostCapCents', 'maxItems']
+    if (names.some((name) => !allowed.includes(name))) throw new ConnectorUnavailableError('THREED_INVALID_SYNTHETIC_CONFIG')
+    const output: SyntheticThreeDConnectorConfig = {}
+    for (const name of names) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, name)
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) throw new ConnectorUnavailableError('THREED_INVALID_SYNTHETIC_CONFIG')
+      if (name === 'liveMode' && descriptor.value === LIVE_DISABLED) output.liveMode = LIVE_DISABLED
+      if (name === 'maxCostCapCents' && typeof descriptor.value === 'number') output.maxCostCapCents = descriptor.value
+      if (name === 'maxItems' && typeof descriptor.value === 'number') output.maxItems = descriptor.value
+    }
+    return Object.freeze(output)
+  } catch (error) {
+    if (error instanceof ConnectorUnavailableError) throw error
+    throw new ConnectorUnavailableError('THREED_INVALID_SYNTHETIC_CONFIG')
+  }
+}
 
 function inputRecord(value: unknown, permittedKeys: readonly string[]): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError()
@@ -144,8 +168,11 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
   readonly scopes = ['3d:generate'] as const
   private readonly jncPilotMapper: ContractOnlyJncPilotMapper
 
-  constructor(private readonly config: SyntheticThreeDConnectorConfig = {}) {
-    this.jncPilotMapper = config.jncPilotMapper ?? new ContractOnlyJncPilotMapper()
+  private readonly config: SyntheticThreeDConnectorConfig
+
+  constructor(config: SyntheticThreeDConnectorConfig = {}) {
+    this.config = connectorConfig(config)
+    this.jncPilotMapper = new ContractOnlyJncPilotMapper()
   }
 
   protected abstract validate(input: TInput): ValidatedTextInput
@@ -161,14 +188,16 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
   }
 
   preflight(input: TInput, context: ConnectorRunContext): void {
+    const validatedContext = validatedConnectorRunContext(context, this.scopes)
     this.validate(input)
-    this.configured(context)
+    this.configured(validatedContext)
   }
 
   async run(input: TInput, context: ConnectorRunContext): Promise<ConnectorResult<SyntheticThreeDResult>> {
+    const validatedContext = validatedConnectorRunContext(context, this.scopes)
     const validated = this.validate(input)
-    this.configured(context)
-    const id = artifactId(this.connectorKind, validated, context)
+    this.configured(validatedContext)
+    const id = artifactId(this.connectorKind, validated, validatedContext)
     const source = `synthetic-3d:${this.connectorKind}`
     const artifact: SyntheticThreeDArtifact = {
       artifactId: id,
@@ -183,7 +212,7 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
     const blenderPilotHandoff = this.jncPilotMapper.createBlenderHandoff()
     const planPayload = {
       connectorId: this.id,
-      scope: { product: context.product, workspaceId: context.workspaceId },
+      scope: { product: validatedContext.product, workspaceId: validatedContext.workspaceId },
       input: validated,
       artifact,
       gpuResourceCard,
@@ -191,7 +220,7 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
     }
     const reviewSnapshot = createSyntheticReviewSnapshot({
       connectorId: this.id,
-      scope: { product: context.product, workspaceId: context.workspaceId },
+      scope: { product: validatedContext.product, workspaceId: validatedContext.workspaceId },
       payload: planPayload,
     })
     const data = deepFreeze<SyntheticThreeDResult>({
@@ -206,7 +235,7 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
     })
     return {
       data,
-      provenance: { connectorId: this.id, source, retrievedAt: context.now().toISOString(), untrustedContent: isolatedContent(source, validated) },
+      provenance: { connectorId: this.id, source, retrievedAt: validatedContext.now().toISOString(), untrustedContent: isolatedContent(source, validated) },
       confidence: 0,
     }
   }
