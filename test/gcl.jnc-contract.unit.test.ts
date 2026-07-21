@@ -261,6 +261,20 @@ test('direct runner calls reject malformed governance context before audit or qu
   assert.equal(governed.quota.reservations.length, 0)
 })
 
+test('failed adapter messages are never copied into the durable audit chain', async () => {
+  const untrustedMessage = `untrusted-adapter-message-${'x'.repeat(600)}`
+  const connector: Connector = {
+    id: 'failure-redaction-proposal', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { throw new Error(untrustedMessage) },
+  }
+  const { audit, run } = runner(connector)
+  await assert.rejects(run.run(request({ connectorId: connector.id })), (error: unknown) => error instanceof Error && error.message === untrustedMessage)
+  assert.equal(audit.entries.length, 2)
+  assert.equal(audit.entries[1]?.event.detail.error, 'connector_run_failed')
+  assert.equal(JSON.stringify(audit.entries).includes(untrustedMessage), false)
+  assert.equal(verifiedAuditChainHead(audit.entries), audit.entries[1]?.hash)
+})
+
 test('audit persistence unavailability prevents adapter execution and quota reservation', async () => {
   let adapterRuns = 0
   const connector: Connector = {

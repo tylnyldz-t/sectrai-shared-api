@@ -59,7 +59,9 @@ Audit verification also accepts only the exact stored record and event fields.
 Every `succeeded` or `failed` event must link once to a preceding compatible
 `requested` event in the same chain; dangling, cross-context, duplicate, or
 extra-field terminal events are corrupt. An interrupted request may remain
-unresolved, but it cannot be replaced with a new root.
+unresolved, but it cannot be replaced with a new root. Failure events record a
+stable GCL error code (or `connector_run_failed`), never an arbitrary adapter
+error message or untrusted input.
 
 ## Connector mapping
 
