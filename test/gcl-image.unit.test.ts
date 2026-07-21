@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, FamilySafetyError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
-import { LIVE_DISABLED, SyntheticImageTtiConnector, ownerLikeSyntheticImage, syntheticImageTtiConnectorFromEnvironment } from '../src/gcl/image.js'
+import { LIVE_DISABLED, SyntheticImageTtiConnector, ownerLikeSyntheticImage, ownerRejectSyntheticImage, syntheticImageTtiConnectorFromEnvironment } from '../src/gcl/image.js'
 import { imageDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import type { TextToImageData } from '../src/gcl/image.js'
@@ -43,6 +43,18 @@ test('family-unsafe image requests are rejected in preflight without audit or qu
   assert.equal(quota.requests.length, 0)
 })
 
+test('family-safety tokenization catches Turkish terms, avoids substring false positives, and rejects invisible controls', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, quota, now)
+  await assert.rejects(() => runner.run({ connectorId: 'image-tti', input: { prompt: 'Çocuklara yönelik şiddet sahnesi' }, ...context }), FamilySafetyError)
+  await assert.rejects(() => configuredConnector().run({ prompt: 'A friendly robot\u200B reading a book' }, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_TTI_PROMPT')
+  const safe = await configuredConnector().run({ prompt: 'A child-friendly gunmetal blue robot poster' }, context)
+  assert.equal(safe.data.candidates.length, 2)
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+})
+
 test('an injected family-safety hook is mandatory before audit or quota reservation', async () => {
   let policyCalls = 0
   const connector = new SyntheticImageTtiConnector({
@@ -60,6 +72,30 @@ test('an injected family-safety hook is mandatory before audit or quota reservat
   await assert.rejects(() => runner.run({ connectorId: 'image-tti', input: { prompt: 'A friendly blue robot reading a book' }, ...context }), (error: unknown) => error instanceof FamilySafetyError && error.message === 'OWNER_POLICY_DENIED')
   assert.equal(policyCalls, 1)
   assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+})
+
+test('malformed safety hooks and free-form policy reasons fail closed without leaking text into audit', async () => {
+  const privateText = 'PRIVATE-OWNER-PROMPT-ONLY'
+  const invalidFilter = new SyntheticImageTtiConnector({
+    liveMode: LIVE_DISABLED,
+    maxCostCapCents: 20,
+    maxItems: 2,
+    familySafetyFilter: { id: privateText, assess: () => ({ allowed: true }) },
+  })
+  await assert.rejects(() => invalidFilter.run({ prompt: 'A friendly blue robot reading a book' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_FAMILY_SAFETY_FILTER_INVALID')
+
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const unsafeReason = new SyntheticImageTtiConnector({
+    liveMode: LIVE_DISABLED,
+    maxCostCapCents: 20,
+    maxItems: 2,
+    familySafetyFilter: { id: 'test-policy', assess: () => ({ allowed: false, reason: `DENIED:${privateText}` }) },
+  })
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([unsafeReason]), audit, quota, now)
+  await assert.rejects(() => runner.run({ connectorId: 'image-tti', input: { prompt: privateText }, ...context }), (error: unknown) => error instanceof FamilySafetyError && error.message === 'FAMILY_SAFETY_FILTER_REJECTED')
+  assert.equal(JSON.stringify(audit.entries).includes(privateText), false)
   assert.equal(quota.requests.length, 0)
 })
 
@@ -81,6 +117,7 @@ test('GM3 run requires owner gate, cost cap, scope, safe identity, quota, audit 
   assert.equal(result.data.mode, LIVE_DISABLED)
   assert.equal(result.data.candidates.length, 2)
   assert.equal(result.data.candidates[0]?.ownerReview.status, 'pending')
+  assert.deepEqual(result.data.candidates[0]?.scope, { product: context.product, workspaceId: context.workspaceId, correlationId: context.correlationId })
   assert.equal(result.data.candidates[0]?.ownerReview.visibility, 'owner-only')
   assert.equal(result.data.candidates[0]?.ownerReview.publication, 'blocked')
   assert.equal(result.data.candidates[0]?.previewDataUri.startsWith('data:image/svg+xml;base64,'), true)
@@ -110,6 +147,45 @@ test('GM3 run requires owner gate, cost cap, scope, safe identity, quota, audit 
   assert.equal(audit.entries[2]?.event.correlationId, context.correlationId)
 })
 
+test('owner rejection is terminal, scope-bound, auditable, and never returns a media artifact', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const result = await configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, context)
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, context.actor, 'NOT_SUITABLE', audit, context), (error: unknown) => error instanceof OwnerGateError && error.message === 'MAKER_CHECKER_SEPARATION_REQUIRED')
+  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'FREE_TEXT' as never, audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REJECTION_REASON')
+  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'SAFETY_CONCERN', audit, { ...context, workspaceId: 'other-workspace' }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_REVIEW_SCOPE_MISMATCH')
+  assert.equal(audit.entries.length, 0)
+
+  const rejected = await ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'NEEDS_REVISION', audit, context)
+  assert.equal(rejected.reviewId, `owner-rejected-${candidate.candidateId}`)
+  assert.equal(rejected.ownerReview.status, 'rejected')
+  assert.equal(rejected.ownerReview.reason, 'NEEDS_REVISION')
+  assert.equal(rejected.publication, 'blocked')
+  assert.equal('previewDataUri' in rejected, false)
+  assert.equal('syntheticUri' in rejected, false)
+  assert.equal(audit.entries.length, 1)
+  assert.equal(audit.entries[0]?.event.type, 'connector.artifact.owner_rejected')
+  assert.equal(JSON.stringify(audit.entries).includes('child-friendly solar system poster'), false)
+})
+
+test('owner review rejects malformed, cross-scope, or already-decided candidates before audit append', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const result = await configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, context)
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  const malformedUri = structuredClone(candidate)
+  malformedUri.syntheticUri = 'https://provider.example/image.png'
+  await assert.rejects(() => ownerLikeSyntheticImage(malformedUri, true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
+  const decided = structuredClone(candidate)
+  decided.ownerReview.status = 'liked'
+  await assert.rejects(() => ownerLikeSyntheticImage(decided, true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_NOT_PENDING_OWNER_REVIEW')
+  const extraData = structuredClone(candidate) as Record<string, unknown>
+  extraData.prompt = 'PRIVATE-OWNER-PROMPT-ONLY'
+  await assert.rejects(() => ownerLikeSyntheticImage(extraData as never, true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
+  assert.equal(audit.entries.length, 0)
+})
+
 test('candidate carries a redacted jarvis-creative-worker ComfyUI/SDXL shape but no executable dispatch path', async () => {
   const result = await configuredConnector().run({ prompt: 'A child-friendly solar system poster', negativePrompt: 'unsafe material' }, context)
   const plan = result.data.candidates[0]?.creativeWorkerPlan
@@ -130,6 +206,11 @@ test('environment construction has no credential fields and accepts only explici
 
   const invalid = syntheticImageTtiConnectorFromEnvironment({ GCL_IMAGE_LIVE_MODE: 'LIVE_ENABLED', GCL_IMAGE_MAX_COST_CENTS: '20', GCL_IMAGE_MAX_ITEMS: '2' })
   await assert.rejects(() => invalid.run({ prompt: 'A child-friendly solar system poster' }, context), ConnectorUnavailableError)
+})
+
+test('direct connector use also rejects malformed context and unexpected input fields', async () => {
+  await assert.rejects(() => configuredConnector().run({ prompt: 'A child-friendly solar system poster', providerKey: 'not-accepted' } as never, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_IMAGE_TTI_FIELD')
+  await assert.rejects(() => configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, { ...context, correlationId: 'unsafe/correlation-id' }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_TTI_CONTEXT')
 })
 
 test('daily image quota configuration is positive-integer-only and fail-closed', () => {

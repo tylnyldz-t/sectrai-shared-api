@@ -81,6 +81,8 @@ export type SyntheticComfySdxlPlan = {
 
 export type SyntheticImageCandidate = {
   candidateId: string
+  /** Zero-based position in the bounded synthetic result set. */
+  candidateIndex: number
   promptDigest: string
   negativePromptDigest?: string
   requestedBy: string
@@ -225,8 +227,8 @@ function creativeWorkerPlan(input: Required<TextToImageInput>, promptDigest: str
   }
 }
 
-function candidateId(context: ConnectorRunContext, promptDigest: string, negativePromptDigest: string | undefined, width: ImageSize, height: ImageSize, index: number): string {
-  return `synthetic-image-${digest(JSON.stringify({ connectorId: IMAGE_TTI_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, correlationId: context.correlationId, actor: context.actor, promptDigest, negativePromptDigest, width, height, index })).slice(0, 20)}`
+function candidateId(scope: ImageCandidateScope, actor: string, promptDigest: string, negativePromptDigest: string | undefined, width: ImageSize, height: ImageSize, index: number): string {
+  return `synthetic-image-${digest(JSON.stringify({ connectorId: IMAGE_TTI_CONNECTOR_ID, product: scope.product, workspaceId: scope.workspaceId, correlationId: scope.correlationId, actor, promptDigest, negativePromptDigest, width, height, index })).slice(0, 20)}`
 }
 
 /**
@@ -268,13 +270,15 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
     const promptDigest = digest(normalized.prompt)
     const plan = creativeWorkerPlan(normalized, promptDigest)
     const candidates = Array.from({ length: ctx.requestedItems }, (_, index): SyntheticImageCandidate => {
-      const id = candidateId(ctx, promptDigest, plan.negativePromptDigest, normalized.width, normalized.height, index)
+      const scope = { product: ctx.product, workspaceId: ctx.workspaceId, correlationId: ctx.correlationId }
+      const id = candidateId(scope, ctx.actor, promptDigest, plan.negativePromptDigest, normalized.width, normalized.height, index)
       return {
         candidateId: id,
+        candidateIndex: index,
         promptDigest,
         ...(plan.negativePromptDigest ? { negativePromptDigest: plan.negativePromptDigest } : {}),
         requestedBy: ctx.actor,
-        scope: { product: ctx.product, workspaceId: ctx.workspaceId, correlationId: ctx.correlationId },
+        scope,
         width: normalized.width,
         height: normalized.height,
         mediaType: 'image/svg+xml',
@@ -320,11 +324,12 @@ function assertSyntheticCandidate(candidate: unknown): asserts candidate is Synt
   if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   const value = candidate as Record<string, unknown>
   const candidateKeys = value.negativePromptDigest === undefined
-    ? ['candidateId', 'promptDigest', 'requestedBy', 'scope', 'width', 'height', 'mediaType', 'previewDataUri', 'syntheticUri', 'safety', 'creativeWorkerPlan', 'ownerReview']
-    : ['candidateId', 'promptDigest', 'negativePromptDigest', 'requestedBy', 'scope', 'width', 'height', 'mediaType', 'previewDataUri', 'syntheticUri', 'safety', 'creativeWorkerPlan', 'ownerReview']
+    ? ['candidateId', 'candidateIndex', 'promptDigest', 'requestedBy', 'scope', 'width', 'height', 'mediaType', 'previewDataUri', 'syntheticUri', 'safety', 'creativeWorkerPlan', 'ownerReview']
+    : ['candidateId', 'candidateIndex', 'promptDigest', 'negativePromptDigest', 'requestedBy', 'scope', 'width', 'height', 'mediaType', 'previewDataUri', 'syntheticUri', 'safety', 'creativeWorkerPlan', 'ownerReview']
   if (!hasExactKeys(value, candidateKeys)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
-  if (typeof value.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(value.candidateId) || typeof value.promptDigest !== 'string' || !DIGEST_PATTERN.test(value.promptDigest) || (value.negativePromptDigest !== undefined && (typeof value.negativePromptDigest !== 'string' || !DIGEST_PATTERN.test(value.negativePromptDigest))) || !isSafeIdentifier(value.requestedBy)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+  if (typeof value.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(value.candidateId) || !Number.isSafeInteger(value.candidateIndex) || value.candidateIndex < 0 || typeof value.promptDigest !== 'string' || !DIGEST_PATTERN.test(value.promptDigest) || (value.negativePromptDigest !== undefined && (typeof value.negativePromptDigest !== 'string' || !DIGEST_PATTERN.test(value.negativePromptDigest))) || !isSafeIdentifier(value.requestedBy)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   assertCandidateScope(value.scope, 'INVALID_IMAGE_REVIEW_CANDIDATE')
+  if (value.candidateId !== candidateId(value.scope, value.requestedBy, value.promptDigest, value.negativePromptDigest, value.width as ImageSize, value.height as ImageSize, value.candidateIndex)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   if (!isImageSize(value.width) || !isImageSize(value.height) || value.mediaType !== 'image/svg+xml' || value.syntheticUri !== `synthetic://gcl/${IMAGE_TTI_CONNECTOR_ID}/${value.candidateId}` || value.previewDataUri !== previewDataUri(value.candidateId, value.width, value.height)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
 
   if (!value.safety || typeof value.safety !== 'object' || Array.isArray(value.safety) || !hasExactKeys(value.safety as Record<string, unknown>, ['filterId', 'classification'])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
