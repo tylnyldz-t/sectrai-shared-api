@@ -2,6 +2,8 @@
 
 Shared, product-scoped persistence API for Sectrai synthetic demo products. It uses one Neon Postgres database and one Render web service. It never connects to Sektral, Xontainer, Yapıborsası, or any other database.
 
+GM3 adds a synthetic-only text-to-image GCL contract. It produces local owner-review SVG candidates only; `LIVE_DISABLED` is mandatory, no provider credential or network adapter exists, and every owner-like decision is audit-chained. See [the GM3 contract](docs/GM3_IMAGE_TTI_CONTRACT.md).
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:
