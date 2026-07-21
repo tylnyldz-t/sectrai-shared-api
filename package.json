@@ -11,7 +11,7 @@
     "lint": "oxlint src test",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
-    "test": "tsx --test test/**/*.test.ts",
+    "test": "node --import tsx --test test/**/*.test.ts",
     "verify": "npm run typecheck && npm run lint && npm run build"
   },
   "dependencies": {
