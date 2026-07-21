@@ -1,6 +1,7 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, type JncBlenderPilotHandoff, type JncGpuResourceCard, type JncUnrealPilotHandoff } from './jnc-pilot.js'
-import { createSyntheticPlanIntegrity, deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { assertSyntheticReviewReceipt, createSyntheticReviewReceipt, type SyntheticReviewReceipt } from './review-receipt.js'
 import { LIVE_DISABLED, type LiveDisabled } from './safety.js'
 import type { Connector, ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
 
@@ -27,6 +28,7 @@ export type GameEngineBuildPlan = {
   adapter: 'SYNTHETIC'
   liveMode: LiveDisabled
   integrity: SyntheticPlanIntegrity
+  reviewReceipt: SyntheticReviewReceipt
   execution: 'SYNTHETIC_PLAN_ONLY_NOT_EXECUTED'
   buildId: string
   tier: GameEngineTier
@@ -139,20 +141,30 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
     const planPipeline = pipeline(input)
     const buildOutput = { state: 'OWNER_APPROVAL_REQUIRED' as const, evidence: 'SYNTHETIC_BUILD_PLAN_ONLY' as const }
     const publication = { automatic: false as const, state: 'DISABLED_NOT_IMPLEMENTED' as const }
+    const planPayload = {
+      connectorId: this.id,
+      scope: { product: context.product, workspaceId: context.workspaceId },
+      input,
+      buildId: id,
+      pipeline: planPipeline,
+      buildOutput,
+      publication,
+      ...(gpuResourceCard ? { gpuResourceCard } : {}),
+      ...(jncPilotHandoff ? { jncPilotHandoff } : {}),
+    }
+    const integrity = createSyntheticPlanIntegrity(planPayload)
+    assertSyntheticPlanIntegrity(integrity, planPayload)
+    const reviewReceipt = createSyntheticReviewReceipt({
+      connectorId: this.id,
+      scope: { product: context.product, workspaceId: context.workspaceId },
+      planIntegrity: integrity,
+    })
+    assertSyntheticReviewReceipt(reviewReceipt)
     const data = deepFreeze<GameEngineBuildPlan>({
       adapter: 'SYNTHETIC',
       liveMode: LIVE_DISABLED,
-      integrity: createSyntheticPlanIntegrity({
-        connectorId: this.id,
-        scope: { product: context.product, workspaceId: context.workspaceId },
-        input,
-        buildId: id,
-        pipeline: planPipeline,
-        buildOutput,
-        publication,
-        ...(gpuResourceCard ? { gpuResourceCard } : {}),
-        ...(jncPilotHandoff ? { jncPilotHandoff } : {}),
-      }),
+      integrity,
+      reviewReceipt,
       execution: 'SYNTHETIC_PLAN_ONLY_NOT_EXECUTED',
       buildId: id,
       tier: input.tier,

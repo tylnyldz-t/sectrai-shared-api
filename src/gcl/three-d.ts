@@ -1,6 +1,7 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, type GpuResourceRequest, type JncBlenderPilotHandoff, type JncGpuResourceCard } from './jnc-pilot.js'
-import { createSyntheticPlanIntegrity, deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { assertSyntheticReviewReceipt, createSyntheticReviewReceipt, type SyntheticReviewReceipt } from './review-receipt.js'
 import { LIVE_DISABLED, type LiveDisabled } from './safety.js'
 import type { Connector, ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
 
@@ -35,6 +36,7 @@ export type SyntheticThreeDResult = {
   connectorKind: 'text-to-3d' | 'image-text-to-3d'
   liveMode: LiveDisabled
   integrity: SyntheticPlanIntegrity
+  reviewReceipt: SyntheticReviewReceipt
   artifact: SyntheticThreeDArtifact
   gpuResourceCard: JncGpuResourceCard
   blenderPilotHandoff: JncBlenderPilotHandoff
@@ -175,17 +177,27 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
     }
     const gpuResourceCard = this.jncPilotMapper.createGpuResourceCard(validated.gpuResourceRequest)
     const blenderPilotHandoff = this.jncPilotMapper.createBlenderHandoff()
+    const planPayload = {
+      connectorId: this.id,
+      scope: { product: context.product, workspaceId: context.workspaceId },
+      input: validated,
+      artifact,
+      gpuResourceCard,
+      blenderPilotHandoff,
+    }
+    const integrity = createSyntheticPlanIntegrity(planPayload)
+    assertSyntheticPlanIntegrity(integrity, planPayload)
+    const reviewReceipt = createSyntheticReviewReceipt({
+      connectorId: this.id,
+      scope: { product: context.product, workspaceId: context.workspaceId },
+      planIntegrity: integrity,
+    })
+    assertSyntheticReviewReceipt(reviewReceipt)
     const data = deepFreeze<SyntheticThreeDResult>({
       connectorKind: this.connectorKind,
       liveMode: LIVE_DISABLED,
-      integrity: createSyntheticPlanIntegrity({
-        connectorId: this.id,
-        scope: { product: context.product, workspaceId: context.workspaceId },
-        input: validated,
-        artifact,
-        gpuResourceCard,
-        blenderPilotHandoff,
-      }),
+      integrity,
+      reviewReceipt,
       artifact,
       gpuResourceCard,
       blenderPilotHandoff,

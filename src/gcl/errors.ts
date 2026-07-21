@@ -32,3 +32,8 @@ export class AuditChainError extends GclError {
 export class ConnectorInputError extends GclError {
   constructor(message = 'CONNECTOR_INPUT_INVALID') { super(message, 422, 'connector_input_invalid') }
 }
+
+/** A review snapshot that cannot be verified is unavailable, never executable. */
+export class SyntheticReviewIntegrityError extends GclError {
+  constructor(message = 'SYNTHETIC_REVIEW_INTEGRITY_INVALID') { super(message, 503, 'synthetic_review_integrity_invalid') }
+}

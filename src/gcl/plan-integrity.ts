@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { SyntheticReviewIntegrityError } from './errors.js'
 
 export const SYNTHETIC_PLAN_INTEGRITY_CONTRACT = 'gcl.synthetic-plan-integrity.v1' as const
 
@@ -37,6 +38,29 @@ export function createSyntheticPlanIntegrity(payload: unknown): SyntheticPlanInt
     content: 'DATA_ONLY_CANONICAL_JSON',
     mutation: 'DEEP_FROZEN',
   }
+}
+
+function integrityShape(value: unknown): value is SyntheticPlanIntegrity {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const candidate = value as Record<string, unknown>
+  const allowed = ['contract', 'payloadSha256', 'content', 'mutation']
+  return Object.keys(candidate).length === allowed.length && Object.keys(candidate).every((key) => allowed.includes(key)) &&
+    candidate.contract === SYNTHETIC_PLAN_INTEGRITY_CONTRACT &&
+    typeof candidate.payloadSha256 === 'string' && /^[a-f0-9]{64}$/.test(candidate.payloadSha256) &&
+    candidate.content === 'DATA_ONLY_CANONICAL_JSON' && candidate.mutation === 'DEEP_FROZEN'
+}
+
+/**
+ * Checks a review digest against the exact data-only payload. This is a local
+ * consistency check; it is not a signature or execution authorization.
+ */
+export function verifiesSyntheticPlanIntegrity(integrity: unknown, payload: unknown): boolean {
+  return integrityShape(integrity) && integrity.payloadSha256 === syntheticPlanSha256(payload)
+}
+
+/** Use this at a review boundary so a malformed snapshot fails closed. */
+export function assertSyntheticPlanIntegrity(integrity: unknown, payload: unknown): asserts integrity is SyntheticPlanIntegrity {
+  if (!verifiesSyntheticPlanIntegrity(integrity, payload)) throw new SyntheticReviewIntegrityError()
 }
 
 /**

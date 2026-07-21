@@ -21,6 +21,38 @@ function normalize(value: unknown): unknown {
   return value
 }
 
+function jsonData(value: unknown, seen = new WeakSet<object>()): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true
+  if (typeof value === 'number') return Number.isFinite(value)
+  if (Array.isArray(value)) {
+    if (seen.has(value)) return false
+    seen.add(value)
+    const valid = value.every((item) => jsonData(item, seen))
+    seen.delete(value)
+    return valid
+  }
+  if (!value || typeof value !== 'object' || seen.has(value)) return false
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) return false
+  seen.add(value)
+  const valid = Object.values(value).every((item) => jsonData(item, seen))
+  seen.delete(value)
+  return valid
+}
+
+function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  return Object.keys(value).length === expected.length && Object.keys(value).every((key) => expected.includes(key))
+}
+
+function auditDetailValid(event: ConnectorAuditEvent): boolean {
+  const detail = event.detail
+  if (!jsonData(detail)) return false
+  if (event.type === 'connector.run.requested') return exactKeys(detail, [])
+  if (!exactKeys(detail, event.type === 'connector.run.succeeded' ? ['requestedAuditHash'] : ['requestedAuditHash', 'error'])) return false
+  if (typeof detail.requestedAuditHash !== 'string' || !/^[a-f0-9]{64}$/i.test(detail.requestedAuditHash)) return false
+  return event.type !== 'connector.run.failed' || (typeof detail.error === 'string' && detail.error.length > 0 && detail.error.length <= 500)
+}
+
 export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string | null): string {
   return createHash('sha256').update(JSON.stringify(normalize({ event, previousHash }))).digest('hex')
 }
@@ -39,13 +71,15 @@ function auditEvent(value: unknown): ConnectorAuditEvent | null {
   if (typeof event.costCapCents !== 'number' || !Number.isSafeInteger(event.costCapCents) || event.costCapCents < 1) return null
   if (typeof event.requestedItems !== 'number' || !Number.isSafeInteger(event.requestedItems) || event.requestedItems < 1) return null
   if (typeof event.occurredAt !== 'string' || Number.isNaN(Date.parse(event.occurredAt)) || new Date(event.occurredAt).toISOString() !== event.occurredAt) return null
-  if (!event.detail || typeof event.detail !== 'object' || Array.isArray(event.detail)) return null
-  return event as ConnectorAuditEvent
+  if (!event.detail || typeof event.detail !== 'object' || Array.isArray(event.detail) || !jsonData(event.detail)) return null
+  const candidate = event as ConnectorAuditEvent
+  return auditDetailValid(candidate) ? candidate : null
 }
 
 function auditValue(value: unknown): AuditRecordValue | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null
   const candidate = value as Partial<AuditRecordValue>
+  if (!exactKeys(candidate as Record<string, unknown>, ['event', 'previousHash', 'hash'])) return null
   const event = auditEvent(candidate.event)
   if (!event || typeof candidate.hash !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.hash) || (candidate.previousHash !== null && (typeof candidate.previousHash !== 'string' || !/^[a-f0-9]{64}$/i.test(candidate.previousHash)))) return null
   return { event, previousHash: candidate.previousHash ?? null, hash: candidate.hash }
@@ -57,9 +91,23 @@ function auditValue(value: unknown): AuditRecordValue | null {
  */
 export function verifiedAuditChainHead(values: readonly unknown[]): string | null {
   let previousHash: string | null = null
+  const requestedEvents = new Map<string, ConnectorAuditEvent>()
+  const terminalRequests = new Set<string>()
   for (const value of values) {
     const candidate = auditValue(value)
     if (!candidate || candidate.previousHash !== previousHash || candidate.hash !== hashAuditEvent(candidate.event, previousHash)) throw new AuditChainError()
+    if (candidate.event.type === 'connector.run.requested') {
+      requestedEvents.set(candidate.hash, candidate.event)
+    } else {
+      const requestedAuditHash = candidate.event.detail.requestedAuditHash
+      const requested = typeof requestedAuditHash === 'string' ? requestedEvents.get(requestedAuditHash) : undefined
+      if (!requested || terminalRequests.has(requestedAuditHash) ||
+        requested.connectorId !== candidate.event.connectorId || requested.product !== candidate.event.product ||
+        requested.workspaceId !== candidate.event.workspaceId || requested.actor !== candidate.event.actor ||
+        requested.costCapCents !== candidate.event.costCapCents || requested.requestedItems !== candidate.event.requestedItems ||
+        requested.scopes.length !== candidate.event.scopes.length || requested.scopes.some((scope, index) => scope !== candidate.event.scopes[index])) throw new AuditChainError()
+      terminalRequests.add(requestedAuditHash)
+    }
     previousHash = candidate.hash
   }
   return previousHash
