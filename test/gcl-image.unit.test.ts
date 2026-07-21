@@ -417,6 +417,43 @@ test('candidate proof rejects a self-consistent audit entry whose predecessor br
   assert.equal(audit.entries.length, 3)
 })
 
+test('a self-consistent audit timestamp regression cannot authorize an image owner review', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const reviews = new InMemoryImageOwnerReviewLedger(audit)
+  const { candidate, candidates } = await governedIssuedRun(audit)
+  const succeeded = audit.entries[1]
+  const issuance = audit.entries[2]
+  assert.ok(succeeded)
+  assert.ok(issuance)
+  succeeded.event.occurredAt = '2026-07-22T11:59:59.999Z'
+  succeeded.hash = hashAuditEvent(succeeded.event, succeeded.previousHash)
+  issuance.previousHash = succeeded.hash
+  issuance.hash = hashAuditEvent(issuance.event, issuance.previousHash)
+
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_TIME_REGRESSION')
+  assert.equal(audit.entries.length, 3)
+})
+
+test('the audit log rejects a newly appended event whose canonical timestamp predates its tail', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const requested = {
+    type: 'connector.run.requested' as const,
+    connectorId: 'image-tti',
+    product: context.product,
+    workspaceId: context.workspaceId,
+    actor: context.actor,
+    correlationId: context.correlationId,
+    scopes: ['image:generate'],
+    costCapCents: 20,
+    requestedItems: 1,
+    occurredAt: '2026-07-22T12:00:00.000Z',
+    detail: {},
+  }
+  await audit.append(requested)
+  await assert.rejects(() => audit.append({ ...requested, occurredAt: '2026-07-22T11:59:59.999Z' }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_EVENT_TIME_REGRESSION')
+  assert.equal(audit.entries.length, 1)
+})
+
 test('accessor-shaped stored audit records fail closed without executing their getters', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const reviews = new InMemoryImageOwnerReviewLedger(audit)

@@ -156,6 +156,11 @@ decision and must be implemented behind its own bounded approval path.
   The receipt preserves the canonical issuance event time and rechecks it
   against the audit chain before it is used. Malformed, extra, or backdated
   candidate-ledger proof data fails closed before a decision audit append.
+- Every record in the source audit chain must have the exact closed GCL event
+  envelope, a canonical UTC `occurredAt`, and a timestamp no earlier than its
+  predecessor. A self-consistent hash is insufficient when an event is
+  malformed or regresses time: it cannot support candidate issuance or an
+  owner review, and a newly appended earlier event is rejected.
 - The durable candidate and review ledgers serialize on the audit lock. A
   replay, concurrent opposite decision, malformed receipt, malformed audit
   record, a self-consistent audit hash with a broken predecessor, or unissued

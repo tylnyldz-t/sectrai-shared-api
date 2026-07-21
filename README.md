@@ -10,7 +10,8 @@ owner checker plus a replay-protected terminal review ledger is required before
 a still-unpublished liked artifact or a non-publishable rejection receipt can
 exist. Candidates have a bounded, digest-bound review deadline: expiry blocks
 both issuance and any terminal decision, and the durable lineage cannot be
-backdated. A successful governed run must first receive a durable, redacted
+backdated; every chain event also has a canonical, monotonic UTC timestamp. A
+successful governed run must first receive a durable, redacted
 candidate-issuance receipt whose candidate-set digest is bound to the success
 audit event; generic CRUD never exposes the reserved `gcl-*`
 system records. The ledgers reuse existing Records and add no migration. See
