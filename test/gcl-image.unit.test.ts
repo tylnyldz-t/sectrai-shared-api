@@ -260,6 +260,9 @@ test('candidate issuance rejects direct output, binds the full redacted candidat
   const concurrentAudit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), concurrentAudit, new TestQuota(), now)
   const concurrentResult = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const forgedResult = structuredClone(concurrentResult)
+  forgedResult.provenance.auditHash = 'f'.repeat(64)
+  await assert.rejects(() => issueSyntheticImageCandidates(forgedResult, new InMemoryImageCandidateLedger(concurrentAudit), context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_RUN_AUDIT_NOT_FOUND')
   const concurrentLedger = new InMemoryImageCandidateLedger(concurrentAudit)
   const issuances = await Promise.allSettled([
     issueSyntheticImageCandidates(concurrentResult, concurrentLedger, context),
