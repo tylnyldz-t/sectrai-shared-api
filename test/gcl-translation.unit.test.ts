@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
-import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError } from '../src/gcl/errors.js'
+import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import { InMemoryTranslationArtifactStore, PrismaTranslationArtifactStore, translationArtifactReviewDigest } from '../src/gcl/translation-artifacts.js'
-import { LIVE_DISABLED, SPEECH_TRANSLATION_CONNECTOR_ID, SYNTHETIC_TRANSLATION_ONLY, SyntheticSpeechTranslationConnector, SyntheticTextTranslationConnector, TEXT_TRANSLATION_CONNECTOR_ID, type SpeechTranslationData, type SpeechTranslationInput, type TextTranslationData, type TextTranslationInput, type TranslationConnectorConfig } from '../src/gcl/translation.js'
+import { LIVE_DISABLED, SPEECH_TRANSLATION_CONNECTOR_ID, SYNTHETIC_TRANSLATION_ONLY, SyntheticSpeechTranslationConnector, SyntheticTextTranslationConnector, TEXT_TRANSLATION_CONNECTOR_ID, translationConnectorsFromEnvironment, type SpeechTranslationData, type SpeechTranslationInput, type TextTranslationData, type TextTranslationInput, type TranslationConnectorConfig } from '../src/gcl/translation.js'
 import type { Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
@@ -65,6 +65,24 @@ test('text translation remains synthetic-only and fails closed before any artifa
 
   const missingReviewTtl = new SyntheticTextTranslationConnector({ ...config, reviewTtlMs: undefined })
   await assert.rejects(() => missingReviewTtl.run(textInput(), context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_GOVERNANCE_LIMITS_NOT_CONFIGURED')
+})
+
+test('a present live-enable environment key is a configuration poison pill, even when false', async () => {
+  const environment: NodeJS.ProcessEnv = {
+    GCL_TRANSLATION_SYNTHETIC_ENABLED: 'true',
+    GCL_TRANSLATION_LIVE_DISABLED: 'true',
+    GCL_TRANSLATION_MAX_COST_CENTS: '25',
+    GCL_TRANSLATION_MAX_INPUT_CHARACTERS: '240',
+    GCL_TRANSLATION_MAX_AUDIO_DURATION_MS: '5000',
+    GCL_TRANSLATION_REVIEW_TTL_MS: '60000',
+  }
+  const configured = translationConnectorsFromEnvironment(environment)
+  await assert.doesNotReject(() => configured[0]!.run(textInput(), context))
+
+  for (const attemptedValue of ['true', 'false', '']) {
+    const poisoned = translationConnectorsFromEnvironment({ ...environment, GCL_TRANSLATION_LIVE_ENABLED: attemptedValue })
+    await assert.rejects(() => poisoned[0]!.run(textInput(), context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_LIVE_EXECUTION_FORBIDDEN')
+  }
 })
 
 test('governed text translation returns only the owner-supplied fixture, reserves quota, and chains audit hashes without raw text', async () => {
@@ -128,6 +146,29 @@ test('a connector failure records only a stable error code, never raw fixture co
   assert.equal(audit.entries[1]?.event.type, 'connector.run.failed')
   assert.deepEqual(audit.entries[1]?.event.detail, { requestedAuditHash: audit.entries[0]?.hash, error: 'connector_run_failed' })
   assert.equal(JSON.stringify(audit.entries).includes('There are pending approvals.'), false)
+})
+
+test('a quota rejection has a terminal audit outcome and never invokes the adapter', async () => {
+  let adapterCalls = 0
+  const adapter: Connector = {
+    id: TEXT_TRANSLATION_CONNECTOR_ID,
+    kind: 'text-translation',
+    authKind: 'owner-token',
+    scopes: ['translation:text'],
+    async run(): Promise<ConnectorResult> { adapterCalls += 1; return { data: {}, provenance: {} as ConnectorResult['provenance'], confidence: 0 } },
+  }
+  const quota: ConnectorQuota = {
+    async consume(): Promise<void> { throw new QuotaError('raw fixture detail must not reach the audit log') },
+  }
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([adapter]), audit, quota, now)
+
+  await assert.rejects(() => runner.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: textInput(), ...context }), (error: unknown) => error instanceof QuotaError && error.message === 'raw fixture detail must not reach the audit log')
+  assert.equal(adapterCalls, 0)
+  assert.equal(audit.entries.length, 2)
+  assert.equal(audit.entries[1]?.event.type, 'connector.run.failed')
+  assert.deepEqual(audit.entries[1]?.event.detail, { requestedAuditHash: audit.entries[0]?.hash, error: 'connector_quota_exceeded' })
+  assert.equal(JSON.stringify(audit.entries).includes('raw fixture detail'), false)
 })
 
 test('speech translation returns only a synthetic audio reference and a distinct checker controls the one-way artifact decision', async () => {

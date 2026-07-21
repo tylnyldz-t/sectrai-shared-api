@@ -10,6 +10,8 @@ export const SPEECH_TRANSLATION_CONNECTOR_ID = 'translation-speech-synthetic'
 
 export type TranslationConnectorConfig = {
   syntheticEnabled?: boolean
+  /** Presence of a live-enable surface is a poison pill, even when set false. */
+  liveOptInRequested?: boolean
   liveState?: typeof LIVE_DISABLED
   maxCostCapCents?: number
   maxInputCharacters?: number
@@ -145,6 +147,7 @@ function artifact(kind: TranslationArtifactProposal['kind'], contentHash: string
 function positiveConfig(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 }
 
 function configured(config: TranslationConnectorConfig, ctx: ConnectorRunContext): Required<Pick<TranslationConnectorConfig, 'maxCostCapCents' | 'maxInputCharacters' | 'maxAudioDurationMs' | 'reviewTtlMs'>> {
+  if (config.liveOptInRequested) throw new ConnectorUnavailableError('TRANSLATION_LIVE_EXECUTION_FORBIDDEN')
   if (!SYNTHETIC_TRANSLATION_ONLY || !config.syntheticEnabled || config.liveState !== LIVE_DISABLED) throw new ConnectorUnavailableError('TRANSLATION_SYNTHETIC_CONNECTOR_NOT_CONFIGURED')
   const maxCostCapCents = config.maxCostCapCents
   const maxInputCharacters = config.maxInputCharacters
@@ -316,8 +319,13 @@ function environmentPositiveInteger(value: string | undefined): number | undefin
 
 /** No credential, provider URL, or live-enable environment variable exists for this module. */
 export function translationConnectorsFromEnvironment(environment: NodeJS.ProcessEnv = process.env): readonly Connector[] {
+  // This module deliberately has no live opt-in. If deployment configuration
+  // introduces that surface, including an explicit "false", disable the
+  // connector instead of treating it as a harmless future compatibility flag.
+  const liveOptInWasProvided = Object.hasOwn(environment, 'GCL_TRANSLATION_LIVE_ENABLED')
   const config: TranslationConnectorConfig = {
-    syntheticEnabled: environment.GCL_TRANSLATION_SYNTHETIC_ENABLED === 'true',
+    syntheticEnabled: environment.GCL_TRANSLATION_SYNTHETIC_ENABLED === 'true' && !liveOptInWasProvided,
+    liveOptInRequested: liveOptInWasProvided,
     liveState: environment.GCL_TRANSLATION_LIVE_DISABLED === 'true' ? LIVE_DISABLED : undefined,
     maxCostCapCents: environmentPositiveInteger(environment.GCL_TRANSLATION_MAX_COST_CENTS),
     maxInputCharacters: environmentPositiveInteger(environment.GCL_TRANSLATION_MAX_INPUT_CHARACTERS),

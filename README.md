@@ -60,6 +60,7 @@ or `*_LIVE_ENABLED` setting.
 - `translation-text-synthetic` returns only the explicitly supplied synthetic text-translation fixture.
 - `translation-speech-synthetic` accepts a synthetic audio descriptor plus an explicitly supplied fixture and returns only a deterministic `synthetic://` audio reference—never audio bytes.
 - Both require the product key, owner token, owner actor, matching scope, positive cost cap, daily quota, and `GCL_TRANSLATION_LIVE_DISABLED=true`.
+- `GCL_TRANSLATION_LIVE_ENABLED` is intentionally unsupported: if it exists at all, the connector is unavailable. A quota rejection after a request audit is recorded as a stable failure code; neither path reaches a provider or adapter fallback.
 - Successful runs create metadata-only proposals, bound to the successful run's maker, quota context, and safe hash-only envelope. The maker cannot approve or reject their own proposal; a distinct checker must echo the returned review digest before its configured review TTL expires. Approval never permits publication.
 - Durable proposal creation and checker decisions are each one transaction with their audit append; no audit-less production artifact mutation API exists. Blank actors and malformed status/maker storage envelopes fail closed.
 

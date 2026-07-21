@@ -63,8 +63,12 @@ export class GovernedConnectorRunner {
       type: 'connector.run.requested', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
       scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(), detail: {},
     })
-    await this.quota.consume({ ...context, connectorId: connector.id, occurredAt })
     try {
+      // A rejected reservation is still a terminal governed run. Keep its
+      // stable error code in the chain so a requested audit cannot be left
+      // without an outcome. Preflight remains outside this boundary because
+      // malformed input must not create an audit or quota record at all.
+      await this.quota.consume({ ...context, connectorId: connector.id, occurredAt })
       const result = await connector.run(request.input, context)
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,

@@ -5,6 +5,11 @@ call a language, speech, TTS, STT, cloud, or third-party provider. There is no
 credential field, provider URL, HTTP client, or live-enable configuration.
 `LIVE_DISABLED` is the permanent runtime state.
 
+There is deliberately no `GCL_TRANSLATION_LIVE_ENABLED` setting. If that
+environment key is present at all (including with the value `false`), the
+connector is unavailable with `TRANSLATION_LIVE_EXECUTION_FORBIDDEN`. This is
+a configuration poison pill, not a future live-mode compatibility switch.
+
 ## Fail-closed gates
 
 Each route is unavailable until all synthetic-only gates are configured:
@@ -18,6 +23,11 @@ Each route is unavailable until all synthetic-only gates are configured:
 
 Missing or invalid configuration returns a visible `503`; owner, input, scope,
 cost, and quota failures happen before the adapter runs. There is no fallback.
+Once a valid request has its `requested` audit entry, a quota reservation
+rejection is also terminally recorded as `connector.run.failed` with only the
+stable `connector_quota_exceeded` code. The adapter is not invoked and no raw
+input is placed in that audit record. Preflight failures remain before the
+first audit entry and quota reservation.
 
 ## Connector routes
 
