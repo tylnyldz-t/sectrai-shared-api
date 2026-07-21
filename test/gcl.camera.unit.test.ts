@@ -75,7 +75,7 @@ test('camera adapter rejects raw-media and device-shaped input before any fixtur
   )
 })
 
-test('D3 strict data boundary rejects hidden, symbol, and accessor-shaped input without evaluating an accessor', async () => {
+test('D3 strict data boundary rejects hidden, symbol, proxy, and accessor-shaped input without evaluating an accessor', async () => {
   const connector = enabledConnector()
 
   const hiddenMedia = structuredClone(loadingDockInput)
@@ -91,6 +91,16 @@ test('D3 strict data boundary rejects hidden, symbol, and accessor-shaped input 
     () => connector.run(symbolShaped, context),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'SYNTHETIC_CAMERA_INPUT_REQUIRED',
   )
+
+  let proxyTrapRead = false
+  const proxyShaped = new Proxy(structuredClone(loadingDockInput), {
+    get() { proxyTrapRead = true; throw new Error('PROXY_TRAP_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => connector.run(proxyShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'SYNTHETIC_CAMERA_INPUT_REQUIRED',
+  )
+  assert.equal(proxyTrapRead, false)
 
   const accessorShaped = structuredClone(loadingDockInput)
   let inputAccessorRead = false
@@ -223,7 +233,7 @@ test('D2 receipt validation rejects mutated, raw-shaped, cross-scope, and protot
   assert.equal(setup.audit.entries.length, 3)
 })
 
-test('D3 strict data boundary rejects hidden, symbol, and accessor-shaped review evidence without writes', async () => {
+test('D3 strict data boundary rejects hidden, symbol, proxy, and accessor-shaped review evidence without writes', async () => {
   const setup = runnerFor()
   const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
   const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
@@ -249,6 +259,16 @@ test('D3 strict data boundary rejects hidden, symbol, and accessor-shaped review
     () => validateCameraReviewReceipt(result.data, symbolReceipt, context),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_RECEIPT_FIELD',
   )
+
+  let receiptProxyTrapRead = false
+  const proxyReceipt = new Proxy(clone(), {
+    get() { receiptProxyTrapRead = true; throw new Error('PROXY_TRAP_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validateCameraReviewReceipt(result.data, proxyReceipt, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_RECEIPT_FIELD',
+  )
+  assert.equal(receiptProxyTrapRead, false)
 
   const accessorReceipt = clone()
   let receiptAccessorRead = false
@@ -327,6 +347,7 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /hidden, symbol, proxy, or accessor-shaped input fields/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 

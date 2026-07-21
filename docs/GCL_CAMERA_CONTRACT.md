@@ -65,21 +65,38 @@ handoff, or permit an action. A future product-owned host would need its own
 scoped durable lookup and a separate explicit owner decision. That host is not
 implemented here.
 
+## D3 — strict JSON-data boundary
+
+All camera input and D1/D2 review evidence objects now pass through one strict
+data-boundary parser. It accepts only an ordinary or null-prototype record with
+allowlisted **own, enumerable data properties**. Non-enumerable fields, symbol
+keys, accessor/getter/setter properties, Proxy values, inherited/prototype-shaped
+records, and every unrecognised field are rejected before a value is read.
+Accepted properties are copied into a null-prototype record before validation
+proceeds.
+
+This closes the gap where an otherwise hidden snapshot, device/stream value, or
+an accessor-shaped value could evade an `Object.keys()`-based field check. A
+rejecting getter or Proxy trap is not evaluated. D3 covers initial camera input,
+consent, the source result, D1 packet, D2 receipt, review details, handoff, and
+their scope bindings. It adds no route, quota use, audit append, persistence,
+media handling, device connection, credential surface, or external call.
+
 ## Audit and storage boundary
 
-The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1/D2 add no migration and no new persistence model.
+The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1/D2/D3 add no migration and no new persistence model.
 
 ## ADOS 10-rule conformance
 
 1. Product/workspace digest binding keeps each run and review packet scoped to one data plane.
 2. Only minimized built-in synthetic fixture metadata is accepted.
 3. The front door default-denies absent configuration; `LIVE_DISABLED` is permanent.
-4. Unknown fields, media, device identifiers, personal identity, and biometric inference are excluded.
+4. Unknown, hidden, symbol, Proxy, and accessor-shaped fields—plus media, device identifiers, personal identity, and biometric inference—are excluded.
 5. Purpose-bound synthetic KVKK consent must match the fixture.
 6. Owner approval plus maker–checker separation are required; D1 rejects the original maker as reviewer and D2 minimizes that review evidence.
 7. The code has no device SDK, transport, network client, credential, or provider interface.
 8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema.
-9. Owner review and its D2 receipt record no handoff, command, notification, publication, or automatic action.
+9. Owner review and its D2 receipt record no handoff, command, notification, publication, or automatic action; D3 validates them without executing accessors or adding a write path.
 10. This branch contains no live launch, production migration, main/prod write, or camera hardware path.
 
 ## Explicit non-goals
