@@ -13,12 +13,14 @@ const MARKET_REVIEW_PACKET_VERSION = 'synthetic-market-review-packet-v1'
 export const MARKET_REVIEW_RECEIPT_VERSION = 'synthetic-market-review-receipt-v1'
 export const MARKET_REVIEW_AUDIT_WITNESS_VERSION = 'synthetic-market-review-audit-witness-v1'
 export const MARKET_REVIEW_AUDIT_TRAIL_WITNESS_VERSION = 'synthetic-market-review-audit-trail-witness-v1'
+export const MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION = 'synthetic-market-review-audit-trail-receipt-v1'
 const MARKET_SCOPES = ['market:discover', 'market:capacity:quote', 'market:review'] as const
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
 const PLAN_ID_PATTERN = /^synthetic-market-[a-f0-9]{24}$/
 const REVIEW_ID_PATTERN = /^synthetic-market-review-[a-f0-9]{24}$/
 const REVIEW_RECEIPT_ID_PATTERN = /^synthetic-market-review-receipt-[a-f0-9]{24}$/
+const REVIEW_AUDIT_TRAIL_RECEIPT_ID_PATTERN = /^synthetic-market-review-audit-trail-receipt-[a-f0-9]{24}$/
 
 export type AdosMarketControl = {
   id: `ADOS-${string}`
@@ -232,6 +234,40 @@ export type SyntheticMarketReviewAuditTrailWitness = {
     reservation: false
     booking: false
     publication: false
+  }
+}
+
+/**
+ * A D6 portable, minimized rendering of a reconstructed D5 segment. It is
+ * derived evidence only: never a signature, durable audit record, credential,
+ * authorization, or market-action capability.
+ */
+export type SyntheticMarketReviewAuditTrailReceipt = {
+  version: typeof MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION
+  receiptId: string
+  scopeBinding: {
+    productDigest: string
+    workspaceDigest: string
+  }
+  planId: string
+  reviewId: string
+  requestedAuditHash: string
+  succeededAuditHash: string
+  reviewAuditHash: string
+  predecessorHash: string | null
+  mode: 'SYNTHETIC'
+  liveStatus: 'LIVE_DISABLED'
+  state: 'SYNTHETIC_MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERIFIED_NO_ACTION'
+  execution: {
+    state: 'NOT_AUTHORIZED'
+    externalNetwork: false
+    reservation: false
+    booking: false
+    publication: false
+  }
+  integrity: {
+    algorithm: 'sha256'
+    digest: string
   }
 }
 
@@ -898,6 +934,121 @@ export function validateSyntheticMarketReviewAuditTrailWitness(sourcePlan: unkno
     state: 'SYNTHETIC_MARKET_REVIEW_AUDIT_TRAIL_VERIFIED_NO_ACTION',
     execution: reviewExecution(),
   }
+}
+
+function reviewAuditTrailReceiptMaterial(receipt: Omit<SyntheticMarketReviewAuditTrailReceipt, 'receiptId' | 'integrity'>): string {
+  return canonicalJson(receipt)
+}
+
+function reviewAuditTrailReceiptFor(witness: SyntheticMarketReviewAuditTrailWitness, context: MarketReviewContext): SyntheticMarketReviewAuditTrailReceipt {
+  const scope = reviewContext(context)
+  const material: Omit<SyntheticMarketReviewAuditTrailReceipt, 'receiptId' | 'integrity'> = {
+    version: MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION,
+    scopeBinding: {
+      productDigest: sha256(scope.product),
+      workspaceDigest: sha256(scope.workspaceId),
+    },
+    planId: witness.planId,
+    reviewId: witness.reviewId,
+    requestedAuditHash: witness.requestedAuditHash,
+    succeededAuditHash: witness.succeededAuditHash,
+    reviewAuditHash: witness.reviewAuditHash,
+    predecessorHash: witness.predecessorHash,
+    mode: 'SYNTHETIC',
+    liveStatus: 'LIVE_DISABLED',
+    state: 'SYNTHETIC_MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERIFIED_NO_ACTION',
+    execution: reviewExecution(),
+  }
+  const integrityDigest = sha256(reviewAuditTrailReceiptMaterial(material))
+  return {
+    ...material,
+    receiptId: `synthetic-market-review-audit-trail-receipt-${sha256(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
+    integrity: { algorithm: 'sha256', digest: integrityDigest },
+  }
+}
+
+function marketReviewAuditTrailReceiptForValidation(value: unknown): SyntheticMarketReviewAuditTrailReceipt {
+  const receipt = exactMarketObject(value, ['version', 'receiptId', 'scopeBinding', 'planId', 'reviewId', 'requestedAuditHash', 'succeededAuditHash', 'reviewAuditHash', 'predecessorHash', 'mode', 'liveStatus', 'state', 'execution', 'integrity'], 'UNEXPECTED_MARKET_AUDIT_TRAIL_RECEIPT_FIELD')
+  const scopeBinding = exactMarketObject(receipt.scopeBinding, ['productDigest', 'workspaceDigest'], 'INVALID_MARKET_AUDIT_TRAIL_RECEIPT_SCOPE')
+  const integrity = exactMarketObject(receipt.integrity, ['algorithm', 'digest'], 'INVALID_MARKET_AUDIT_TRAIL_RECEIPT_INTEGRITY')
+  const receiptId = receipt.receiptId
+  const planId = receipt.planId
+  const reviewId = receipt.reviewId
+  const requestedAuditHash = receipt.requestedAuditHash
+  const succeededAuditHash = receipt.succeededAuditHash
+  const reviewAuditHash = receipt.reviewAuditHash
+  const predecessorHash = receipt.predecessorHash
+  const productDigest = scopeBinding.productDigest
+  const workspaceDigest = scopeBinding.workspaceDigest
+  const integrityDigest = integrity.digest
+  if (
+    receipt.version !== MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION ||
+    typeof receiptId !== 'string' || !REVIEW_AUDIT_TRAIL_RECEIPT_ID_PATTERN.test(receiptId) ||
+    typeof planId !== 'string' || !PLAN_ID_PATTERN.test(planId) ||
+    typeof reviewId !== 'string' || !REVIEW_ID_PATTERN.test(reviewId) ||
+    typeof requestedAuditHash !== 'string' || !DIGEST_PATTERN.test(requestedAuditHash) ||
+    typeof succeededAuditHash !== 'string' || !DIGEST_PATTERN.test(succeededAuditHash) ||
+    typeof reviewAuditHash !== 'string' || !DIGEST_PATTERN.test(reviewAuditHash) ||
+    (predecessorHash !== null && (typeof predecessorHash !== 'string' || !DIGEST_PATTERN.test(predecessorHash))) ||
+    typeof productDigest !== 'string' || !DIGEST_PATTERN.test(productDigest) ||
+    typeof workspaceDigest !== 'string' || !DIGEST_PATTERN.test(workspaceDigest) ||
+    receipt.mode !== 'SYNTHETIC' || receipt.liveStatus !== 'LIVE_DISABLED' ||
+    receipt.state !== 'SYNTHETIC_MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERIFIED_NO_ACTION' ||
+    integrity.algorithm !== 'sha256' || typeof integrityDigest !== 'string' || !DIGEST_PATTERN.test(integrityDigest)
+  ) throw new ConnectorInputError('INVALID_MARKET_AUDIT_TRAIL_RECEIPT')
+  return {
+    version: MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION,
+    receiptId,
+    scopeBinding: { productDigest, workspaceDigest },
+    planId,
+    reviewId,
+    requestedAuditHash,
+    succeededAuditHash,
+    reviewAuditHash,
+    predecessorHash,
+    mode: 'SYNTHETIC',
+    liveStatus: 'LIVE_DISABLED',
+    state: 'SYNTHETIC_MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERIFIED_NO_ACTION',
+    execution: reviewExecutionForReceipt(receipt.execution),
+    integrity: { algorithm: 'sha256', digest: integrityDigest },
+  }
+}
+
+/**
+ * D6 derives a minimized receipt only after D5 reconstructs the caller-held
+ * segment. This library-only helper reads and writes no storage, quota, audit,
+ * route, provider, handoff, or market-action state.
+ */
+export function createSyntheticMarketReviewAuditTrailReceipt(sourcePlan: unknown, value: unknown, auditTrail: unknown, context: MarketReviewContext): SyntheticMarketReviewAuditTrailReceipt {
+  return reviewAuditTrailReceiptFor(validateSyntheticMarketReviewAuditTrailWitness(sourcePlan, value, auditTrail, context), context)
+}
+
+/**
+ * D6 rechecks a caller-held minimized receipt by rebuilding D5's fixed
+ * witness. Its SHA-256 value detects mutation only; it is never a signature,
+ * credential, durable audit proof, authorization, or execution token.
+ */
+export function validateSyntheticMarketReviewAuditTrailReceipt(sourcePlan: unknown, value: unknown, auditTrail: unknown, receiptValue: unknown, context: MarketReviewContext): SyntheticMarketReviewAuditTrailReceipt {
+  const receipt = marketReviewAuditTrailReceiptForValidation(receiptValue)
+  const expected = createSyntheticMarketReviewAuditTrailReceipt(sourcePlan, value, auditTrail, context)
+  const material: Omit<SyntheticMarketReviewAuditTrailReceipt, 'receiptId' | 'integrity'> = {
+    version: receipt.version,
+    scopeBinding: receipt.scopeBinding,
+    planId: receipt.planId,
+    reviewId: receipt.reviewId,
+    requestedAuditHash: receipt.requestedAuditHash,
+    succeededAuditHash: receipt.succeededAuditHash,
+    reviewAuditHash: receipt.reviewAuditHash,
+    predecessorHash: receipt.predecessorHash,
+    mode: receipt.mode,
+    liveStatus: receipt.liveStatus,
+    state: receipt.state,
+    execution: receipt.execution,
+  }
+  if (receipt.integrity.digest !== sha256(reviewAuditTrailReceiptMaterial(material)) || !canonicallyEqual(receipt, expected)) {
+    throw new ConnectorInputError('MARKET_AUDIT_TRAIL_RECEIPT_INTEGRITY_INVALID')
+  }
+  return expected
 }
 
 /**

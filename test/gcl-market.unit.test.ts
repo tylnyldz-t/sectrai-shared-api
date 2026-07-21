@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { hashAuditEvent, InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
-import { ADOS_10_MARKET_CONTROLS, MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, MARKET_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, MARKET_REVIEW_AUDIT_WITNESS_VERSION, MARKET_REVIEW_RECEIPT_VERSION, SyntheticMarketConnector, independentlyReviewSyntheticMarketPlan, syntheticMarketConnectorFromEnvironment, validateSyntheticMarketPlanForReview, validateSyntheticMarketReviewAuditTrailWitness, validateSyntheticMarketReviewAuditWitness, validateSyntheticMarketReviewReceipt, type MarketCapacityQuoteInput, type MarketReviewContext, type SyntheticMarketConnectorConfig, type SyntheticMarketPlan } from '../src/gcl/market.js'
+import { ADOS_10_MARKET_CONTROLS, MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION, MARKET_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, MARKET_REVIEW_AUDIT_WITNESS_VERSION, MARKET_REVIEW_RECEIPT_VERSION, SyntheticMarketConnector, createSyntheticMarketReviewAuditTrailReceipt, independentlyReviewSyntheticMarketPlan, syntheticMarketConnectorFromEnvironment, validateSyntheticMarketPlanForReview, validateSyntheticMarketReviewAuditTrailReceipt, validateSyntheticMarketReviewAuditTrailWitness, validateSyntheticMarketReviewAuditWitness, validateSyntheticMarketReviewReceipt, type MarketCapacityQuoteInput, type MarketReviewContext, type SyntheticMarketConnectorConfig, type SyntheticMarketPlan } from '../src/gcl/market.js'
 import { InMemorySyntheticMarketReviewLedger } from '../src/gcl/market-review-ledger.js'
 import { dailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
@@ -445,6 +445,118 @@ test('D5 audit-trail witness verifies one caller-held requested/succeeded/review
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_MARKET_AUDIT_TRAIL_FIELD',
   )
   assert.equal(proxyTrapRead, false)
+  assert.equal(setup.reviews.entries.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
+  assert.equal(setup.quota.requests.length, 1)
+})
+
+test('D6 audit-trail receipt is minimized, context-bound, and rejects mutated or shaped evidence without writes', async () => {
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const plan = result.data as SyntheticMarketPlan
+  const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
+  const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext)
+  const requestedEntry = setup.audit.entries[0]
+  const succeededEntry = setup.audit.entries[1]
+  const ownerReviewEntry = setup.audit.entries[2]
+  assert.ok(requestedEntry)
+  assert.ok(succeededEntry)
+  assert.ok(ownerReviewEntry)
+  const trail = () => ({
+    requestedRun: structuredClone(requestedEntry),
+    succeededRun: structuredClone(succeededEntry),
+    ownerReview: structuredClone(ownerReviewEntry),
+  })
+  const receipt = () => createSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), reviewContext)
+
+  const created = receipt()
+  assert.equal(created.version, MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION)
+  assert.match(created.receiptId, /^synthetic-market-review-audit-trail-receipt-[a-f0-9]{24}$/)
+  assert.equal(created.planId, plan.id)
+  assert.equal(created.reviewId, reviewed.reviewId)
+  assert.equal(created.requestedAuditHash, requestedEntry.hash)
+  assert.equal(created.succeededAuditHash, succeededEntry.hash)
+  assert.equal(created.reviewAuditHash, reviewed.auditHash)
+  assert.equal(created.predecessorHash, null)
+  assert.equal(created.mode, 'SYNTHETIC')
+  assert.equal(created.liveStatus, 'LIVE_DISABLED')
+  assert.equal(created.state, 'SYNTHETIC_MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERIFIED_NO_ACTION')
+  assert.deepEqual(created.execution, { state: 'NOT_AUTHORIZED', externalNetwork: false, reservation: false, booking: false, publication: false })
+  assert.match(created.scopeBinding.productDigest, /^[a-f0-9]{64}$/)
+  assert.match(created.scopeBinding.workspaceDigest, /^[a-f0-9]{64}$/)
+  assert.match(created.integrity.digest, /^[a-f0-9]{64}$/)
+  assert.equal(JSON.stringify(created).includes(context.actor), false)
+  assert.equal(JSON.stringify(created).includes('checker@example.test'), false)
+  assert.equal(JSON.stringify(created).includes('acknowledged'), false)
+  assert.equal(JSON.stringify(created).includes('capacity-quote'), false)
+  assert.deepEqual(validateSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), structuredClone(created), reviewContext), created)
+
+  const alteredHash = structuredClone(created)
+  alteredHash.reviewAuditHash = '0'.repeat(64)
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), alteredHash, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_AUDIT_TRAIL_RECEIPT_INTEGRITY_INVALID',
+  )
+
+  const alteredReceiptId = structuredClone(created)
+  alteredReceiptId.receiptId = 'synthetic-market-review-audit-trail-receipt-000000000000000000000000'
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), alteredReceiptId, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_AUDIT_TRAIL_RECEIPT_INTEGRITY_INVALID',
+  )
+
+  const credentialShaped = structuredClone(created) as typeof created & { providerCredential?: string }
+  credentialShaped.providerCredential = 'synthetic-not-accepted'
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), credentialShaped, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_MARKET_AUDIT_TRAIL_RECEIPT_FIELD',
+  )
+
+  const hiddenProvider = structuredClone(created)
+  Object.defineProperty(hiddenProvider, 'providerEndpoint', { value: 'synthetic-not-accepted', enumerable: false })
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), hiddenProvider, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_MARKET_AUDIT_TRAIL_RECEIPT_FIELD',
+  )
+
+  const symbolShaped = structuredClone(created)
+  Object.defineProperty(symbolShaped, Symbol('provider-token'), { value: 'synthetic-not-accepted', enumerable: true })
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), symbolShaped, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_MARKET_AUDIT_TRAIL_RECEIPT_FIELD',
+  )
+
+  const prototypeScope = structuredClone(created)
+  Object.setPrototypeOf(prototypeScope.scopeBinding, { providerAddress: 'synthetic-not-accepted' })
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), prototypeScope, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_AUDIT_TRAIL_RECEIPT_SCOPE',
+  )
+
+  const accessorShaped = structuredClone(created)
+  let accessorRead = false
+  Object.defineProperty(accessorShaped, 'integrity', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), accessorShaped, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_MARKET_AUDIT_TRAIL_RECEIPT_FIELD',
+  )
+  assert.equal(accessorRead, false)
+
+  let proxyTrapRead = false
+  const proxyShaped = new Proxy(structuredClone(created), { get() { proxyTrapRead = true; throw new Error('PROXY_TRAP_MUST_NOT_RUN') } })
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), proxyShaped, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_MARKET_AUDIT_TRAIL_RECEIPT_FIELD',
+  )
+  assert.equal(proxyTrapRead, false)
+
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), structuredClone(created), { ...reviewContext, workspaceId: 'another-workspace' }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID',
+  )
   assert.equal(setup.reviews.entries.length, 1)
   assert.equal(setup.audit.entries.length, 3)
   assert.equal(setup.quota.requests.length, 1)
