@@ -12,6 +12,7 @@ export const CAMERA_REVIEW_RECEIPT_VERSION = 'synthetic-camera-review-receipt-v1
 export const CAMERA_REVIEW_AUDIT_WITNESS_VERSION = 'synthetic-camera-review-audit-witness-v1' as const
 export const CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION = 'synthetic-camera-review-audit-trail-witness-v1' as const
 export const CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION = 'synthetic-camera-review-audit-trail-receipt-v1' as const
+export const CAMERA_REVIEW_EVIDENCE_MANIFEST_VERSION = 'synthetic-camera-review-evidence-manifest-v1' as const
 
 export type AdosCameraControl = {
   id: `ADOS-${string}`
@@ -31,8 +32,8 @@ export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.free
   { id: 'ADOS-05', control: 'PURPOSE_BOUND_CONSENT', enforcement: 'A granted synthetic KVKK consent assertion must match the selected fixture and purpose.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'The governed run requires owner approval and separate request/check actors; review rejects the original maker.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIAL_INTERFACE', enforcement: 'The adapter has no camera SDK, network client, stream URL, credential, or provider configuration surface.' },
-  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment.' },
-  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6 witnesses record only an approved or rejected decision; action, notification, publication, and handoff remain not sent.' },
+  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment and D6/D7 only render its minimized evidence.' },
+  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6/D7 witnesses record only an approved or rejected decision; action, notification, publication, and handoff remain not sent.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or camera connection is part of this connector.' },
 ])
 
@@ -175,6 +176,27 @@ export type CameraReviewAuditTrailReceipt = {
   integrityDigest: string
 }
 
+/**
+ * D7's compact binding of the independently validated D2 and D6 evidence.
+ * It deliberately omits the fixture, observation, reviewer, decision text,
+ * and audit hashes. It is never a signature, credential, durable proof, or
+ * action capability.
+ */
+export type CameraReviewEvidenceManifest = {
+  version: typeof CAMERA_REVIEW_EVIDENCE_MANIFEST_VERSION
+  manifestId: string
+  scopeBinding: { productDigest: string; workspaceDigest: string }
+  reviewId: string
+  reviewReceiptIntegrityDigest: string
+  auditTrailReceiptIntegrityDigest: string
+  state: 'SYNTHETIC_REVIEW_EVIDENCE_MANIFEST_VERIFIED_NO_ACTION'
+  rawMediaIncluded: false
+  automaticAction: false
+  notification: 'NOT_SENT'
+  publication: 'NOT_PUBLISHED'
+  integrityDigest: string
+}
+
 export type ReviewedCameraObservation = {
   reviewId: string
   decision: 'approved' | 'rejected'
@@ -214,6 +236,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const CAMERA_REVIEW_ID_PATTERN = /^synthetic-camera-review-[a-f0-9]{24}$/
 const CAMERA_REVIEW_RECEIPT_ID_PATTERN = /^synthetic-camera-review-receipt-[a-f0-9]{24}$/
 const CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_ID_PATTERN = /^synthetic-camera-review-audit-trail-receipt-[a-f0-9]{24}$/
+const CAMERA_REVIEW_EVIDENCE_MANIFEST_ID_PATTERN = /^synthetic-camera-review-evidence-manifest-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 
