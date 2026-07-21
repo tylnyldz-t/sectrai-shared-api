@@ -75,6 +75,48 @@ test('camera adapter rejects raw-media and device-shaped input before any fixtur
   )
 })
 
+test('D3 strict data boundary rejects hidden, symbol, and accessor-shaped input without evaluating an accessor', async () => {
+  const connector = enabledConnector()
+
+  const hiddenMedia = structuredClone(loadingDockInput)
+  Object.defineProperty(hiddenMedia, 'snapshot', { value: 'data:image/png;base64,not-accepted', enumerable: false })
+  await assert.rejects(
+    () => connector.run(hiddenMedia, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'SYNTHETIC_CAMERA_INPUT_REQUIRED',
+  )
+
+  const symbolShaped = structuredClone(loadingDockInput)
+  Object.defineProperty(symbolShaped, Symbol('device-address'), { value: 'rtsp://not-accepted.example.test/stream', enumerable: true })
+  await assert.rejects(
+    () => connector.run(symbolShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'SYNTHETIC_CAMERA_INPUT_REQUIRED',
+  )
+
+  const accessorShaped = structuredClone(loadingDockInput)
+  let inputAccessorRead = false
+  Object.defineProperty(accessorShaped, 'cameraFixtureId', {
+    enumerable: true,
+    get() { inputAccessorRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => connector.run(accessorShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'SYNTHETIC_CAMERA_INPUT_REQUIRED',
+  )
+  assert.equal(inputAccessorRead, false)
+
+  const accessorConsent = structuredClone(loadingDockInput)
+  let consentAccessorRead = false
+  Object.defineProperty(accessorConsent.consent, 'receiptRef', {
+    enumerable: true,
+    get() { consentAccessorRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => connector.run(accessorConsent, context),
+    (error: unknown) => error instanceof CameraConsentError && error.message === 'CAMERA_CONSENT_REQUIRED',
+  )
+  assert.equal(consentAccessorRead, false)
+})
+
 test('admitted synthetic observation contains no media, device identifier, identity, action, notification, or publication path', async () => {
   const connector = enabledConnector()
   const audit = new InMemoryHashChainAuditLog()
@@ -177,6 +219,48 @@ test('D2 receipt validation rejects mutated, raw-shaped, cross-scope, and protot
     () => validateCameraReviewReceipt(inheritedResult, clone(), context),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_RESULT_FIELD',
   )
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
+})
+
+test('D3 strict data boundary rejects hidden, symbol, and accessor-shaped review evidence without writes', async () => {
+  const setup = runnerFor()
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
+  const clone = () => structuredClone(reviewed)
+
+  const hiddenSource = structuredClone(result.data)
+  Object.defineProperty(hiddenSource, 'snapshot', { value: 'data:image/png;base64,not-accepted', enumerable: false })
+  assert.throws(
+    () => validateCameraReviewReceipt(hiddenSource, clone(), context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_RESULT_FIELD',
+  )
+
+  const hiddenReceipt = clone()
+  Object.defineProperty(hiddenReceipt.reviewReceipt, 'deviceAddress', { value: 'rtsp://not-accepted.example.test/stream', enumerable: false })
+  assert.throws(
+    () => validateCameraReviewReceipt(result.data, hiddenReceipt, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_RECEIPT_FIELD',
+  )
+
+  const symbolReceipt = clone()
+  Object.defineProperty(symbolReceipt.reviewReceipt, Symbol('raw-media'), { value: 'not-accepted', enumerable: true })
+  assert.throws(
+    () => validateCameraReviewReceipt(result.data, symbolReceipt, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_RECEIPT_FIELD',
+  )
+
+  const accessorReceipt = clone()
+  let receiptAccessorRead = false
+  Object.defineProperty(accessorReceipt.reviewReceipt, 'auditHash', {
+    enumerable: true,
+    get() { receiptAccessorRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validateCameraReviewReceipt(result.data, accessorReceipt, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_RECEIPT_FIELD',
+  )
+  assert.equal(receiptAccessorRead, false)
   assert.equal((setup.quota as TestQuota).requests.length, 1)
   assert.equal(setup.audit.entries.length, 3)
 })

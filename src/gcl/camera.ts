@@ -22,7 +22,7 @@ export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every audit and review packet is bound to one product and workspace digest.' },
   { id: 'ADOS-02', control: 'MINIMIZED_SYNTHETIC_FIXTURE', enforcement: 'Only an allowlisted synthetic fixture ID and fixed finding are resolved.' },
   { id: 'ADOS-03', control: 'DEFAULT_DENY_LIVE_DISABLED', enforcement: 'Synthetic enablement and positive limits are required; a live flag is rejected.' },
-  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown input fields, media, device identifiers, identity resolution, and biometric inference are denied.' },
+  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown, hidden, symbol, or accessor-shaped input fields, media, device identifiers, identity resolution, and biometric inference are denied.' },
   { id: 'ADOS-05', control: 'PURPOSE_BOUND_CONSENT', enforcement: 'A granted synthetic KVKK consent assertion must match the selected fixture and purpose.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'The governed run requires owner approval and separate request/check actors; review rejects the original maker.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIAL_INTERFACE', enforcement: 'The adapter has no camera SDK, network client, stream URL, credential, or provider configuration surface.' },
@@ -187,9 +187,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return prototype === Object.prototype || prototype === null
 }
 
+/**
+ * Accepts only JSON-shaped own data properties, then copies them into a null
+ * prototype record. This keeps review evidence parsing from evaluating an
+ * accessor and makes non-enumerable/symbol-shaped fields fail closed rather
+ * than disappearing from Object.keys()/JSON.stringify().
+ */
 function exactObject(value: unknown, allowed: readonly string[], error: string): Record<string, unknown> {
-  if (!isRecord(value) || Object.keys(value).some((key) => !allowed.includes(key))) throw new ConnectorInputError(error)
-  return value
+  if (!isRecord(value)) throw new ConnectorInputError(error)
+  const names = Object.getOwnPropertyNames(value)
+  if (Object.getOwnPropertySymbols(value).length > 0 || names.some((key) => !allowed.includes(key))) throw new ConnectorInputError(error)
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const normalized = Object.create(null) as Record<string, unknown>
+  for (const key of names) {
+    const descriptor = descriptors[key]
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError(error)
+    normalized[key] = descriptor.value
+  }
+  return normalized
 }
 
 function requiredString(value: unknown, error: string, maximumLength: number): string {
@@ -230,16 +245,17 @@ function reviewRequester(value: unknown): string {
 }
 
 function inputFrom(value: unknown): CameraObservationInput {
-  if (!isRecord(value)) throw new ConnectorInputError('SYNTHETIC_CAMERA_INPUT_REQUIRED')
-  const input = value
-  if (Object.keys(input).some((key) => !['synthetic', 'cameraFixtureId', 'purpose', 'consent'].includes(key))) throw new ConnectorInputError('SYNTHETIC_CAMERA_INPUT_REQUIRED')
+  const input = exactObject(value, ['synthetic', 'cameraFixtureId', 'purpose', 'consent'], 'SYNTHETIC_CAMERA_INPUT_REQUIRED')
   if (input.synthetic !== true || typeof input.cameraFixtureId !== 'string' || (input.purpose !== 'operational-safety' && input.purpose !== 'site-security')) {
     throw new ConnectorInputError('SYNTHETIC_CAMERA_INPUT_REQUIRED')
   }
-  const consent = input.consent
-  if (!isRecord(consent)) throw new CameraConsentError()
-  const assertion = consent
-  if (Object.keys(assertion).some((key) => !['state', 'receiptRef', 'policyVersion', 'sourceRights'].includes(key))) throw new CameraConsentError()
+  let assertion: Record<string, unknown>
+  try {
+    assertion = exactObject(input.consent, ['state', 'receiptRef', 'policyVersion', 'sourceRights'], 'CAMERA_CONSENT_REQUIRED')
+  } catch (error) {
+    if (error instanceof ConnectorInputError) throw new CameraConsentError()
+    throw error
+  }
   if (assertion.state !== 'granted' || typeof assertion.receiptRef !== 'string' || assertion.policyVersion !== 'kvkk-synthetic-v1' || assertion.sourceRights !== 'synthetic-fixture') {
     throw new CameraConsentError()
   }
