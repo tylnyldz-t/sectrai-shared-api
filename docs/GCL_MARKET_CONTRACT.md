@@ -282,6 +282,30 @@ handoff, reserve/book/publish, or authorize execution. Its unkeyed digest is
 mutation evidence only—not a signature, credential, durable audit proof,
 replay guard, authorization, or execution token.
 
+## D8 — strict terminal-ledger ingress and retry boundary
+
+D8 hardens the injected, process-local D2 terminal ledger without broadening
+its authority. Before a decision can enter the ledger, the entry must be an
+exact plain own-data record with all and only the documented fields. Inherited
+values, null/prototype-shaped objects, hidden fields, symbol fields, accessors,
+and Proxies are rejected before any field is read or audit append is attempted.
+This keeps the maker, reviewer, decision, plan binding, and review time as
+bounded data rather than executable object behavior.
+
+The injected audit append result is likewise accepted only as an exact plain
+own-data `{ hash }` object with a lowercase SHA-256 digest. Getter- or
+Proxy-shaped results, extra fields, and malformed hashes fail closed as
+`MARKET_REVIEW_AUDIT_APPEND_INVALID`; none creates a terminal entry. A failed
+append does not decide the tuple, so a later retry may succeed, but the first
+valid terminal append still consumes the sole process-local decision. This is
+not persistence, cross-process replay prevention, authorization, or an action
+capability.
+
+D8 remains entirely in-process: it adds no route, migration, database table,
+worker, queue, provider configuration, credential, network call, quote,
+reservation, booking, publication, handoff, or sending path. Its successful
+result remains fixed at `NOT_AUTHORIZED` through the existing D2 receipt.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -346,14 +370,15 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
 caller-held audit-witness link reconstruction, plus D5 caller-held
 requested/succeeded/owner-review continuity reconstruction, D6's minimized,
 context-bound rendering of that exact segment, and D7's compact binding of
-independently rebuilt D3 and D6 evidence.
+independently rebuilt D3 and D6 evidence, plus D8's exact-data terminal-ledger
+and audit-append boundary.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -367,8 +392,11 @@ mutated hashes/receipt IDs, credential-shaped, hidden, symbol, prototype,
 accessor, and Proxy-shaped receipt evidence. D7 additionally rejects a
 substituted D3/D6 integrity digest, scope-binding or manifest-ID drift, and
 credential-shaped, hidden, symbol, accessor, and Proxy-shaped manifests.
-D3/D4/D5/D6/D7 rejection produces no extra review event, quota item, or local
-terminal entry.
+D8 rejects inherited, hidden, symbol, accessor, and Proxy-shaped ledger
+entries before audit append, rejects accessor- and Proxy-shaped append results
+without marking a decision, and proves that a malformed append leaves the
+tuple retryable. D3/D4/D5/D6/D7 rejection produces no extra review event,
+quota item, or local terminal entry.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -382,15 +410,18 @@ terminal entry.
    without reading or writing audit storage. D5 rechecks only a caller-held
    requested/succeeded/review segment without a write or storage lookup; D6
    can only minimize and recheck that same segment; D7 can only bind the
-   rebuilt D3/D6 evidence into a still-smaller no-action manifest.
+   rebuilt D3/D6 evidence into a still-smaller no-action manifest; D8 admits
+   only exact own-data ledger/audit ingress and leaves a malformed append
+   undecided.
 5. Request content is explicitly data-only, never an instruction.
 6. Owner gate, `market:review`, and maker–checker separation are mandatory.
 7. The module has no network client, provider URL, credential/API-key field,
    scheduler, or automatic sync.
 8. Preflight, cost caps, independent grouped quotas, and the scoped SHA-256
    audit chain bound every run; D5/D6/D7 only check a caller-held three-event
-   segment, a minimized rendering, and a further compact binding of it.
-9. A review and its D3/D4/D5/D6/D7 evidence cannot quote, reserve, book,
+   segment, a minimized rendering, and a further compact binding of it; D8
+   only hardens D2's in-process append seam.
+9. A review and its D3/D4/D5/D6/D7/D8 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -400,4 +431,4 @@ terminal entry.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8.

@@ -79,4 +79,8 @@ remains unkeyed mutation evidence, never a signature, credential, authorization,
 or execution capability. D7 can bind independently rebuilt D3 and D6 evidence
 into an even smaller, digest-only no-action manifest; it omits request, actor,
 decision, and audit-hash data, reads and writes no storage, and remains neither
-a signature, credential, authorization, nor execution capability.
+a signature, credential, authorization, nor execution capability. D8 accepts
+only exact own-data records/results at the injected D2 terminal-ledger seam;
+accessor-, Proxy-, inherited-, hidden-, and symbol-shaped values fail closed.
+A malformed audit append leaves that process-local tuple undecided for a later
+retry, never creating an action or durable approval.

@@ -92,7 +92,12 @@ function normalizedEntry(value: unknown): MarketReviewLedgerEntry {
 }
 
 function auditAppendResult(value: unknown): { hash: string } {
-  const candidate = ownDataObject(value, ['hash'], 'MARKET_REVIEW_AUDIT_APPEND_INVALID')
+  let candidate: Record<string, unknown>
+  try {
+    candidate = ownDataObject(value, ['hash'], 'MARKET_REVIEW_AUDIT_APPEND_INVALID')
+  } catch {
+    throw new ConnectorUnavailableError('MARKET_REVIEW_AUDIT_APPEND_INVALID')
+  }
   if (typeof candidate.hash !== 'string' || !DIGEST_PATTERN.test(candidate.hash)) {
     throw new ConnectorUnavailableError('MARKET_REVIEW_AUDIT_APPEND_INVALID')
   }

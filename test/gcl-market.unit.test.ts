@@ -790,6 +790,114 @@ test('D2 ledger does not create a terminal receipt when its audit append is malf
   assert.equal(ledger.entries.length, 0)
 })
 
+test('D8 terminal ledger accepts only exact own data, never evaluates shaped ingress, and remains retryable after a failed audit append', async () => {
+  const entry = {
+    product: context.product,
+    workspaceId: context.workspaceId,
+    planId: `synthetic-market-${'a'.repeat(24)}`,
+    planDigest: 'a'.repeat(64),
+    reviewId: `synthetic-market-review-${'a'.repeat(24)}`,
+    reviewPacketIntegrityDigest: 'b'.repeat(64),
+    decision: 'acknowledged' as const,
+    reviewedBy: 'checker@example.test',
+    reviewedAt: now().toISOString(),
+  }
+  let appendCalls = 0
+  const ledger = new InMemorySyntheticMarketReviewLedger({
+    append: async () => {
+      appendCalls += 1
+      return { hash: appendCalls === 1 ? 'not-a-sha256-digest' : 'c'.repeat(64) }
+    },
+  })
+  const mustRejectIngress = async (candidate: unknown, read: () => boolean = () => false) => {
+    await assert.rejects(
+      () => ledger.recordTerminalReview(candidate as never),
+      (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REVIEW_LEDGER_ENTRY',
+    )
+    assert.equal(read(), false)
+  }
+
+  await mustRejectIngress(Object.create(entry))
+
+  const hiddenProvider = { ...entry }
+  Object.defineProperty(hiddenProvider, 'providerCredential', { value: 'synthetic-not-accepted' })
+  await mustRejectIngress(hiddenProvider)
+
+  const symbolShaped = { ...entry }
+  Object.defineProperty(symbolShaped, Symbol('provider-token'), { value: 'synthetic-not-accepted', enumerable: true })
+  await mustRejectIngress(symbolShaped)
+
+  const accessorShaped = { ...entry }
+  let accessorRead = false
+  Object.defineProperty(accessorShaped, 'reviewedBy', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  await mustRejectIngress(accessorShaped, () => accessorRead)
+
+  let proxyTrapRead = false
+  const proxyShaped = new Proxy({ ...entry }, { get() { proxyTrapRead = true; throw new Error('PROXY_TRAP_MUST_NOT_RUN') } })
+  await mustRejectIngress(proxyShaped, () => proxyTrapRead)
+
+  assert.equal(appendCalls, 0)
+  assert.equal(ledger.entries.length, 0)
+  await assert.rejects(
+    () => ledger.recordTerminalReview(entry),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_REVIEW_AUDIT_APPEND_INVALID',
+  )
+  assert.equal(appendCalls, 1)
+  assert.equal(ledger.entries.length, 0)
+
+  assert.deepEqual(await ledger.recordTerminalReview(entry), { hash: 'c'.repeat(64) })
+  assert.equal(appendCalls, 2)
+  assert.equal(ledger.entries.length, 1)
+})
+
+test('D8 terminal ledger rejects accessor- and Proxy-shaped audit append results without marking a decision', async () => {
+  const entry = {
+    product: context.product,
+    workspaceId: context.workspaceId,
+    planId: `synthetic-market-${'d'.repeat(24)}`,
+    planDigest: 'd'.repeat(64),
+    reviewId: `synthetic-market-review-${'d'.repeat(24)}`,
+    reviewPacketIntegrityDigest: 'e'.repeat(64),
+    decision: 'rejected' as const,
+    reviewedBy: 'checker@example.test',
+    reviewedAt: now().toISOString(),
+  }
+  let accessorRead = false
+  const accessorResult = {}
+  Object.defineProperty(accessorResult, 'hash', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  const accessorLedger = new InMemorySyntheticMarketReviewLedger({ append: async () => accessorResult as never })
+  await assert.rejects(
+    () => accessorLedger.recordTerminalReview(entry),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_REVIEW_AUDIT_APPEND_INVALID',
+  )
+  assert.equal(accessorRead, false)
+  assert.equal(accessorLedger.entries.length, 0)
+
+  let proxyTrapRead = false
+  const proxyResult = new Proxy({ hash: 'f'.repeat(64) }, {
+    // Promise resolution must probe `then`; no data property may be read by
+    // the ledger after that unavoidable runtime check.
+    get(target, property, receiver) {
+      if (property === 'then') return undefined
+      proxyTrapRead = true
+      return Reflect.get(target, property, receiver)
+    },
+  })
+  const proxyLedger = new InMemorySyntheticMarketReviewLedger({ append: async () => proxyResult as never })
+  await assert.rejects(
+    () => proxyLedger.recordTerminalReview(entry),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_REVIEW_AUDIT_APPEND_INVALID',
+  )
+  assert.equal(proxyTrapRead, false)
+  assert.equal(proxyLedger.entries.length, 0)
+})
+
 test('D3 refuses an injected ledger result whose audit hash is malformed before it can return a receipt', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })

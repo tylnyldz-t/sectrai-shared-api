@@ -50,7 +50,9 @@ Every registered connector is governed by these rules:
   locally compare that receipt with one caller-held audit hash link; D5 can
   read-check only the caller-held requested/succeeded/review segment; D6 can
   only minimize and recheck that same segment; D7 can bind independently
-  rebuilt D3 and D6 evidence into a still-smaller no-action manifest. None
+  rebuilt D3 and D6 evidence into a still-smaller no-action manifest. D8
+  hardens D2's injected terminal-ledger and audit-append ingress to exact
+  own-data values only; a failed append remains undecided and retryable. None
   reads audit storage, writes, or approves execution. All resulting evidence
   remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
@@ -134,9 +136,11 @@ requested/succeeded/review segment; it does not prove its first predecessor or
 any durable retention. D6 can only render and recheck a minimized,
 digest-bound form of that same supplied segment; it adds no storage lookup or
 write. D7 can bind independently rebuilt D3 and D6 evidence into a smaller,
-digest-only no-action manifest, also without storage access. D3/D4/D5/D6/D7
-are local mutation checks, never signatures, credentials, approval workflows,
-or execution paths. The specific market
+digest-only no-action manifest, also without storage access. D8 admits only
+exact own-data records/results at D2's injected terminal-ledger seam; it is
+still process-local, no-action, and retryable after a failed append.
+D3/D4/D5/D6/D7/D8 are local mutation checks or boundary hardening, never
+signatures, credentials, approval workflows, or execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
 
 ## Privacy, KVKK, and content boundary
