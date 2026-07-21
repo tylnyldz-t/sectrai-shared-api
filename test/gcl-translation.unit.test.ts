@@ -338,4 +338,6 @@ test('durable artifact decisions use compare-and-set with an audit row so simult
   assert.equal(final.approvalState === 'approved' || final.approvalState === 'rejected', true)
   assert.equal(final.decidedBy === 'checker-one@example.test' || final.decidedBy === 'checker-two@example.test', true)
   assert.equal(auditRows.length, 4)
+  const decisionEvent = (auditRows[3]!.values as { event: ConnectorAuditEvent }).event
+  assert.equal(final.decidedAt, decisionEvent.occurredAt)
 })

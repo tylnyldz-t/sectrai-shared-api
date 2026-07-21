@@ -156,8 +156,11 @@ chain before returning or mutating metadata. It must prove the same maker's
 requested → successful synthetic run, one matching `artifact.created` entry,
 and, for a terminal row, exactly one matching checker decision after creation.
 The creation event must retain the run's canonical scope and budget; a decision
-must use only `translation:artifact:approve` with zero cost/items. A
-metadata-shaped row with missing, duplicate, out-of-order, cross-maker, or
+must use only `translation:artifact:approve` with zero cost/items, a checker
+different from the maker, and the same canonical UTC instant as the row's
+`decidedAt`. The durable store rejects a missing, noncanonical, mismatched, or
+out-of-scope decision audit context before it opens the decision transaction.
+Metadata-shaped rows with missing, duplicate, out-of-order, cross-maker, or
 mismatched lifecycle evidence is unavailable with
 `TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID`. This check does not expose
 fixture text or audio and does not add an execution or publication path.

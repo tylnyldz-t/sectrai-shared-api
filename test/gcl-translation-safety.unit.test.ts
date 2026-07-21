@@ -367,6 +367,101 @@ test('durable artifact reads and decisions reject a metadata-valid row whose aud
   assert.equal(updateCalls, 0)
 })
 
+test('durable decisions reject an audit context that is not bound to the decision instant before opening a transaction', async () => {
+  let transactionCalls = 0
+  const artifacts = new PrismaTranslationArtifactStore({
+    $transaction: async () => { transactionCalls += 1; return null },
+  } as never)
+  const input = {
+    product, workspaceId, id: 'translation-artifact-decision-preflight', actor: 'checker@example.test', decision: 'approved' as const,
+    reviewDigest: `sha256:${'a'.repeat(64)}`, now: now(),
+    audit: { scopes: ['translation:artifact:approve'], costCapCents: 0, requestedItems: 0, occurredAt: '2026-07-22T12:00:01.000Z' },
+  }
+
+  for (const forged of [
+    input,
+    { ...input, audit: { ...input.audit, scopes: ['translation:text'] } },
+    { ...input, actor: ' checker@example.test ' },
+  ]) {
+    await assert.rejects(() => artifacts.decideAndAudit(forged), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_DECISION_AUDIT_INVALID')
+  }
+  assert.equal(transactionCalls, 0)
+})
+
+test('durable terminal artifacts require a distinct checker and an audit decision at the stored decision instant', async () => {
+  const proposal = runResult().artifact!
+  const artifactId = 'translation-artifact-terminal-lifecycle'
+  const maker = 'maker@example.test'
+  const checker = 'checker@example.test'
+  const requested: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: maker,
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+  const requestedHash = hashAuditEvent(requested, null)
+  const succeeded: ConnectorAuditEvent = {
+    type: 'connector.run.succeeded', connectorId: 'translation-text-synthetic', product, workspaceId, actor: maker,
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { requestedAuditHash: requestedHash, artifact: proposal },
+  }
+  const succeededHash = hashAuditEvent(succeeded, requestedHash)
+
+  function lifecycle(decisionActor: string, decisionOccurredAt: string): PrismaTranslationArtifactStore {
+    const pending = { connectorId: 'translation-text-synthetic', ...proposal, runAuditHash: succeededHash }
+    const reviewDigest = translationArtifactReviewDigest(pending)
+    const values = {
+      ...pending,
+      approvalState: 'approved',
+      reviewDigest,
+      decidedAt: now().toISOString(),
+      decidedBy: decisionActor,
+    }
+    const detail = (approvalState: 'pending-checker-approval' | 'approved') => ({
+      artifactId,
+      kind: proposal.kind,
+      contentHash: proposal.contentHash,
+      mediaType: proposal.mediaType,
+      source: proposal.source,
+      synthetic: true,
+      approvalState,
+      reviewPolicyVersion: proposal.reviewPolicyVersion,
+      reviewDigest,
+      reviewExpiresAt: proposal.reviewExpiresAt,
+      runAuditHash: succeededHash,
+      autoPublish: false,
+    })
+    const created: ConnectorAuditEvent = {
+      type: 'translation.artifact.created', connectorId: 'translation-text-synthetic', product, workspaceId, actor: maker,
+      scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: detail('pending-checker-approval'),
+    }
+    const createdHash = hashAuditEvent(created, succeededHash)
+    const approved: ConnectorAuditEvent = {
+      type: 'translation.artifact.approved', connectorId: 'translation-text-synthetic', product, workspaceId, actor: decisionActor,
+      scopes: ['translation:artifact:approve'], costCapCents: 0, requestedItems: 0, occurredAt: decisionOccurredAt, detail: detail('approved'),
+    }
+    const approvedHash = hashAuditEvent(approved, createdHash)
+    const record = {
+      id: artifactId, product, workspaceId, values, status: 'approved', createdAt: now(), createdBy: maker,
+    }
+    const recordStore = {
+      findFirst: async () => record,
+      findMany: async () => [
+        { values: { event: requested, previousHash: null, hash: requestedHash } },
+        { values: { event: succeeded, previousHash: requestedHash, hash: succeededHash } },
+        { values: { event: created, previousHash: succeededHash, hash: createdHash } },
+        { values: { event: approved, previousHash: createdHash, hash: approvedHash } },
+      ],
+    }
+    return new PrismaTranslationArtifactStore({
+      $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({ $executeRaw: async () => 1, record: recordStore }),
+      record: recordStore,
+    } as never)
+  }
+
+  await assert.doesNotReject(() => lifecycle(checker, now().toISOString()).get(product, workspaceId, artifactId))
+  await assert.rejects(() => lifecycle(maker, now().toISOString()).get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+  await assert.rejects(() => lifecycle(checker, '2026-07-22T12:00:01.000Z').get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+})
+
 test('durable audit fails closed on a hash-valid success event whose bound result carries a raw fixture field', async () => {
   const requested: ConnectorAuditEvent = {
     type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
