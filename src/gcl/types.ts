@@ -26,6 +26,13 @@ export type ConnectorResult<TData = unknown> = {
   confidence: number
 }
 
+/**
+ * Extra success-audit fields are deliberately primitive-only. Connectors use
+ * this seam to bind a redacted result fingerprint to their success event; it
+ * must never carry the input, media bytes, or an executable plan.
+ */
+export type ConnectorSuccessAuditDetail = Record<string, string | number | boolean | null>
+
 export type ConnectorRunContext = {
   product: string
   workspaceId: string
@@ -46,6 +53,11 @@ export interface Connector<TInput = unknown, TData = unknown> {
   /** Non-mutating policy gate, executed before audit and quota reservation. */
   preflight?(input: TInput, ctx: ConnectorRunContext): Promise<void> | void
   run(input: TInput, ctx: ConnectorRunContext): Promise<ConnectorResult<TData>>
+  /**
+   * Optional, redacted result binding added only to the success audit event.
+   * The runner validates its shape before persisting it.
+   */
+  successAuditDetail?(result: ConnectorResult<TData>, ctx: ConnectorRunContext): Promise<ConnectorSuccessAuditDetail> | ConnectorSuccessAuditDetail
 }
 
 export type ConnectorAuditEvent = {

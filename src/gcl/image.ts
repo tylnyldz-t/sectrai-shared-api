@@ -7,6 +7,8 @@ import type { Connector, ConnectorResult, ConnectorRunContext } from './types.js
 export const IMAGE_TTI_CONNECTOR_ID = 'image-tti'
 /** GM3 deliberately has no live-provider code path. Any other value is rejected. */
 export const LIVE_DISABLED = 'LIVE_DISABLED' as const
+/** Redacted candidate-set hash field carried only in a governed success audit. */
+export const IMAGE_CANDIDATE_SET_AUDIT_FIELD = 'syntheticCandidateSetDigest'
 
 const IMAGE_SCOPE = 'image:generate'
 const MAX_PROMPT_LENGTH = 1000
@@ -221,6 +223,16 @@ function canonicalJson(value: unknown): string {
 /** Used only for redacted candidate/issuance shapes; ledger callers never persist raw prompt text. */
 export function imageCandidateFingerprint(value: unknown): string { return digest(canonicalJson(value)) }
 
+/**
+ * Binds the exact redacted candidate set to its governed success audit event.
+ * The hash contains candidate IDs and their full redacted fingerprints only;
+ * it never contains the prompt, preview bytes, credential, or endpoint.
+ */
+export function imageCandidateSetDigest(candidates: readonly SyntheticImageCandidate[]): string {
+  const entries = candidates.map((candidate) => ({ candidateId: candidate.candidateId, fingerprint: imageCandidateFingerprint(candidate) }))
+  return imageCandidateFingerprint(entries.sort((left, right) => left.candidateId.localeCompare(right.candidateId)))
+}
+
 function previewDataUri(candidateId: string, width: ImageSize, height: ImageSize): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Synthetic image candidate"><rect width="100%" height="100%" fill="#172554"/><rect x="48" y="48" width="${width - 96}" height="${height - 96}" rx="24" fill="#1e3a8a" stroke="#93c5fd" stroke-width="4"/><text x="50%" y="44%" text-anchor="middle" fill="#dbeafe" font-family="system-ui, sans-serif" font-size="28">SYNTHETIC · SDXL PLAN</text><text x="50%" y="51%" text-anchor="middle" fill="#bfdbfe" font-family="system-ui, sans-serif" font-size="18">OWNER REVIEW · DISPATCH DISABLED</text><text x="50%" y="58%" text-anchor="middle" fill="#bfdbfe" font-family="monospace" font-size="16">${candidateId}</text></svg>`
   return `data:image/svg+xml;base64,${Buffer.from(svg, 'utf8').toString('base64')}`
@@ -351,6 +363,10 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
       confidence: 0,
     }
   }
+
+  successAuditDetail(result: ConnectorResult<TextToImageData>): { [IMAGE_CANDIDATE_SET_AUDIT_FIELD]: string } {
+    return { [IMAGE_CANDIDATE_SET_AUDIT_FIELD]: imageCandidateSetDigest(result.data.candidates) }
+  }
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -434,7 +450,7 @@ export async function issueSyntheticImageCandidates(runResult: ConnectorResult<T
     requestedItems: entries.length,
     occurredAt: occurredAt.toISOString(),
     detail: {
-      candidateSetDigest: imageCandidateFingerprint([...entries].sort((left, right) => left.candidateId.localeCompare(right.candidateId))),
+      candidateSetDigest: imageCandidateSetDigest(candidates),
       candidateCount: entries.length,
       candidates: entries,
       publication: 'blocked',

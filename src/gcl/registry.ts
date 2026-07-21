@@ -1,5 +1,5 @@
 import { ConnectorInputError, CostCapError, ConnectorUnavailableError, OwnerGateError, ScopeError } from './errors.js'
-import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
+import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext, ConnectorSuccessAuditDetail } from './types.js'
 
 export type RunConnectorRequest = {
   connectorId: string
@@ -15,8 +15,29 @@ export type RunConnectorRequest = {
 }
 
 const ID_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
+const SUCCESS_AUDIT_DETAIL_KEY_PATTERN = /^[a-z][a-zA-Z0-9]{0,63}$/
+const SUCCESS_AUDIT_DETAIL_STRING_LIMIT = 256
 
 function isSafeNonNegativeInteger(value: number): boolean { return Number.isSafeInteger(value) && value >= 0 }
+
+/** Reject accessor-bearing or unbounded connector audit detail before storage. */
+function successAuditDetail(value: unknown): ConnectorSuccessAuditDetail {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) throw new ConnectorUnavailableError('INVALID_CONNECTOR_SUCCESS_AUDIT_DETAIL')
+    const descriptors = Object.getOwnPropertyDescriptors(value)
+    if (Object.values(descriptors).some((descriptor) => descriptor.get || descriptor.set)) throw new ConnectorUnavailableError('INVALID_CONNECTOR_SUCCESS_AUDIT_DETAIL')
+    const detail: ConnectorSuccessAuditDetail = {}
+    for (const [key, descriptor] of Object.entries(descriptors)) {
+      const item = descriptor.value
+      if (key === 'requestedAuditHash' || !SUCCESS_AUDIT_DETAIL_KEY_PATTERN.test(key) || (typeof item !== 'string' && typeof item !== 'number' && typeof item !== 'boolean' && item !== null) || (typeof item === 'string' && item.length > SUCCESS_AUDIT_DETAIL_STRING_LIMIT) || (typeof item === 'number' && !Number.isFinite(item))) throw new ConnectorUnavailableError('INVALID_CONNECTOR_SUCCESS_AUDIT_DETAIL')
+      detail[key] = item
+    }
+    return detail
+  } catch (error) {
+    if (error instanceof ConnectorUnavailableError) throw error
+    throw new ConnectorUnavailableError('INVALID_CONNECTOR_SUCCESS_AUDIT_DETAIL')
+  }
+}
 
 export class ConnectorRegistry {
   private readonly connectors = new Map<string, Connector>()
@@ -70,9 +91,10 @@ export class GovernedConnectorRunner {
     await this.quota.consume({ ...context, connectorId: connector.id, occurredAt })
     try {
       const result = await connector.run(request.input, context)
+      const connectorSuccessDetail = successAuditDetail(connector.successAuditDetail ? await connector.successAuditDetail(result, context) : {})
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor, correlationId: context.correlationId,
-        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(), detail: { requestedAuditHash: requestedAudit.hash },
+        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(), detail: { ...connectorSuccessDetail, requestedAuditHash: requestedAudit.hash },
       })
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
     } catch (error) {
