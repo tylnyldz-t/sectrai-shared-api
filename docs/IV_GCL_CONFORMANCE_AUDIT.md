@@ -89,11 +89,12 @@ a network socket.  Run it with:
 npm run test:conformance
 ```
 
-It is fail-closed: if one of the audited local Git objects is absent, the
-fixture fails rather than treating the source as conformant.  The target
-packages' own synthetic unit suites were also run with Node's `tsx` loader;
-their database integration tests were intentionally not run because they
-require `DATABASE_URL` and are outside this source-only audit.
+It is fail-closed: if one of the audited local worktree snapshots is absent
+or differs from its recorded Git blob, the fixture fails rather than treating
+the source as conformant.  The target packages' own synthetic unit suites
+were also run with Node's `tsx` loader; their database integration tests were
+intentionally not run because they require `DATABASE_URL` and are outside
+this source-only audit.
 
 | Connector | Snapshot safety boundary | Owner/preflight | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D1 result |
 | --- | --- | --- | --- | --- | --- |
