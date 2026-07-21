@@ -1,4 +1,4 @@
-import { appendAuditEvent, auditRecordValue, GCL_AUDIT_MODULE_ID, verifyAuditChain } from './audit.js'
+import { appendAuditEvent, GCL_AUDIT_MODULE_ID, verifyAuditChain } from './audit.js'
 import { ConnectorInputError, ConnectorUnavailableError } from './errors.js'
 import { IMAGE_CANDIDATE_SET_AUDIT_FIELD, imageCandidateFingerprint } from './image.js'
 import type { SyntheticImageCandidate } from './image.js'

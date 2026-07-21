@@ -25,14 +25,20 @@ only accepted mode.
    and is not a production moderation policy.
 4. The runner appends request/success/failure events, with a correlation ID,
    to the per-workspace SHA-256 chain and reserves daily usage through
-   `PrismaDailyConnectorQuota`.
+   `PrismaDailyConnectorQuota`. For `image-tti`, the success event contains
+   only `syntheticCandidateSetDigest`: a SHA-256 fingerprint of candidate IDs
+   and their redacted full-shape fingerprints. It contains no prompt, preview
+   bytes, endpoint, checkpoint, or credential.
 5. The trusted host must then call
    `issueSyntheticImageCandidates(governedResult, candidateLedger, context)`.
    It accepts only a successful governed result with its success audit hash,
-   then stores one redacted, `publication: blocked` fingerprint receipt per
-   candidate through `PrismaImageCandidateLedger`. Direct connector output is
-   deliberately not issuable. This is an issuance/provenance guard, not actor
-   authentication; the host still authenticates the caller that records it.
+   recomputes the exact candidate-set digest from that result, and then stores
+   one redacted, `publication: blocked` fingerprint receipt per candidate
+   through `PrismaImageCandidateLedger`. A structurally valid candidate from a
+   different run cannot borrow the success audit hash. Direct connector output
+   is deliberately not issuable. This is an issuance/provenance guard, not
+   actor authentication; the host still authenticates the caller that records
+   it.
 6. Each candidate is `owner-only`, `pending`, and `publication: blocked`.
    It records its maker and originating product/workspace/correlation scope.
    Only a different owner checker may call
@@ -55,13 +61,14 @@ matching source scope that the synthetic adapter emits. The candidate ID binds
 those redacted fields, preventing an accidental scope/actor/preview mix-up;
 it is an integrity check, not an authentication signature. Its full redacted
 shape must additionally match a prior candidate receipt tied to the governed
-run success audit hash. Cross-workspace or correlation review, altered preview,
-URI, safety metadata, or plan, an unissued candidate, extra candidate fields
-(including a raw prompt), malformed audit log, and attempted self approval are
-rejected before a decision audit append. `PrismaImageCandidateLedger` and
-`PrismaImageOwnerReviewLedger` reuse existing Records; each writes with its
-audit event under the existing per-workspace audit lock. A duplicate or
-opposite decision is rejected before either write. The host is still
+run success audit hash and its candidate-set digest. Cross-workspace or
+correlation review, altered preview, URI, safety metadata, or plan, an
+unissued candidate, extra candidate fields (including a raw prompt), malformed
+audit log, and attempted self approval are rejected before a decision audit
+append. `PrismaImageCandidateLedger` and `PrismaImageOwnerReviewLedger` reuse
+existing Records; each writes with its audit event under the existing
+per-workspace audit lock. A duplicate or opposite decision is rejected before
+either write. The host is still
 responsible for authenticating its actors before it grants owner approval,
 records issuance, or calls a decision function. This module has no image HTTP
 route, database migration, or publishing path; generic product CRUD returns
@@ -120,16 +127,21 @@ decision and must be implemented behind its own bounded approval path.
   hashes. It never records the prompt, negative prompt, preview bytes,
   provider endpoint, or a credential.
 - Candidate issuance accepts only the governed result carrying a success audit
-  hash, stores candidate IDs plus fingerprints/hashes only, and rejects direct
-  connector output, a changed redacted candidate field, duplicate issuance, or
-  concurrent issuance replay.
+  hash and matching redacted candidate-set digest, stores candidate IDs plus
+  fingerprints/hashes only, and rejects direct connector output, a changed
+  redacted candidate field, a candidate set from another run, duplicate
+  issuance, or concurrent issuance replay.
 - The durable candidate and review ledgers serialize on the audit lock. A
-  replay, concurrent opposite decision, malformed receipt, malformed
-  audit-chain tail, or unissued candidate fails closed and cannot add another
-  decision event.
+  replay, concurrent opposite decision, malformed receipt, malformed audit
+  record, a self-consistent audit hash with a broken predecessor, or unissued
+  candidate fails closed and cannot add another decision event. Before every
+  append and before a candidate proof is used, the whole ordered workspace
+  chain is rechecked; an issuance receipt must still match both its issuance
+  event and the bound source success event.
 - Accessor-shaped input, policy objects, and candidate data are rejected
   before their getters can run, so untrusted runtime objects cannot smuggle
-  prompt text or behavior through validation.
+  prompt text or behavior through validation. The same fail-closed rule applies
+  to stored audit records before they are hashed or inspected.
 - `creativeWorkerPlan.dispatch` remains exactly
   `{ performed: false, gate: "LIVE_DISABLED", network: "not-attempted" }`.
   This package does not invoke Creative Worker, ComfyUI, Docker, loopback, a

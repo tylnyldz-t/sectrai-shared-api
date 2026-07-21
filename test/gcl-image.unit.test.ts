@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { GCL_AUDIT_MODULE_ID, InMemoryHashChainAuditLog, PrismaHashChainAuditLog } from '../src/gcl/audit.js'
+import { GCL_AUDIT_MODULE_ID, hashAuditEvent, InMemoryHashChainAuditLog, PrismaHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, FamilySafetyError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
-import { LIVE_DISABLED, SyntheticImageTtiConnector, issueSyntheticImageCandidates, ownerLikeSyntheticImage, ownerRejectSyntheticImage, syntheticImageTtiConnectorFromEnvironment } from '../src/gcl/image.js'
+import { LIVE_DISABLED, SyntheticImageTtiConnector, imageCandidateSetDigest, issueSyntheticImageCandidates, ownerLikeSyntheticImage, ownerRejectSyntheticImage, syntheticImageTtiConnectorFromEnvironment } from '../src/gcl/image.js'
 import { GCL_IMAGE_CANDIDATE_MODULE_ID, InMemoryImageCandidateLedger, PrismaImageCandidateLedger } from '../src/gcl/image-candidate-ledger.js'
 import { GCL_IMAGE_OWNER_REVIEW_MODULE_ID, InMemoryImageOwnerReviewLedger, PrismaImageOwnerReviewLedger } from '../src/gcl/image-review-ledger.js'
 import type { GclPersistence, GclRecordTransaction } from '../src/gcl/persistence.js'
@@ -38,9 +38,25 @@ class TestGclPersistence implements GclPersistence {
             .sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime() || right.id.localeCompare(left.id))
           return records[0] ?? null
         },
-        findMany: async ({ where }) => this.records
-          .filter((record) => record.product === where.product && record.workspaceId === where.workspaceId && record.moduleId === where.moduleId && (!where.createdAt || record.createdAt >= where.createdAt.gte))
-          .map((record) => ({ values: record.values })),
+        findMany: async ({ where, orderBy }) => {
+          const records = this.records
+            .filter((record) => record.product === where.product && record.workspaceId === where.workspaceId && record.moduleId === where.moduleId && (!where.createdAt || record.createdAt >= where.createdAt.gte))
+          if (orderBy) {
+            records.sort((left, right) => {
+              for (const order of orderBy) {
+                if ('createdAt' in order) {
+                  const comparison = left.createdAt.getTime() - right.createdAt.getTime()
+                  if (comparison !== 0) return order.createdAt === 'asc' ? comparison : -comparison
+                } else {
+                  const comparison = left.id.localeCompare(right.id)
+                  if (comparison !== 0) return order.id === 'asc' ? comparison : -comparison
+                }
+              }
+              return 0
+            })
+          }
+          return records.map((record) => ({ values: record.values }))
+        },
         create: async ({ data }) => {
           this.nextId += 1
           this.records.push({ id: `test-${this.nextId}`, product: data.product, workspaceId: data.workspaceId, moduleId: data.moduleId, values: structuredClone(data.values), createdAt: now() })
@@ -182,6 +198,9 @@ test('GM3 run requires owner gate, cost cap, scope, safe identity, quota, audit 
   assert.equal(audit.entries[1]?.previousHash, audit.entries[0]?.hash)
   assert.equal(audit.entries[0]?.event.correlationId, context.correlationId)
   assert.equal(result.provenance.auditHash, audit.entries[1]?.hash)
+  assert.equal(audit.entries[1]?.event.detail.syntheticCandidateSetDigest, imageCandidateSetDigest(result.data.candidates))
+  assert.equal(JSON.stringify(audit.entries[1]).includes(privatePrompt), false)
+  assert.equal(JSON.stringify(audit.entries[1]).includes(privateNegativePrompt), false)
   const issuance = await issueSyntheticImageCandidates(result, candidates, context)
   assert.equal(issuance.issuanceAuditHash, audit.entries[2]?.hash)
   assert.equal(audit.entries[2]?.event.type, 'connector.artifact.candidates_issued')
@@ -263,6 +282,9 @@ test('candidate issuance rejects direct output, binds the full redacted candidat
   const forgedResult = structuredClone(concurrentResult)
   forgedResult.provenance.auditHash = 'f'.repeat(64)
   await assert.rejects(() => issueSyntheticImageCandidates(forgedResult, new InMemoryImageCandidateLedger(concurrentAudit), context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_RUN_AUDIT_NOT_FOUND')
+  const unrelatedDirectResult = await configuredConnector().run({ prompt: 'A different child-friendly synthetic scene' }, context)
+  unrelatedDirectResult.provenance.auditHash = concurrentResult.provenance.auditHash
+  await assert.rejects(() => issueSyntheticImageCandidates(unrelatedDirectResult, new InMemoryImageCandidateLedger(concurrentAudit), context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_RUN_AUDIT_NOT_FOUND')
   const concurrentLedger = new InMemoryImageCandidateLedger(concurrentAudit)
   const issuances = await Promise.allSettled([
     issueSyntheticImageCandidates(concurrentResult, concurrentLedger, context),
@@ -308,6 +330,32 @@ test('a corrupt audit tail fail-closes a terminal review before another decision
   const { candidate, candidates } = await governedIssuedRun(audit)
   audit.entries.push({ event: {} as never, previousHash: null, hash: '0'.repeat(64) } as never)
   await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(audit.entries.length, 4)
+})
+
+test('candidate proof rejects a self-consistent audit entry whose predecessor breaks the chain', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const reviews = new InMemoryImageOwnerReviewLedger(audit)
+  const { candidate, candidates } = await governedIssuedRun(audit)
+  const succeeded = audit.entries[1]
+  assert.ok(succeeded)
+  const forgedSuccess = { ...succeeded, previousHash: null }
+  forgedSuccess.hash = hashAuditEvent(forgedSuccess.event, forgedSuccess.previousHash)
+  audit.entries[1] = forgedSuccess
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(audit.entries.length, 3)
+})
+
+test('accessor-shaped stored audit records fail closed without executing their getters', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const reviews = new InMemoryImageOwnerReviewLedger(audit)
+  const { candidate, candidates } = await governedIssuedRun(audit)
+  let getterRead = false
+  const malformed = {}
+  Object.defineProperty(malformed, 'event', { enumerable: true, get: () => { getterRead = true; return {} } })
+  audit.entries.push(malformed as never)
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(getterRead, false)
   assert.equal(audit.entries.length, 4)
 })
 
