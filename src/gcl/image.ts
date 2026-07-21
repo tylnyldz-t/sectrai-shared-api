@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, FamilySafetyError, OwnerGateError } from './errors.js'
+import type { ImageCandidateIssuanceEvent, ImageCandidateLedger } from './image-candidate-ledger.js'
 import type { ImageOwnerReviewDecisionEvent, ImageOwnerReviewLedger } from './image-review-ledger.js'
 import type { Connector, ConnectorResult, ConnectorRunContext } from './types.js'
 
@@ -58,6 +59,7 @@ export type ImageRejectionReason = 'NOT_SUITABLE' | 'SAFETY_CONCERN' | 'NEEDS_RE
 
 export type ImageCandidateScope = Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'correlationId'>
 export type ImageOwnerReviewContext = Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'correlationId' | 'now'>
+export type ImageCandidateIssuanceContext = Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'actor' | 'correlationId' | 'now'>
 
 /**
  * A redacted structural mirror of jarvis-creative-worker's image/SDXL graph.
@@ -156,6 +158,28 @@ function hasControlCharacter(value: string): boolean {
   return /\p{C}/u.test(value)
 }
 
+/** Reject accessors, symbols, arrays, and non-plain objects before reading values. */
+function plainRecord(value: unknown): Record<string, unknown> | null {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const prototype = Object.getPrototypeOf(value)
+    if ((prototype !== Object.prototype && prototype !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
+    const descriptors = Object.getOwnPropertyDescriptors(value)
+    if (Object.values(descriptors).some((descriptor) => descriptor.get || descriptor.set)) return null
+    return value as Record<string, unknown>
+  } catch { return null }
+}
+
+/** Like plainRecord, but permits a sealed policy instance with own data fields. */
+function ownDataRecord(value: unknown): Record<string, unknown> | null {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getOwnPropertySymbols(value).length > 0) return null
+    const descriptors = Object.getOwnPropertyDescriptors(value)
+    if (Object.values(descriptors).some((descriptor) => descriptor.get || descriptor.set)) return null
+    return value as Record<string, unknown>
+  } catch { return null }
+}
+
 function text(value: unknown, error: string): string {
   if (typeof value !== 'string') throw new ConnectorInputError(error)
   const normalized = value.trim()
@@ -164,8 +188,8 @@ function text(value: unknown, error: string): string {
 }
 
 function imageInput(value: unknown): Required<TextToImageInput> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError('INVALID_IMAGE_TTI_INPUT')
-  const candidate = value as Record<string, unknown>
+  const candidate = plainRecord(value)
+  if (!candidate) throw new ConnectorInputError('INVALID_IMAGE_TTI_INPUT')
   if (Object.keys(candidate).some((key) => key !== 'prompt' && key !== 'negativePrompt' && key !== 'width' && key !== 'height')) throw new ConnectorInputError('UNEXPECTED_IMAGE_TTI_FIELD')
   if (!Object.hasOwn(candidate, 'prompt')) throw new ConnectorInputError('INVALID_IMAGE_TTI_PROMPT')
   const prompt = text(candidate.prompt, 'INVALID_IMAGE_TTI_PROMPT')
@@ -178,6 +202,21 @@ function imageInput(value: unknown): Required<TextToImageInput> {
 
 function digest(value: string): string { return createHash('sha256').update(value).digest('hex') }
 
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return JSON.stringify(value)
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+    return JSON.stringify(value)
+  }
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  const record = plainRecord(value)
+  if (!record) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+}
+
+/** Hashes a redacted candidate/issuance shape; it never accepts raw prompt text. */
+export function imageCandidateFingerprint(value: unknown): string { return digest(canonicalJson(value)) }
+
 function previewDataUri(candidateId: string, width: ImageSize, height: ImageSize): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" role="img" aria-label="Synthetic image candidate"><rect width="100%" height="100%" fill="#172554"/><rect x="48" y="48" width="${width - 96}" height="${height - 96}" rx="24" fill="#1e3a8a" stroke="#93c5fd" stroke-width="4"/><text x="50%" y="44%" text-anchor="middle" fill="#dbeafe" font-family="system-ui, sans-serif" font-size="28">SYNTHETIC · SDXL PLAN</text><text x="50%" y="51%" text-anchor="middle" fill="#bfdbfe" font-family="system-ui, sans-serif" font-size="18">OWNER REVIEW · DISPATCH DISABLED</text><text x="50%" y="58%" text-anchor="middle" fill="#bfdbfe" font-family="monospace" font-size="16">${candidateId}</text></svg>`
   return `data:image/svg+xml;base64,${Buffer.from(svg, 'utf8').toString('base64')}`
@@ -188,11 +227,13 @@ function policyRejectionReason(value: unknown): string {
 }
 
 function safetyAssessment(filter: FamilySafetyFilter, input: Readonly<TextToImageInput>): void {
-  if (!FILTER_ID_PATTERN.test(filter.id) || typeof filter.assess !== 'function') throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
+  const candidate = ownDataRecord(filter)
+  if (!candidate || typeof candidate.id !== 'string' || !FILTER_ID_PATTERN.test(candidate.id) || typeof candidate.assess !== 'function') throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
   let assessment: FamilySafetyAssessment
-  try { assessment = filter.assess(input) } catch { throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_UNAVAILABLE') }
-  if (!assessment || typeof assessment !== 'object' || typeof assessment.allowed !== 'boolean') throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
-  if (!assessment.allowed) throw new FamilySafetyError(policyRejectionReason(assessment.reason))
+  try { assessment = candidate.assess(input) as FamilySafetyAssessment } catch { throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_UNAVAILABLE') }
+  const result = plainRecord(assessment)
+  if (!result || typeof result.allowed !== 'boolean' || (result.reason !== undefined && typeof result.reason !== 'string')) throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
+  if (!result.allowed) throw new FamilySafetyError(policyRejectionReason(result.reason))
 }
 
 /**
@@ -204,7 +245,7 @@ export class BaselineFamilySafetyFilter implements FamilySafetyFilter {
   readonly id = 'baseline-family-safe-v1'
   private readonly blockedTerms = new Set(['adult', 'explicit', 'nude', 'naked', 'porn', 'sexual', 'gore', 'dismember', 'blood', 'weapon', 'gun', 'silah', 'çıplak', 'cinsel', 'pornografi', 'şiddet', 'vahşet'])
 
-  assess(input: Readonly<TextToImageInput>): FamilySafetyAssessment {
+  readonly assess = (input: Readonly<TextToImageInput>): FamilySafetyAssessment => {
     const words = `${input.prompt} ${input.negativePrompt ?? ''}`.normalize('NFKC').toLocaleLowerCase('tr-TR').match(/[\p{L}\p{N}]+/gu) ?? []
     return words.some((word) => this.blockedTerms.has(word))
       ? { allowed: false, reason: 'FAMILY_SAFETY_FILTER_REJECTED' }
