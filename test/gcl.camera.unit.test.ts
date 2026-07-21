@@ -6,7 +6,7 @@ import { ownerTokenMatches } from '../src/gcl/owner.js'
 import { cameraDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import type { ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
-import { CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, SyntheticCameraConnector, cameraConnectorFromEnvironment, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
+import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, SyntheticCameraConnector, cameraConnectorFromEnvironment, independentlyReviewCameraObservation, validateCameraObservationForReview, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
 const context: ConnectorRunContext = {
@@ -87,11 +87,98 @@ test('admitted synthetic observation contains no media, device identifier, ident
   assert.equal(result.confidence, 0)
   assert.equal(result.provenance.untrustedContent.handling, 'data-only')
   assert.equal(result.provenance.untrustedContent.instructionPolicy, 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS')
+  assert.equal(result.data.reviewPacket.rawMediaIncluded, false)
+  assert.equal(result.data.reviewPacket.automaticAction, false)
+  assert.equal(result.data.reviewPacket.notification, 'NOT_SENT')
+  assert.equal(result.data.reviewPacket.publication, 'NOT_PUBLISHED')
   assert.equal(result.provenance.auditHash, audit.entries[1]?.hash)
   assert.equal(JSON.stringify(result).includes('not-accepted'), false)
   assert.equal(quota.requests.length, 1)
   assert.equal(audit.entries.length, 2)
   assert.equal(audit.entries[1]?.previousHash, audit.entries[0]?.hash)
+})
+
+test('D1 review packet permits only an independent owner decision and records no handoff or extra quota use', async () => {
+  const setup = runnerFor()
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
+
+  assert.equal(reviewed.ownerReview.state, 'APPROVED_FOR_SYNTHETIC_OBSERVATION_ONLY')
+  assert.equal(reviewed.ownerReview.reviewer, 'reviewer@example.test')
+  assert.equal(reviewed.reviewId, result.data.reviewPacket.reviewId)
+  assert.equal(reviewed.reviewPacketIntegrityDigest, result.data.reviewPacket.integrityDigest)
+  assert.equal(reviewed.handoff.state, 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED')
+  assert.equal(reviewed.handoff.rawMediaIncluded, false)
+  assert.equal(reviewed.handoff.sent, false)
+  assert.equal(reviewed.handoff.automaticAction, false)
+  assert.equal(reviewed.handoff.notification, 'NOT_SENT')
+  assert.equal(reviewed.handoff.publication, 'NOT_PUBLISHED')
+  assert.equal(reviewed.auditHash, setup.audit.entries[2]?.hash)
+  assert.equal(setup.audit.entries[2]?.event.type, 'connector.camera.owner_reviewed')
+  assert.equal(setup.audit.entries[2]?.event.detail.reviewPacketIntegrityDigest, result.data.reviewPacket.integrityDigest)
+  assert.equal(JSON.stringify(setup.audit.entries[2]).includes('synthetic-loading-dock-001'), false)
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+  assert.equal(setup.audit.entries[2]?.previousHash, setup.audit.entries[1]?.hash)
+})
+
+test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
+  const setup = runnerFor()
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const clone = (): CameraObservationResult => structuredClone(result.data)
+
+  const alteredFinding = clone()
+  alteredFinding.observation.findingCode = 'ALTERED_AFTER_RUN'
+  assert.throws(
+    () => validateCameraObservationForReview(alteredFinding, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_REVIEW_OBSERVATION_MISMATCH',
+  )
+
+  const rawMediaShaped = clone() as CameraObservationResult & { snapshot?: string }
+  rawMediaShaped.snapshot = 'data:image/png;base64,still-not-accepted'
+  assert.throws(
+    () => validateCameraObservationForReview(rawMediaShaped, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_REVIEW_RESULT_FIELD',
+  )
+
+  const nonPending = clone()
+  nonPending.reviewPacket.state = 'REVIEW_ALREADY_COMPLETED' as never
+  nonPending.reviewPacket.automaticAction = true as never
+  assert.throws(
+    () => validateCameraObservationForReview(nonPending, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_REVIEW_PACKET',
+  )
+
+  assert.throws(
+    () => validateCameraObservationForReview(clone(), { ...context, workspaceId: 'another-workspace' }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CAMERA_REVIEW_PACKET_SCOPE_MISMATCH',
+  )
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(clone(), 'approved', true, context.requestedBy, setup.audit, context),
+    (error: unknown) => error instanceof MakerCheckerError && error.message === 'CAMERA_REVIEW_REQUIRES_INDEPENDENT_CHECKER',
+  )
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(clone(), 'approved', false, 'reviewer@example.test', setup.audit, context),
+    (error: unknown) => error instanceof OwnerGateError,
+  )
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(clone(), 'send' as never, true, 'reviewer@example.test', setup.audit, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_REVIEW_DECISION',
+  )
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(clone(), 'approved', true, 'reviewer\n@example.test', setup.audit, context),
+    (error: unknown) => error instanceof OwnerGateError && error.message === 'CAMERA_REVIEWER_REQUIRED',
+  )
+  assert.equal(setup.audit.entries.length, 2)
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+})
+
+test('ADOS 10 controls remain complete and explicitly prohibit egress and production launch', () => {
+  assert.equal(ADOS_10_CAMERA_CONTROLS.length, 10)
+  assert.deepEqual(ADOS_10_CAMERA_CONTROLS.map((control) => control.id), [
+    'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
+  ])
+  assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 
 test('missing, revoked, mismatched, or fixture-unbound consent is denied and audit-recorded before quota reservation', async () => {

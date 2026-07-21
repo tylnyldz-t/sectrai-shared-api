@@ -48,7 +48,7 @@ export interface Connector<TInput = unknown, TData = unknown> {
 }
 
 export type ConnectorAuditEvent = {
-  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'connector.run.denied'
+  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'connector.run.denied' | 'connector.camera.owner_reviewed'
   connectorId: string
   product: string
   workspaceId: string

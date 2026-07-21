@@ -1,9 +1,34 @@
-import { CameraConsentError, ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
-import type { Connector, ConnectorResult, ConnectorRunContext } from './types.js'
+import { createHash } from 'node:crypto'
+import { CameraConsentError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError } from './errors.js'
+import type { AuditLog, Connector, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export const CAMERA_CONNECTOR_ID = 'camera-observation'
 export const CAMERA_LIVE_STATUS = 'LIVE_DISABLED' as const
 export const CAMERA_SCOPE = 'camera:observe' as const
+export const CAMERA_REVIEW_PACKET_VERSION = 'synthetic-camera-review-packet-v1' as const
+
+export type AdosCameraControl = {
+  id: `ADOS-${string}`
+  control: string
+  enforcement: string
+}
+
+/**
+ * Contract-local proof of the non-production boundary. These controls are
+ * descriptive evidence only; none grants a device, transport, or launch path.
+ */
+export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.freeze([
+  { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every audit and review packet is bound to one product and workspace digest.' },
+  { id: 'ADOS-02', control: 'MINIMIZED_SYNTHETIC_FIXTURE', enforcement: 'Only an allowlisted synthetic fixture ID and fixed finding are resolved.' },
+  { id: 'ADOS-03', control: 'DEFAULT_DENY_LIVE_DISABLED', enforcement: 'Synthetic enablement and positive limits are required; a live flag is rejected.' },
+  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown input fields, media, device identifiers, identity resolution, and biometric inference are denied.' },
+  { id: 'ADOS-05', control: 'PURPOSE_BOUND_CONSENT', enforcement: 'A granted synthetic KVKK consent assertion must match the selected fixture and purpose.' },
+  { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'The governed run requires owner approval and separate request/check actors; review rejects the original maker.' },
+  { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIAL_INTERFACE', enforcement: 'The adapter has no camera SDK, network client, stream URL, credential, or provider configuration surface.' },
+  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain.' },
+  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review records only an approved or rejected decision; action, notification, publication, and handoff remain not sent.' },
+  { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or camera connection is part of this connector.' },
+])
 
 export type CameraPurpose = 'operational-safety' | 'site-security'
 export type CameraConsent = {
@@ -17,6 +42,26 @@ export type CameraObservationInput = {
   cameraFixtureId: string
   purpose: CameraPurpose
   consent: CameraConsent
+}
+
+export type CameraOwnerReviewRequired = {
+  state: 'OWNER_REVIEW_REQUIRED'
+  action: 'NOT_EXECUTED'
+  notification: 'NOT_SENT'
+  publication: 'NOT_PUBLISHED'
+}
+
+export type SyntheticCameraReviewPacket = {
+  version: typeof CAMERA_REVIEW_PACKET_VERSION
+  reviewId: string
+  scopeBinding: { productDigest: string; workspaceDigest: string }
+  observationDigest: string
+  integrityDigest: string
+  state: 'PENDING_INDEPENDENT_OWNER_REVIEW'
+  rawMediaIncluded: false
+  automaticAction: false
+  notification: 'NOT_SENT'
+  publication: 'NOT_PUBLISHED'
 }
 
 export type CameraObservationResult = {
@@ -38,7 +83,28 @@ export type CameraObservationResult = {
     identityResolution: 'NOT_PERFORMED'
     resultPersistence: 'NOT_PERSISTED'
   }
-  review: { state: 'OWNER_REVIEW_REQUIRED'; action: 'NOT_EXECUTED'; notification: 'NOT_SENT'; publication: 'NOT_PUBLISHED' }
+  review: CameraOwnerReviewRequired
+  reviewPacket: SyntheticCameraReviewPacket
+}
+
+export type ReviewedCameraObservation = {
+  reviewId: string
+  decision: 'approved' | 'rejected'
+  reviewPacketIntegrityDigest: string
+  ownerReview: {
+    state: 'APPROVED_FOR_SYNTHETIC_OBSERVATION_ONLY' | 'REJECTED_FOR_SYNTHETIC_OBSERVATION_ONLY'
+    reviewer: string
+    occurredAt: string
+  }
+  handoff: {
+    state: 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED'
+    rawMediaIncluded: false
+    sent: false
+    automaticAction: false
+    notification: 'NOT_SENT'
+    publication: 'NOT_PUBLISHED'
+  }
+  auditHash: string
 }
 
 export type SyntheticCameraConnectorConfig = {
@@ -54,6 +120,11 @@ type CameraFixture = {
   consentReceiptRef: string
   observation: CameraObservationResult['observation']
 }
+
+const SHA256_PATTERN = /^[a-f0-9]{64}$/
+const CAMERA_REVIEW_ID_PATTERN = /^synthetic-camera-review-[a-f0-9]{24}$/
+const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
+const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 
 const FIXTURES: Readonly<Record<string, CameraFixture>> = Object.freeze({
   'synthetic-loading-dock-001': {
@@ -78,6 +149,43 @@ function environmentPositiveInteger(value: string | undefined): number | undefin
   if (!value || !/^[1-9][0-9]*$/.test(value)) return undefined
   const parsed = Number(value)
   return Number.isSafeInteger(parsed) ? parsed : undefined
+}
+
+function digest(value: string): string { return createHash('sha256').update(value).digest('hex') }
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function exactObject(value: unknown, allowed: readonly string[], error: string): Record<string, unknown> {
+  if (!isRecord(value) || Object.keys(value).some((key) => !allowed.includes(key))) throw new ConnectorInputError(error)
+  return value
+}
+
+function requiredString(value: unknown, error: string, maximumLength: number): string {
+  if (typeof value !== 'string' || !value || value.length > maximumLength) throw new ConnectorInputError(error)
+  return value
+}
+
+function cameraReviewContext(context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): { product: string; workspaceId: string } {
+  if (typeof context.product !== 'string' || typeof context.workspaceId !== 'string' || !SCOPE_ID_PATTERN.test(context.product) || !SCOPE_ID_PATTERN.test(context.workspaceId)) {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CONTEXT')
+  }
+  return { product: context.product, workspaceId: context.workspaceId }
+}
+
+function containsControlCharacter(value: string): boolean {
+  return [...value].some((character) => {
+    const code = character.codePointAt(0)
+    return code !== undefined && (code < 32 || code === 127)
+  })
+}
+
+function reviewActor(value: unknown): string {
+  if (typeof value !== 'string' || !value.trim() || value.length > 160 || containsControlCharacter(value)) throw new OwnerGateError('CAMERA_REVIEWER_REQUIRED')
+  const actor = value.trim()
+  if (!ACTOR_PATTERN.test(actor)) throw new OwnerGateError('CAMERA_REVIEWER_REQUIRED')
+  return actor
 }
 
 function inputFrom(value: unknown): CameraObservationInput {
@@ -107,6 +215,154 @@ function fixtureFor(input: CameraObservationInput): CameraFixture {
   if (!fixture) throw new ConnectorUnavailableError('SYNTHETIC_CAMERA_FIXTURE_NOT_FOUND')
   if (fixture.purpose !== input.purpose || fixture.consentReceiptRef !== input.consent.receiptRef) throw new CameraConsentError('CAMERA_CONSENT_SCOPE_DENIED')
   return fixture
+}
+
+function reviewIdFor(product: string, workspaceId: string, cameraFixtureId: string, purpose: CameraPurpose, observationDigest: string): string {
+  return `synthetic-camera-review-${digest(`${product}:${workspaceId}:${cameraFixtureId}:${purpose}:${observationDigest}`).slice(0, 24)}`
+}
+
+function reviewPacketIntegrityMaterial(result: Omit<CameraObservationResult, 'reviewPacket'>, scopeBinding: SyntheticCameraReviewPacket['scopeBinding'], reviewId: string, observationDigest: string): Record<string, unknown> {
+  return {
+    reviewId,
+    scopeBinding,
+    observationDigest,
+    mode: result.mode,
+    liveStatus: result.liveStatus,
+    cameraFixtureId: result.cameraFixtureId,
+    purpose: result.purpose,
+    observation: result.observation,
+    privacy: result.privacy,
+    review: result.review,
+  }
+}
+
+function reviewPacketFor(result: Omit<CameraObservationResult, 'reviewPacket'>, product: string, workspaceId: string): SyntheticCameraReviewPacket {
+  const scopeBinding = { productDigest: digest(product), workspaceDigest: digest(workspaceId) }
+  const observationDigest = digest(JSON.stringify(result.observation))
+  const reviewId = reviewIdFor(product, workspaceId, result.cameraFixtureId, result.purpose, observationDigest)
+  return {
+    version: CAMERA_REVIEW_PACKET_VERSION,
+    reviewId,
+    scopeBinding,
+    observationDigest,
+    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(result, scopeBinding, reviewId, observationDigest))),
+    state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
+    rawMediaIncluded: false,
+    automaticAction: false,
+    notification: 'NOT_SENT',
+    publication: 'NOT_PUBLISHED',
+  }
+}
+
+function cameraObservationForReview(value: unknown): CameraObservationResult['observation'] {
+  const observation = exactObject(value, ['category', 'severity', 'findingCode', 'summary'], 'INVALID_CAMERA_REVIEW_OBSERVATION')
+  const category = observation.category
+  const severity = observation.severity
+  const findingCode = requiredString(observation.findingCode, 'INVALID_CAMERA_REVIEW_OBSERVATION', 120)
+  const summary = requiredString(observation.summary, 'INVALID_CAMERA_REVIEW_OBSERVATION', 320)
+  if ((category !== 'operational-safety' && category !== 'site-security') || (severity !== 'info' && severity !== 'warning' && severity !== 'critical')) {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_OBSERVATION')
+  }
+  return { category, severity, findingCode, summary }
+}
+
+function cameraPrivacyForReview(value: unknown): CameraObservationResult['privacy'] {
+  const privacy = exactObject(value, ['rawMediaAccepted', 'streamConnectionAttempted', 'deviceIdentifierRetained', 'biometricInference', 'identityResolution', 'resultPersistence'], 'INVALID_CAMERA_REVIEW_PRIVACY')
+  if (privacy.rawMediaAccepted !== false || privacy.streamConnectionAttempted !== false || privacy.deviceIdentifierRetained !== false || privacy.biometricInference !== 'NOT_PERFORMED' || privacy.identityResolution !== 'NOT_PERFORMED' || privacy.resultPersistence !== 'NOT_PERSISTED') {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_PRIVACY')
+  }
+  return { rawMediaAccepted: false, streamConnectionAttempted: false, deviceIdentifierRetained: false, biometricInference: 'NOT_PERFORMED', identityResolution: 'NOT_PERFORMED', resultPersistence: 'NOT_PERSISTED' }
+}
+
+function cameraOwnerReviewForReview(value: unknown): CameraOwnerReviewRequired {
+  const review = exactObject(value, ['state', 'action', 'notification', 'publication'], 'INVALID_CAMERA_OWNER_REVIEW')
+  if (review.state !== 'OWNER_REVIEW_REQUIRED' || review.action !== 'NOT_EXECUTED' || review.notification !== 'NOT_SENT' || review.publication !== 'NOT_PUBLISHED') {
+    throw new ConnectorInputError('INVALID_CAMERA_OWNER_REVIEW')
+  }
+  return { state: 'OWNER_REVIEW_REQUIRED', action: 'NOT_EXECUTED', notification: 'NOT_SENT', publication: 'NOT_PUBLISHED' }
+}
+
+/**
+ * Revalidates a returned fixture result before a review decision can append an
+ * audit event. The SHA-256 packet is an unkeyed mutation check, not a secret,
+ * signature, credential, authorization grant, or delivery capability.
+ */
+export function validateCameraObservationForReview(value: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): CameraObservationResult {
+  const scoped = cameraReviewContext(context)
+  const result = exactObject(value, ['mode', 'liveStatus', 'cameraFixtureId', 'purpose', 'observation', 'privacy', 'review', 'reviewPacket'], 'UNEXPECTED_CAMERA_REVIEW_RESULT_FIELD')
+  if (result.mode !== 'SYNTHETIC' || result.liveStatus !== CAMERA_LIVE_STATUS) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_MODE')
+  const cameraFixtureId = requiredString(result.cameraFixtureId, 'INVALID_CAMERA_REVIEW_FIXTURE', 120)
+  if (result.purpose !== 'operational-safety' && result.purpose !== 'site-security') throw new ConnectorInputError('INVALID_CAMERA_REVIEW_PURPOSE')
+  const purpose = result.purpose
+  const fixture = FIXTURES[cameraFixtureId]
+  if (!fixture || fixture.purpose !== purpose) throw new ConnectorInputError('CAMERA_REVIEW_FIXTURE_MISMATCH')
+  const observation = cameraObservationForReview(result.observation)
+  if (JSON.stringify(observation) !== JSON.stringify(fixture.observation)) throw new ConnectorInputError('CAMERA_REVIEW_OBSERVATION_MISMATCH')
+  const privacy = cameraPrivacyForReview(result.privacy)
+  const review = cameraOwnerReviewForReview(result.review)
+
+  const packet = exactObject(result.reviewPacket, ['version', 'reviewId', 'scopeBinding', 'observationDigest', 'integrityDigest', 'state', 'rawMediaIncluded', 'automaticAction', 'notification', 'publication'], 'UNEXPECTED_CAMERA_REVIEW_PACKET_FIELD')
+  const scopeBinding = exactObject(packet.scopeBinding, ['productDigest', 'workspaceDigest'], 'UNEXPECTED_CAMERA_REVIEW_PACKET_SCOPE_FIELD')
+  const productDigest = requiredString(scopeBinding.productDigest, 'INVALID_CAMERA_REVIEW_PACKET_SCOPE', 64)
+  const workspaceDigest = requiredString(scopeBinding.workspaceDigest, 'INVALID_CAMERA_REVIEW_PACKET_SCOPE', 64)
+  const observationDigest = requiredString(packet.observationDigest, 'INVALID_CAMERA_REVIEW_PACKET_DIGEST', 64)
+  const integrityDigest = requiredString(packet.integrityDigest, 'INVALID_CAMERA_REVIEW_PACKET_DIGEST', 64)
+  const reviewId = requiredString(packet.reviewId, 'INVALID_CAMERA_REVIEW_ID', 64)
+  if (!SHA256_PATTERN.test(productDigest) || !SHA256_PATTERN.test(workspaceDigest) || !SHA256_PATTERN.test(observationDigest) || !SHA256_PATTERN.test(integrityDigest) || !CAMERA_REVIEW_ID_PATTERN.test(reviewId)) {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_PACKET_DIGEST')
+  }
+  if (packet.version !== CAMERA_REVIEW_PACKET_VERSION || packet.state !== 'PENDING_INDEPENDENT_OWNER_REVIEW' || packet.rawMediaIncluded !== false || packet.automaticAction !== false || packet.notification !== 'NOT_SENT' || packet.publication !== 'NOT_PUBLISHED') {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_PACKET')
+  }
+  if (productDigest !== digest(scoped.product) || workspaceDigest !== digest(scoped.workspaceId)) throw new ConnectorInputError('CAMERA_REVIEW_PACKET_SCOPE_MISMATCH')
+  const normalizedWithoutPacket: Omit<CameraObservationResult, 'reviewPacket'> = { mode: 'SYNTHETIC', liveStatus: CAMERA_LIVE_STATUS, cameraFixtureId, purpose, observation, privacy, review }
+  const expectedObservationDigest = digest(JSON.stringify(observation))
+  const expectedReviewId = reviewIdFor(scoped.product, scoped.workspaceId, cameraFixtureId, purpose, expectedObservationDigest)
+  if (observationDigest !== expectedObservationDigest || reviewId !== expectedReviewId) throw new ConnectorInputError('CAMERA_REVIEW_PACKET_BINDING_MISMATCH')
+  const reviewPacket: SyntheticCameraReviewPacket = {
+    version: CAMERA_REVIEW_PACKET_VERSION, reviewId, scopeBinding: { productDigest, workspaceDigest }, observationDigest, integrityDigest,
+    state: 'PENDING_INDEPENDENT_OWNER_REVIEW', rawMediaIncluded: false, automaticAction: false, notification: 'NOT_SENT', publication: 'NOT_PUBLISHED',
+  }
+  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalizedWithoutPacket, reviewPacket.scopeBinding, reviewId, observationDigest)))) {
+    throw new ConnectorInputError('CAMERA_REVIEW_PACKET_INTEGRITY_MISMATCH')
+  }
+  return { ...normalizedWithoutPacket, reviewPacket }
+}
+
+/**
+ * Records an independent synthetic-only review decision. It never mutates a
+ * camera result, starts an action, contacts a device, sends a handoff, or
+ * publishes anything. A future durable review host is a separate owner choice.
+ */
+export async function independentlyReviewCameraObservation(result: CameraObservationResult, decision: 'approved' | 'rejected', ownerApproved: boolean, reviewer: string, auditLog: AuditLog, context: ConnectorRunContext): Promise<ReviewedCameraObservation> {
+  if (!ownerApproved) throw new OwnerGateError()
+  if (decision !== 'approved' && decision !== 'rejected') throw new ConnectorInputError('INVALID_CAMERA_REVIEW_DECISION')
+  const normalizedReviewer = reviewActor(reviewer)
+  const normalized = validateCameraObservationForReview(result, context)
+  if (normalizedReviewer === context.requestedBy) throw new MakerCheckerError('CAMERA_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
+  const occurredAt = context.now().toISOString()
+  const audit = await auditLog.append({
+    type: 'connector.camera.owner_reviewed', connectorId: CAMERA_CONNECTOR_ID,
+    product: context.product, workspaceId: context.workspaceId, requestedBy: context.requestedBy, checkedBy: normalizedReviewer,
+    correlationId: context.correlationId, scopes: [CAMERA_SCOPE], costCapCents: context.costCapCents, requestedItems: context.requestedItems,
+    occurredAt,
+    detail: {
+      reviewId: normalized.reviewPacket.reviewId,
+      decision,
+      observationDigest: normalized.reviewPacket.observationDigest,
+      reviewPacketIntegrityDigest: normalized.reviewPacket.integrityDigest,
+      rawMediaIncluded: false,
+      action: 'NOT_EXECUTED', notification: 'NOT_SENT', publication: 'NOT_PUBLISHED', handoff: 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED',
+    },
+  })
+  return {
+    reviewId: normalized.reviewPacket.reviewId,
+    decision,
+    reviewPacketIntegrityDigest: normalized.reviewPacket.integrityDigest,
+    ownerReview: { state: decision === 'approved' ? 'APPROVED_FOR_SYNTHETIC_OBSERVATION_ONLY' : 'REJECTED_FOR_SYNTHETIC_OBSERVATION_ONLY', reviewer: normalizedReviewer, occurredAt },
+    handoff: { state: 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED', rawMediaIncluded: false, sent: false, automaticAction: false, notification: 'NOT_SENT', publication: 'NOT_PUBLISHED' },
+    auditHash: audit.hash,
+  }
 }
 
 /**
@@ -141,7 +397,7 @@ export class SyntheticCameraConnector implements Connector<unknown, CameraObserv
     this.configured(ctx)
     const cameraInput = inputFrom(input)
     const fixture = fixtureFor(cameraInput)
-    const data: CameraObservationResult = {
+    const resultWithoutReviewPacket: Omit<CameraObservationResult, 'reviewPacket'> = {
       mode: 'SYNTHETIC', liveStatus: CAMERA_LIVE_STATUS, cameraFixtureId: cameraInput.cameraFixtureId, purpose: cameraInput.purpose,
       observation: fixture.observation,
       privacy: {
@@ -150,6 +406,7 @@ export class SyntheticCameraConnector implements Connector<unknown, CameraObserv
       },
       review: { state: 'OWNER_REVIEW_REQUIRED', action: 'NOT_EXECUTED', notification: 'NOT_SENT', publication: 'NOT_PUBLISHED' },
     }
+    const data: CameraObservationResult = { ...resultWithoutReviewPacket, reviewPacket: reviewPacketFor(resultWithoutReviewPacket, ctx.product, ctx.workspaceId) }
     return {
       data,
       provenance: {
