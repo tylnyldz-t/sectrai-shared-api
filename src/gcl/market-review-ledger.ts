@@ -1,3 +1,4 @@
+import { types as nodeTypes } from 'node:util'
 import { ConnectorInputError, ConnectorUnavailableError } from './errors.js'
 import type { AuditLog, ConnectorAuditEvent } from './types.js'
 
@@ -36,23 +37,66 @@ function canonicalTimestamp(value: unknown): string | null {
   return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value ? value : null
 }
 
-function normalizedEntry(value: MarketReviewLedgerEntry): MarketReviewLedgerEntry {
+/**
+ * Ledger ingress is an untrusted in-process seam: injected ledgers and audit
+ * logs can be implemented outside this module. Accepting inherited, hidden,
+ * accessor, or Proxy-shaped objects here would make the terminal decision
+ * depend on behavior rather than the bounded data record we intend to audit.
+ */
+function ownDataObject(value: unknown, fields: readonly string[], error: string): Record<string, unknown> {
   if (
-    !value || typeof value !== 'object' ||
-    Object.getOwnPropertySymbols(value).length > 0 || Object.getOwnPropertyNames(value).some((field) => !ENTRY_FIELDS.includes(field)) ||
-    !SCOPE_ID_PATTERN.test(value.product) || !SCOPE_ID_PATTERN.test(value.workspaceId) ||
-    !PLAN_ID_PATTERN.test(value.planId) || !REVIEW_ID_PATTERN.test(value.reviewId) ||
-    !DIGEST_PATTERN.test(value.planDigest) || !DIGEST_PATTERN.test(value.reviewPacketIntegrityDigest) ||
-    (value.decision !== 'acknowledged' && value.decision !== 'rejected') ||
-    !ACTOR_PATTERN.test(value.reviewedBy) || value.reviewedBy !== value.reviewedBy.trim()
+    !value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0
+  ) throw new ConnectorInputError(error)
+  const names = Object.getOwnPropertyNames(value)
+  if (names.length !== fields.length || names.some((field) => !fields.includes(field)) || fields.some((field) => !names.includes(field))) {
+    throw new ConnectorInputError(error)
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const data = Object.create(null) as Record<string, unknown>
+  for (const field of fields) {
+    const descriptor = descriptors[field]
+    if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) throw new ConnectorInputError(error)
+    data[field] = descriptor.value
+  }
+  return data
+}
+
+function normalizedEntry(value: unknown): MarketReviewLedgerEntry {
+  const candidate = ownDataObject(value, ENTRY_FIELDS, 'INVALID_MARKET_REVIEW_LEDGER_ENTRY')
+  const product = candidate.product
+  const workspaceId = candidate.workspaceId
+  const planId = candidate.planId
+  const planDigest = candidate.planDigest
+  const reviewId = candidate.reviewId
+  const reviewPacketIntegrityDigest = candidate.reviewPacketIntegrityDigest
+  const decision = candidate.decision
+  const reviewedBy = candidate.reviewedBy
+  if (
+    typeof product !== 'string' || typeof workspaceId !== 'string' || typeof planId !== 'string' ||
+    typeof planDigest !== 'string' || typeof reviewId !== 'string' ||
+    typeof reviewPacketIntegrityDigest !== 'string' || typeof reviewedBy !== 'string' ||
+    !SCOPE_ID_PATTERN.test(product) || !SCOPE_ID_PATTERN.test(workspaceId) ||
+    !PLAN_ID_PATTERN.test(planId) || !REVIEW_ID_PATTERN.test(reviewId) ||
+    !DIGEST_PATTERN.test(planDigest) || !DIGEST_PATTERN.test(reviewPacketIntegrityDigest) ||
+    (decision !== 'acknowledged' && decision !== 'rejected') ||
+    !ACTOR_PATTERN.test(reviewedBy) || reviewedBy !== reviewedBy.trim()
   ) throw new ConnectorInputError('INVALID_MARKET_REVIEW_LEDGER_ENTRY')
-  const reviewedAt = canonicalTimestamp(value.reviewedAt)
+  const reviewedAt = canonicalTimestamp(candidate.reviewedAt)
   if (!reviewedAt) throw new ConnectorInputError('INVALID_MARKET_REVIEW_LEDGER_ENTRY')
-  const digestPrefix = value.planDigest.slice(0, 24)
-  if (value.planId !== `synthetic-market-${digestPrefix}` || value.reviewId !== `synthetic-market-review-${digestPrefix}`) {
+  const digestPrefix = planDigest.slice(0, 24)
+  if (planId !== `synthetic-market-${digestPrefix}` || reviewId !== `synthetic-market-review-${digestPrefix}`) {
     throw new ConnectorInputError('INVALID_MARKET_REVIEW_LEDGER_ENTRY')
   }
-  return { ...value, reviewedAt }
+  return { product, workspaceId, planId, planDigest, reviewId, reviewPacketIntegrityDigest, decision, reviewedBy, reviewedAt }
+}
+
+function auditAppendResult(value: unknown): { hash: string } {
+  const candidate = ownDataObject(value, ['hash'], 'MARKET_REVIEW_AUDIT_APPEND_INVALID')
+  if (typeof candidate.hash !== 'string' || !DIGEST_PATTERN.test(candidate.hash)) {
+    throw new ConnectorUnavailableError('MARKET_REVIEW_AUDIT_APPEND_INVALID')
+  }
+  return { hash: candidate.hash }
 }
 
 function ledgerKey(entry: MarketReviewLedgerEntry): string {
@@ -103,10 +147,7 @@ export class InMemorySyntheticMarketReviewLedger implements MarketReviewLedger {
     const key = ledgerKey(normalized)
     return this.exclusively(key, async () => {
       if (this.decisions.has(key)) throw new ConnectorInputError('MARKET_REVIEW_ALREADY_DECIDED')
-      const audit = await this.auditLog.append(auditEvent(normalized))
-      if (!audit || typeof audit.hash !== 'string' || !DIGEST_PATTERN.test(audit.hash)) {
-        throw new ConnectorUnavailableError('MARKET_REVIEW_AUDIT_APPEND_INVALID')
-      }
+      const audit = auditAppendResult(await this.auditLog.append(auditEvent(normalized)))
       this.decisions.set(key, normalized)
       this.entries.push(normalized)
       return audit
