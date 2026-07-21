@@ -8,8 +8,13 @@ export type { MarketReviewDecision, MarketReviewLedger, MarketReviewLedgerEntry 
 export const MARKET_CONNECTOR_ID = 'market'
 export const MARKET_LIVE_STATUS = 'MARKET_LIVE_DISABLED'
 const MARKET_REVIEW_PACKET_VERSION = 'synthetic-market-review-packet-v1'
+export const MARKET_REVIEW_RECEIPT_VERSION = 'synthetic-market-review-receipt-v1'
 const MARKET_SCOPES = ['market:discover', 'market:capacity:quote', 'market:review'] as const
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
+const DIGEST_PATTERN = /^[a-f0-9]{64}$/
+const PLAN_ID_PATTERN = /^synthetic-market-[a-f0-9]{24}$/
+const REVIEW_ID_PATTERN = /^synthetic-market-review-[a-f0-9]{24}$/
+const REVIEW_RECEIPT_ID_PATTERN = /^synthetic-market-review-receipt-[a-f0-9]{24}$/
 
 export type AdosMarketControl = {
   id: `ADOS-${string}`
@@ -151,6 +156,42 @@ export type ReviewedSyntheticMarketPlan = {
     publication: false
   }
   auditHash: string
+  reviewReceipt: SyntheticMarketReviewReceipt
+}
+
+/**
+ * A local, deterministic D3 evidence object for an already-recorded D2
+ * decision. It deliberately has no authority beyond detecting mutation of the
+ * plan/receipt tuple that the caller already holds.
+ */
+export type SyntheticMarketReviewReceipt = {
+  version: typeof MARKET_REVIEW_RECEIPT_VERSION
+  receiptId: string
+  scopeBinding: {
+    productDigest: string
+    workspaceDigest: string
+  }
+  planId: string
+  planDigest: string
+  reviewId: string
+  reviewPacketIntegrityDigest: string
+  reviewerDigest: string
+  decision: MarketReviewDecision
+  reviewedAt: string
+  mode: 'SYNTHETIC'
+  liveStatus: 'LIVE_DISABLED'
+  execution: {
+    state: 'NOT_AUTHORIZED'
+    externalNetwork: false
+    reservation: false
+    booking: false
+    publication: false
+  }
+  auditHash: string
+  integrity: {
+    algorithm: 'sha256'
+    digest: string
+  }
 }
 
 export type MarketReviewContext = Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'scopes' | 'now'>
@@ -162,9 +203,14 @@ function positiveInteger(value: unknown): number | null {
 }
 
 function exactObject(input: unknown, allowed: readonly string[]): Record<string, unknown> {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConnectorInputError('INVALID_MARKET_REQUEST')
+  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.getPrototypeOf(input) !== Object.prototype || Object.getOwnPropertySymbols(input).length > 0) {
+    throw new ConnectorInputError('INVALID_MARKET_REQUEST')
+  }
   const object = input as Record<string, unknown>
-  if (Object.keys(object).some((key) => !allowed.includes(key))) throw new ConnectorInputError('INVALID_MARKET_REQUEST')
+  const fields = Object.getOwnPropertyNames(object)
+  if (fields.length !== allowed.length || fields.some((field) => !allowed.includes(field)) || allowed.some((field) => !fields.includes(field))) {
+    throw new ConnectorInputError('INVALID_MARKET_REQUEST')
+  }
   return object
 }
 
@@ -263,10 +309,22 @@ function reviewNow(context: unknown): Date {
 }
 
 function canonicalJson(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (Array.isArray(value)) {
+    if (
+      Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0 ||
+      !Number.isSafeInteger(value.length) || value.length > 1_000 ||
+      Object.getOwnPropertyNames(value).some((key) => key !== 'length' && !/^(0|[1-9][0-9]*)$/.test(key))
+    ) return '["$unsupportedArrayShape"]'
+    const items: string[] = []
+    for (let index = 0; index < value.length; index += 1) {
+      if (!Object.hasOwn(value, index)) return '["$unsupportedSparseArray"]'
+      items.push(canonicalJson(value[index]))
+    }
+    return `[${items.join(',')}]`
+  }
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>
-    if (Object.getOwnPropertySymbols(record).length > 0) return '{"$unsupportedSymbolFields":true}'
+    if (Object.getPrototypeOf(record) !== Object.prototype || Object.getOwnPropertySymbols(record).length > 0) return '{"$unsupportedObjectShape":true}'
     return `{${Object.getOwnPropertyNames(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
   }
   return JSON.stringify(value)
@@ -338,6 +396,69 @@ function reviewPacket(binding: MarketPlanBinding, request: SyntheticMarketInput)
   return {
     ...packet,
     integrity: { algorithm: 'sha256', digest: createHash('sha256').update(reviewPacketMaterial(packet)).digest('hex') },
+  }
+}
+
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex')
+}
+
+function canonicalTimestamp(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const parsed = new Date(value)
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString() === value ? value : null
+}
+
+function exactMarketObject(value: unknown, fields: readonly string[], error: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+    throw new ConnectorInputError(error)
+  }
+  const object = value as Record<string, unknown>
+  const names = Object.getOwnPropertyNames(object)
+  if (names.length !== fields.length || names.some((field) => !fields.includes(field)) || fields.some((field) => !names.includes(field))) {
+    throw new ConnectorInputError(error)
+  }
+  return object
+}
+
+function reviewExecutionForReceipt(value: unknown): SyntheticMarketReviewReceipt['execution'] {
+  const execution = exactMarketObject(value, ['state', 'externalNetwork', 'reservation', 'booking', 'publication'], 'INVALID_MARKET_REVIEW_RECEIPT_EXECUTION')
+  if (execution.state !== 'NOT_AUTHORIZED' || execution.externalNetwork !== false || execution.reservation !== false || execution.booking !== false || execution.publication !== false) {
+    throw new ConnectorInputError('INVALID_MARKET_REVIEW_RECEIPT_EXECUTION')
+  }
+  return reviewExecution()
+}
+
+function reviewReceiptMaterial(receipt: Omit<SyntheticMarketReviewReceipt, 'receiptId' | 'integrity'>): string {
+  return canonicalJson(receipt)
+}
+
+type ReviewedSyntheticMarketPlanDetails = Omit<ReviewedSyntheticMarketPlan, 'reviewReceipt'>
+
+function reviewReceiptFor(plan: SyntheticMarketPlan, reviewed: ReviewedSyntheticMarketPlanDetails): SyntheticMarketReviewReceipt {
+  const material: Omit<SyntheticMarketReviewReceipt, 'receiptId' | 'integrity'> = {
+    version: MARKET_REVIEW_RECEIPT_VERSION,
+    scopeBinding: {
+      productDigest: sha256(plan.binding.product),
+      workspaceDigest: sha256(plan.binding.workspaceId),
+    },
+    planId: plan.id,
+    planDigest: plan.integrity.digest,
+    reviewId: reviewed.reviewId,
+    reviewPacketIntegrityDigest: reviewed.reviewPacketIntegrityDigest,
+    reviewerDigest: sha256(reviewed.reviewedBy),
+    decision: reviewed.decision,
+    reviewedAt: reviewed.reviewedAt,
+    mode: 'SYNTHETIC',
+    liveStatus: 'LIVE_DISABLED',
+    execution: reviewExecution(),
+    auditHash: reviewed.auditHash,
+  }
+  const integrityDigest = sha256(reviewReceiptMaterial(material))
+  return {
+    ...material,
+    receiptId: `synthetic-market-review-receipt-${sha256(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
+    integrity: { algorithm: 'sha256', digest: integrityDigest },
   }
 }
 
@@ -425,6 +546,108 @@ export function validateSyntheticMarketPlanForReview(plan: unknown, context: Mar
   return expected
 }
 
+function reviewedMarketPlanForReceipt(value: unknown): { reviewed: ReviewedSyntheticMarketPlanDetails; receipt: unknown } {
+  const candidate = exactMarketObject(value, ['planId', 'reviewId', 'reviewPacketIntegrityDigest', 'decision', 'reviewedBy', 'reviewedAt', 'mode', 'execution', 'auditHash', 'reviewReceipt'], 'UNEXPECTED_MARKET_REVIEW_RECEIPT_FIELD')
+  const planId = candidate.planId
+  const reviewId = candidate.reviewId
+  const reviewPacketIntegrityDigest = candidate.reviewPacketIntegrityDigest
+  const auditHash = candidate.auditHash
+  const reviewedBy = canonicalActor(candidate.reviewedBy)
+  const reviewedAt = canonicalTimestamp(candidate.reviewedAt)
+  if (
+    typeof planId !== 'string' || !PLAN_ID_PATTERN.test(planId) ||
+    typeof reviewId !== 'string' || !REVIEW_ID_PATTERN.test(reviewId) ||
+    typeof reviewPacketIntegrityDigest !== 'string' || !DIGEST_PATTERN.test(reviewPacketIntegrityDigest) ||
+    typeof auditHash !== 'string' || !DIGEST_PATTERN.test(auditHash) ||
+    !reviewedBy || !reviewedAt || candidate.mode !== 'SYNTHETIC' ||
+    (candidate.decision !== 'acknowledged' && candidate.decision !== 'rejected')
+  ) throw new ConnectorInputError('INVALID_MARKET_REVIEW_RECEIPT')
+  return {
+    reviewed: {
+      planId,
+      reviewId,
+      reviewPacketIntegrityDigest,
+      decision: candidate.decision,
+      reviewedBy,
+      reviewedAt,
+      mode: 'SYNTHETIC',
+      execution: reviewExecutionForReceipt(candidate.execution),
+      auditHash,
+    },
+    receipt: candidate.reviewReceipt,
+  }
+}
+
+function marketReviewReceiptForValidation(value: unknown): SyntheticMarketReviewReceipt {
+  const candidate = exactMarketObject(value, ['version', 'receiptId', 'scopeBinding', 'planId', 'planDigest', 'reviewId', 'reviewPacketIntegrityDigest', 'reviewerDigest', 'decision', 'reviewedAt', 'mode', 'liveStatus', 'execution', 'auditHash', 'integrity'], 'UNEXPECTED_MARKET_REVIEW_RECEIPT_FIELD')
+  const scopeBinding = exactMarketObject(candidate.scopeBinding, ['productDigest', 'workspaceDigest'], 'INVALID_MARKET_REVIEW_RECEIPT_SCOPE')
+  const integrity = exactMarketObject(candidate.integrity, ['algorithm', 'digest'], 'INVALID_MARKET_REVIEW_RECEIPT_INTEGRITY')
+  const receiptId = candidate.receiptId
+  const planId = candidate.planId
+  const planDigest = candidate.planDigest
+  const reviewId = candidate.reviewId
+  const reviewPacketIntegrityDigest = candidate.reviewPacketIntegrityDigest
+  const reviewerDigest = candidate.reviewerDigest
+  const reviewedAt = canonicalTimestamp(candidate.reviewedAt)
+  const auditHash = candidate.auditHash
+  const productDigest = scopeBinding.productDigest
+  const workspaceDigest = scopeBinding.workspaceDigest
+  const integrityDigest = integrity.digest
+  if (
+    candidate.version !== MARKET_REVIEW_RECEIPT_VERSION ||
+    typeof receiptId !== 'string' || !REVIEW_RECEIPT_ID_PATTERN.test(receiptId) ||
+    typeof planId !== 'string' || !PLAN_ID_PATTERN.test(planId) ||
+    typeof planDigest !== 'string' || !DIGEST_PATTERN.test(planDigest) ||
+    typeof reviewId !== 'string' || !REVIEW_ID_PATTERN.test(reviewId) ||
+    typeof reviewPacketIntegrityDigest !== 'string' || !DIGEST_PATTERN.test(reviewPacketIntegrityDigest) ||
+    typeof reviewerDigest !== 'string' || !DIGEST_PATTERN.test(reviewerDigest) ||
+    typeof productDigest !== 'string' || !DIGEST_PATTERN.test(productDigest) ||
+    typeof workspaceDigest !== 'string' || !DIGEST_PATTERN.test(workspaceDigest) ||
+    !reviewedAt || candidate.mode !== 'SYNTHETIC' || candidate.liveStatus !== 'LIVE_DISABLED' ||
+    (candidate.decision !== 'acknowledged' && candidate.decision !== 'rejected') ||
+    typeof auditHash !== 'string' || !DIGEST_PATTERN.test(auditHash) ||
+    integrity.algorithm !== 'sha256' || typeof integrityDigest !== 'string' || !DIGEST_PATTERN.test(integrityDigest)
+  ) throw new ConnectorInputError('INVALID_MARKET_REVIEW_RECEIPT')
+  return {
+    version: MARKET_REVIEW_RECEIPT_VERSION,
+    receiptId,
+    scopeBinding: { productDigest, workspaceDigest },
+    planId,
+    planDigest,
+    reviewId,
+    reviewPacketIntegrityDigest,
+    reviewerDigest,
+    decision: candidate.decision,
+    reviewedAt,
+    mode: 'SYNTHETIC',
+    liveStatus: 'LIVE_DISABLED',
+    execution: reviewExecutionForReceipt(candidate.execution),
+    auditHash,
+    integrity: { algorithm: 'sha256', digest: integrityDigest },
+  }
+}
+
+/**
+ * D3 is a pure, local mutation check for an existing D2 result. It does not
+ * read the ledger or audit chain, append an event, consume quota, send a
+ * handoff, or authorize a market operation.
+ */
+export function validateSyntheticMarketReviewReceipt(sourcePlan: unknown, value: unknown, context: MarketReviewContext): ReviewedSyntheticMarketPlan {
+  const reviewedContext = reviewContext(context)
+  if (!reviewedContext.scopes.includes('market:review')) throw new ScopeError('MARKET_REVIEW_SCOPE_REQUIRED')
+  const plan = validateSyntheticMarketPlanForReview(sourcePlan, reviewedContext as MarketReviewContext)
+  const candidate = reviewedMarketPlanForReceipt(value)
+  const receipt = marketReviewReceiptForValidation(candidate.receipt)
+  if (
+    candidate.reviewed.planId !== plan.id || candidate.reviewed.reviewId !== plan.reviewPacket.reviewId ||
+    candidate.reviewed.reviewPacketIntegrityDigest !== plan.reviewPacket.integrity.digest ||
+    candidate.reviewed.reviewedBy === plan.binding.requestedBy
+  ) throw new ConnectorInputError('MARKET_REVIEW_RECEIPT_PACKET_MISMATCH')
+  const expected = reviewReceiptFor(plan, candidate.reviewed)
+  if (!canonicallyEqual(receipt, expected)) throw new ConnectorInputError('MARKET_REVIEW_RECEIPT_INTEGRITY_INVALID')
+  return { ...candidate.reviewed, reviewReceipt: expected }
+}
+
 /**
  * A proposal-only market adapter. It deliberately has no provider address,
  * fetch client, credential field, scheduler, persistence side effect, booking,
@@ -496,7 +719,10 @@ export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMark
     reviewedBy: canonicalReviewer,
     reviewedAt: reviewedAt.toISOString(),
   })
-  return {
+  if (!audit || typeof audit.hash !== 'string' || !DIGEST_PATTERN.test(audit.hash)) {
+    throw new ConnectorUnavailableError('MARKET_REVIEW_AUDIT_APPEND_INVALID')
+  }
+  const reviewed: ReviewedSyntheticMarketPlanDetails = {
     planId: validatedPlan.id,
     reviewId: validatedPlan.reviewPacket.reviewId,
     reviewPacketIntegrityDigest: validatedPlan.reviewPacket.integrity.digest,
@@ -507,6 +733,7 @@ export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMark
     execution: reviewExecution(),
     auditHash: audit.hash,
   }
+  return { ...reviewed, reviewReceipt: reviewReceiptFor(validatedPlan, reviewed) }
 }
 
 function environmentPositiveInteger(value: string | undefined): number | undefined {

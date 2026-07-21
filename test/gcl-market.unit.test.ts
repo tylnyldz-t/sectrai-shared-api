@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
-import { ADOS_10_MARKET_CONTROLS, MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, SyntheticMarketConnector, independentlyReviewSyntheticMarketPlan, syntheticMarketConnectorFromEnvironment, validateSyntheticMarketPlanForReview, type MarketCapacityQuoteInput, type MarketReviewContext, type SyntheticMarketConnectorConfig, type SyntheticMarketPlan } from '../src/gcl/market.js'
+import { ADOS_10_MARKET_CONTROLS, MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, MARKET_REVIEW_RECEIPT_VERSION, SyntheticMarketConnector, independentlyReviewSyntheticMarketPlan, syntheticMarketConnectorFromEnvironment, validateSyntheticMarketPlanForReview, validateSyntheticMarketReviewReceipt, type MarketCapacityQuoteInput, type MarketReviewContext, type SyntheticMarketConnectorConfig, type SyntheticMarketPlan } from '../src/gcl/market.js'
 import { InMemorySyntheticMarketReviewLedger } from '../src/gcl/market-review-ledger.js'
 import { dailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
@@ -184,6 +184,10 @@ test('synthetic market also rejects invalid direct-run governance values instead
     () => connector.run(capacityQuote, { ...context, scopes: ['market:capacity:quote', 'market:provider:write'] }),
     (error: unknown) => error instanceof ScopeError && error.message === 'MARKET_SCOPE_DENIED',
   )
+  await assert.rejects(
+    () => connector.run(Object.create(capacityQuote), context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REQUEST',
+  )
 })
 
 test('a distinct owner can audit a market review, but neither decision can authorize an execution', async () => {
@@ -223,10 +227,75 @@ test('a distinct owner can audit a market review, but neither decision can autho
   assert.equal(reviewed.reviewPacketIntegrityDigest, plan.reviewPacket.integrity.digest)
   assert.deepEqual(reviewed.execution, { state: 'NOT_AUTHORIZED', externalNetwork: false, reservation: false, booking: false, publication: false })
   assert.equal(reviewed.auditHash, setup.audit.entries[2]?.hash)
+  assert.equal(reviewed.reviewReceipt.version, MARKET_REVIEW_RECEIPT_VERSION)
+  assert.equal(reviewed.reviewReceipt.planId, plan.id)
+  assert.equal(reviewed.reviewReceipt.reviewId, plan.reviewPacket.reviewId)
+  assert.equal(reviewed.reviewReceipt.planDigest, plan.integrity.digest)
+  assert.equal(reviewed.reviewReceipt.reviewPacketIntegrityDigest, plan.reviewPacket.integrity.digest)
+  assert.match(reviewed.reviewReceipt.receiptId, /^synthetic-market-review-receipt-[a-f0-9]{24}$/)
+  assert.match(reviewed.reviewReceipt.reviewerDigest, /^[a-f0-9]{64}$/)
+  assert.equal(JSON.stringify(reviewed.reviewReceipt).includes('checker@example.test'), false)
+  assert.deepEqual(validateSyntheticMarketReviewReceipt(plan, reviewed, reviewContext), reviewed)
   assert.equal(setup.audit.entries[2]?.previousHash, setup.audit.entries[1]?.hash)
   assert.equal(setup.audit.entries[2]?.event.type, 'connector.market.owner_reviewed')
   assert.equal(setup.audit.entries[2]?.event.detail.maker, undefined)
   assert.equal(setup.audit.entries[2]?.event.detail.reviewPacketIntegrityDigest, plan.reviewPacket.integrity.digest)
+  assert.equal(setup.quota.requests.length, 1)
+})
+
+test('D3 receipt validation is local-only and rejects receipt, plan, scope, sparse-array, and prototype drift without another write', async () => {
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const plan = result.data as SyntheticMarketPlan
+  const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
+  const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext)
+  const clone = () => structuredClone(reviewed)
+  const mustReject = (candidate: unknown, errorMessage: string) => assert.throws(
+    () => validateSyntheticMarketReviewReceipt(plan, candidate, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === errorMessage,
+  )
+
+  const executionDrift = clone()
+  executionDrift.reviewReceipt.execution.booking = true as never
+  mustReject(executionDrift, 'INVALID_MARKET_REVIEW_RECEIPT_EXECUTION')
+
+  const injected = clone() as typeof reviewed & { providerCredential?: string }
+  injected.providerCredential = 'synthetic-not-accepted'
+  mustReject(injected, 'UNEXPECTED_MARKET_REVIEW_RECEIPT_FIELD')
+
+  const hiddenReceiptField = clone()
+  Object.defineProperty(hiddenReceiptField.reviewReceipt, 'providerEndpoint', { value: 'synthetic-not-accepted' })
+  mustReject(hiddenReceiptField, 'UNEXPECTED_MARKET_REVIEW_RECEIPT_FIELD')
+
+  const prototypeReceipt = clone()
+  Object.setPrototypeOf(prototypeReceipt.reviewReceipt, { providerAddress: 'synthetic-not-accepted' })
+  mustReject(prototypeReceipt, 'UNEXPECTED_MARKET_REVIEW_RECEIPT_FIELD')
+
+  const integrityDrift = clone()
+  integrityDrift.reviewReceipt.integrity.digest = 'a'.repeat(64)
+  mustReject(integrityDrift, 'MARKET_REVIEW_RECEIPT_INTEGRITY_INVALID')
+
+  const prototypePlan = structuredClone(plan)
+  Object.setPrototypeOf(prototypePlan, { providerAddress: 'synthetic-not-accepted' })
+  assert.throws(
+    () => validateSyntheticMarketReviewReceipt(prototypePlan, reviewed, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID',
+  )
+
+  const sparsePlan = structuredClone(plan)
+  const sparseScopes = ['market:capacity:quote']
+  delete sparseScopes[0]
+  sparsePlan.binding.scopes = sparseScopes
+  assert.throws(
+    () => validateSyntheticMarketReviewReceipt(sparsePlan, reviewed, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID',
+  )
+  assert.throws(
+    () => validateSyntheticMarketReviewReceipt(plan, reviewed, { ...reviewContext, scopes: ['market:discover'] }),
+    (error: unknown) => error instanceof ScopeError && error.message === 'MARKET_REVIEW_SCOPE_REQUIRED',
+  )
+  assert.equal(setup.reviews.entries.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
   assert.equal(setup.quota.requests.length, 1)
 })
 
@@ -338,6 +407,19 @@ test('D2 ledger does not create a terminal receipt when its audit append is malf
     (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_REVIEW_AUDIT_APPEND_INVALID',
   )
   assert.equal(ledger.entries.length, 0)
+})
+
+test('D3 refuses an injected ledger result whose audit hash is malformed before it can return a receipt', async () => {
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const plan = result.data as SyntheticMarketPlan
+  const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', { recordTerminalReview: async () => ({ hash: 'malformed-audit-hash' }) }, reviewContext),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_REVIEW_AUDIT_APPEND_INVALID',
+  )
+  assert.equal(setup.audit.entries.length, 2)
+  assert.equal(setup.quota.requests.length, 1)
 })
 
 test('ADOS 10 controls are complete and explicitly prohibit egress and production launch', () => {
