@@ -303,15 +303,10 @@ function canonicalScopeId(value: unknown): string | null {
 }
 
 function reviewContext(context: unknown): { product: string; workspaceId: string; scopes: readonly string[] } {
-  if (!context || typeof context !== 'object' || Array.isArray(context)) throw new ConnectorInputError('INVALID_MARKET_REVIEW_CONTEXT')
-  const candidate = exactMarketObject(
-    context,
-    Object.hasOwn(context, 'now') ? ['product', 'workspaceId', 'scopes', 'now'] : ['product', 'workspaceId', 'scopes'],
-    'INVALID_MARKET_REVIEW_CONTEXT',
-  )
+  const candidate = exactMarketObject(context, ['product', 'workspaceId', 'scopes', 'now'], 'INVALID_MARKET_REVIEW_CONTEXT')
   const product = canonicalScopeId(candidate.product)
   const workspaceId = canonicalScopeId(candidate.workspaceId)
-  if (!product || !workspaceId || (Object.hasOwn(candidate, 'now') && typeof candidate.now !== 'function') || !Array.isArray(candidate.scopes) || candidate.scopes.some((scope) => typeof scope !== 'string' || !MARKET_SCOPES.includes(scope as typeof MARKET_SCOPES[number]))) {
+  if (!product || !workspaceId || typeof candidate.now !== 'function' || !Array.isArray(candidate.scopes) || candidate.scopes.some((scope) => typeof scope !== 'string' || !MARKET_SCOPES.includes(scope as typeof MARKET_SCOPES[number]))) {
     throw new ConnectorInputError('INVALID_MARKET_REVIEW_CONTEXT')
   }
   return { product, workspaceId, scopes: candidate.scopes }
@@ -652,7 +647,7 @@ function marketReviewReceiptForValidation(value: unknown): SyntheticMarketReview
 export function validateSyntheticMarketReviewReceipt(sourcePlan: unknown, value: unknown, context: MarketReviewContext): ReviewedSyntheticMarketPlan {
   const reviewedContext = reviewContext(context)
   if (!reviewedContext.scopes.includes('market:review')) throw new ScopeError('MARKET_REVIEW_SCOPE_REQUIRED')
-  const plan = validateSyntheticMarketPlanForReview(sourcePlan, reviewedContext as MarketReviewContext)
+  const plan = validateSyntheticMarketPlanForReview(sourcePlan, context)
   const candidate = reviewedMarketPlanForReceipt(value)
   const receipt = marketReviewReceiptForValidation(candidate.receipt)
   if (
@@ -720,7 +715,7 @@ function marketReviewAuditWitnessForValidation(value: unknown): SyntheticMarketR
 export function validateSyntheticMarketReviewAuditWitness(sourcePlan: unknown, value: unknown, witnessValue: unknown, context: MarketReviewContext): SyntheticMarketReviewAuditWitness {
   const reviewedContext = reviewContext(context)
   if (!reviewedContext.scopes.includes('market:review')) throw new ScopeError('MARKET_REVIEW_SCOPE_REQUIRED')
-  const plan = validateSyntheticMarketPlanForReview(sourcePlan, reviewedContext as MarketReviewContext)
+  const plan = validateSyntheticMarketPlanForReview(sourcePlan, context)
   const reviewed = validateSyntheticMarketReviewReceipt(plan, value, context)
   const witness = marketReviewAuditWitnessForValidation(witnessValue)
   const expectedEvent = reviewAuditEvent(plan, reviewed)
@@ -794,7 +789,7 @@ export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMark
   if (!reviewedContext.scopes.includes('market:review')) throw new ScopeError('MARKET_REVIEW_SCOPE_REQUIRED')
   if (decision !== 'acknowledged' && decision !== 'rejected') throw new ConnectorInputError('INVALID_MARKET_REVIEW_DECISION')
   if (!reviewLedger || typeof reviewLedger.recordTerminalReview !== 'function') throw new ConnectorUnavailableError('MARKET_REVIEW_LEDGER_REQUIRED')
-  const validatedPlan = validateSyntheticMarketPlanForReview(plan, reviewedContext as MarketReviewContext)
+  const validatedPlan = validateSyntheticMarketPlanForReview(plan, context)
   if (canonicalReviewer === validatedPlan.binding.requestedBy) throw new MakerCheckerError('MARKET_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
 
   const audit = await reviewLedger.recordTerminalReview({
