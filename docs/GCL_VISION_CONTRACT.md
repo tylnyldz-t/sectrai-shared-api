@@ -21,6 +21,19 @@ The synthetic fixture field allowlist mirrors the document fields used by Xontai
 
 Every proposal remains `owner-only`, `pending`, `automaticApply: false`, and `automaticPublication: false`. `independentlyReviewSyntheticDocumentProposal()` enforces maker–checker separation: the actor who prepared the proposal cannot review it. Even an `approved` review only appends a hash-chain audit event; its Masa handoff remains `sent: false` and requires a separate owner-controlled action outside this module.
 
+## D1 — review-packet integrity boundary
+
+The proposal contains a `synthetic-document-review-packet-v1`. Before it appends a review audit event, the module validates all of the following again:
+
+- the product/workspace-derived proposal ID and synthetic URI, so a proposal cannot be reviewed in another scope;
+- evidence metadata only (no raw bytes or `rawContentStored: true`);
+- sorted, unique allowlisted fields; standard-value digests; sensitive-field masks; and `confidence: 0`;
+- the still-pending, owner-only, no-auto-apply/no-auto-publication state;
+- the review packet's scope digests and integrity digest; and
+- a non-blank independent reviewer plus only `approved` or `rejected` as a decision.
+
+Any malformed, cross-scope, altered, raw-sensitive, or non-pending proposal fails before the review audit append. The integrity digest is deliberately **unkeyed**: it detects accidental or in-process mutation, but is not a signature, credential, capability, or proof of authorization. A future durable host must resolve a proposal through its own scoped persistence/audit records before it can treat a review as actionable. That host, durable review state, any send/apply action, and any provider integration are outside this module.
+
 ## Safe configuration
 
 These values configure a synthetic proposal limit only; they cannot enable a provider or a live execution path:
@@ -33,8 +46,8 @@ GCL_VISION_DAILY_RUN_QUOTA=5
 GCL_VISION_DAILY_ITEM_QUOTA=5
 ```
 
-No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`.
+No migration is added. Durable audit (`gcl-audit`) and usage (`gcl-vision-usage`) records use the existing `Record` table when a future product-owned wiring layer deliberately constructs `PrismaHashChainAuditLog` and `PrismaDailyConnectorQuota`. D1 adds no persistence, review-state mutation, migration, credential, or network client.
 
 ## ADOS controls
 
-The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. It makes no migration, promotion, publication, or provider request.
+The contract keeps product data/runtime isolated, default-denies missing policy inputs, uses evidence references rather than raw content, requires owner authority plus independent checker review, produces a scoped hash-chain audit, makes AI/OCR suggestion-only, and treats any future launch/live adapter as a separate owner decision. D1 additionally rejects review-packet tampering and cross-scope review before audit. It makes no migration, promotion, publication, or provider request.

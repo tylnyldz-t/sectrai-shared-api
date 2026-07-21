@@ -69,6 +69,7 @@ test('GM2 rejects boundary evidence, expired consent, duplicate fields, control 
   await assert.rejects(() => runner.run({ ...request, input: { ...input, syntheticFields: [...input.syntheticFields, { field: 'containerId', value: 'duplicate' }] } }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_SYNTHETIC_DOCUMENT_FIELD')
   await assert.rejects(() => runner.run({ ...request, input: { ...input, syntheticFields: [{ field: 'containerId', value: 'unsafe\u0000value' }] } }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_SYNTHETIC_DOCUMENT_VALUE')
   await assert.rejects(() => runner.run({ ...request, actor: '   ', input }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CONNECTOR_CONTEXT')
+  await assert.rejects(() => runner.run({ ...request, product: 1 as never, input }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CONNECTOR_CONTEXT')
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
 })
