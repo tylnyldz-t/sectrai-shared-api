@@ -28,6 +28,23 @@ DELETE /api/products/:product/workspaces/:workspaceId/modules/:moduleId/records/
 - `PATCH` accepts `{ values, status? }` and returns `{ record }`.
 - `DELETE` returns `204` only when the record exists in the exact product/workspace/module scope.
 
+## GM2 Vision / OCR connector
+
+`POST /api/products/:product/workspaces/:workspaceId/gcl/connectors/vision-ocr/runs` is an owner-gated, synthetic-only document/receipt/identity scan contract. It requires the product key plus `X-Sectrai-Owner-Token` and `X-Sectrai-Owner-Actor`; the request body is bounded to:
+
+```json
+{
+  "input": { "synthetic": true, "documentType": "identity", "fixtureId": "synthetic-identity-001" },
+  "scopes": ["vision:scan"],
+  "costCapCents": 25,
+  "requestedItems": 1
+}
+```
+
+The adapter has no HTTP client, provider credential, or raw-image input. It resolves only built-in synthetic fixture IDs, returns structured **masked** fields, and always reports `mode: "SYNTHETIC"` and `liveStatus: "LIVE_DISABLED"`. Any live opt-in, absent owner gate, missing cost/quota configuration, unknown fixture, or raw-image-shaped input fails closed. Identity numbers, names, birth dates, addresses, signatures, and document identifiers are masked before the result or audit provenance is constructed.
+
+Every admitted run must be within the per-run cost ceiling and daily run/scan quota. It creates requested/succeeded/failed entries in a per-product/workspace SHA-256 audit chain. The normal record API cannot read or mutate the reserved `gcl-audit` and `gcl-usage` modules. A scan result is `OWNER_REVIEW_REQUIRED`, `NOT_PERSISTED`, and `NOT_PUBLISHED`; callers must create any evidence record through their own separately approved workflow.
+
 ## Run and migrate
 
 ```bash
@@ -36,7 +53,9 @@ DATABASE_URL='your Neon URL' npm run db:migrate
 DATABASE_URL='your Neon URL' SHARED_API_KEY_HEALTH='...' npm start
 ```
 
-`npm test` is a real Neon integration test. It creates records only under the temporary `sectrai-integration-test` product, verifies create → list → edit → a new Prisma connection → delete, and cleans those records up.
+With `DATABASE_URL` set, `npm test` also runs the real Neon integration test: it creates records only under the temporary `sectrai-integration-test` product, verifies create → list → edit → a new Prisma connection → delete, and cleans those records up. It is skipped when no database is configured.
+
+The GM2 unit suite runs without a database or network: `node --import tsx test/gcl.vision.unit.test.ts`.
 
 ## Product adaptation guide
 
