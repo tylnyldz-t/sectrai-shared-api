@@ -531,3 +531,92 @@ JARVIS/JNC launch; and synthetic test evidence is never a deployment or
 live-enable decision. D6 performs local immutable Git-object reads and
 in-process tests only: no credential load, provider/network/device access,
 send, `main` write, or production write.
+
+## D7 — next committed connector package
+
+D7 pins the next committed package after D6: RA OCR `62ed9eb`, RA 3D/game
+`b7e68b9`, RA market `ee6209a`, RFID `a3ab022`, translation `c5ce740`, and
+camera `f0a524c`. RA image and language education have no later committed
+connector package, so their D6 evidence remains current; RA voice remains at
+its D1 snapshot. This is still a local immutable Git-object audit: every
+target source file is read with `git show <pinned-commit>:<path>` and checked
+against its re-derived Git blob ID. Mutable sibling-worktree contents, local
+environment files, credentials, sockets, providers, processes, migrations,
+and production targets are not audit inputs.
+
+D7 expands the package boundary when a public connector does not itself move.
+RA 3D/game additionally roots `src/gcl/game-engine.ts`
+(`2fcb35bda06524eb9c1f1c31f1c080eab1b59461`) in the audited local GCL
+closure. Translation likewise roots its changed hash-chain audit module
+(`5ed64f5eb137e69c614fab7632d3d5c80b43f6bb`) and artifact-storage module
+(`57c9e99c98a932d0ae1c4efde03e2762126322e4`). These companion roots receive
+the same import-closure, no-egress, no-credential, no-launch, and no-publish
+checks as the connector and governed runner; they are not treated as an
+execution path.
+
+Run the complete D1–D7 immutable source audit with:
+
+```bash
+npm run test:conformance
+```
+
+| Connector | D7 source-only change/evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D7 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | v8 review packets bind ASCII-case-insensitive actor identity and reject a maker whose differently cased or trimmed identifier attempts independent review | `requested` only | Pass | Nonconformant |
+| RA 3D/game | Both GM5/GM6 input boundaries and the governed runner copy only exact own-data fields; the game-engine companion and result boundary remain contract-only | `requested` only | Pass | Nonconformant |
+| RA market | The no-action market review evidence is hardened without adding a quote, reservation, booking, publication, transport, or live opt-in | `requested` only | Pass | Nonconformant |
+| RFID | Fixed non-simulation boundary fixtures reject private-site/owner claims, person or asset linkage, lawful-basis/signage/VERBIS assertions, legal input, pilot enablement, reader, and observed data | `requested`, `failed` | Pass | Conformant |
+| Translation | Durable artifact reads and decisions replay the exact same-scope requested → succeeded → artifact → terminal-review audit lifecycle before returning or mutating metadata | `requested`, `failed` | Pass | Conformant |
+| Camera | A compact D7 review-evidence manifest rechecks the D2 review receipt and D6 audit-trail receipt while omitting media, device, identity, decision text, and audit hashes | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` is limited to this immutable, synthetic IV GCL envelope. It does
+not authorize a provider, credential, real OCR/media/RFID/camera input,
+database integration, JNC/JARVIS launch, market operation, send, publication,
+handoff, production write, or live enablement.
+
+### D7 negative and edge evidence
+
+- The owner-denial classifier now recognizes the D7 runner's copied
+  `safeRequest.ownerApproved !== true` gate and still requires it before
+  preflight, requested audit, and quota reservation. The copy is important:
+  an accessor or inherited field cannot manufacture approval after validation.
+- The fail-closed source scanner now rejects `process.binding`, `process.dlopen`,
+  and `process.mainModule`, `import.meta`, and any Bun or Deno global. D7
+  negative probes cover optional `process.binding`, import-meta resolution,
+  `Bun.connect`, `Deno.connect`, and `Deno.serve`. Direct synthetic limit
+  settings remain allowed, so the new rule does not weaken normal disabled-mode
+  configuration.
+- The scanner still rejects dynamic/evaluated module loading, built-in-module
+  recovery, globals and reflection, browser egress capabilities, credential-like
+  configuration reads, endpoints, subprocesses, auto-publication, non-local
+  runtime imports, and imports escaping `src/gcl`.
+- Quota classification remains deliberately conservative. RA OCR, 3D/game,
+  and market reserve quota before the protected `try` that appends
+  `connector.run.failed`; their source cannot prove a linked quota-denial audit.
+  RFID, translation, and camera reserve inside the protected lifecycle.
+
+### D7 test evidence and ADOS boundary
+
+`npm run test:conformance` passes all D1–D7 pin, closure, disabled-mode,
+owner-denial, quota-classification, and negative-source probes. Exact D7
+commits were also archived to a temporary local directory before their selected
+synthetic unit suites ran: OCR, 3D/game, both market suites, RFID, both
+translation suites, and camera. Translation's HTTP safety suite uses its own
+in-memory seams plus a temporary no-op `PrismaClient` module stub solely to
+satisfy its erased/runtime type boundary; it receives neither a database URL
+nor a real Prisma operation. No test used a credential, external provider,
+device, migration, production database, send, publish, or `main`/production
+write.
+
+RA OCR, 3D/game, and market still require protected quota reservation (or an
+equivalent linked failed-audit path) and behavioural rejecting-quota tests
+before GCL certification. The historical D1 Apify live-opt-in blocker remains
+separate and unresolved.
+
+All ten ADOS rules remain enforced: no product data-plane join; default-deny
+and `LIVE_DISABLED` configuration; immutable source/blob pointers only; no
+inferred owner decision; maker–checker where applicable; no hidden audit gap;
+no migration; proposal-only/no-action output; no JARVIS/JNC start; and no
+synthetic test result is a deployment or live-enable decision. D7 makes only
+local Git-object reads and synthetic test executions; it adds no provider,
+credential, real-world input, device connection, delivery, or production mutation.
