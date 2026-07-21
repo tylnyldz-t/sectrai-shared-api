@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: sectrai-shared-api
+    runtime: node
+    region: frankfurt
+    plan: starter
+    buildCommand: npm ci && npm run build
+    preDeployCommand: npm run db:migrate
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: SHARED_API_KEY_HEALTH
+        sync: false

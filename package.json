@@ -1,0 +1,30 @@
+{
+  "name": "sectrai-shared-api",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "prisma generate && tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "oxlint src test",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate deploy",
+    "test": "tsx --test test/**/*.test.ts",
+    "verify": "npm run typecheck && npm run lint && npm run build"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.12.0",
+    "express": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.3",
+    "@types/node": "^24.3.0",
+    "prisma": "^6.12.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5.9.2",
+    "oxlint": "^1.12.0"
+  },
+  "engines": { "node": ">=20" }
+}
