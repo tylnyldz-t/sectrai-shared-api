@@ -47,9 +47,10 @@ Every registered connector is governed by these rules:
   same chain; D2's explicitly injected process-local review ledger permits at
   most one terminal decision for its exact plan/packet tuple. D3 can only
   canonically reconstruct the caller-held receipt for that decision; D4 can
-  locally compare that receipt with one caller-held audit hash link. Neither
-  reads audit storage, writes, nor approves execution. Both records remain
-  `NOT_AUTHORIZED`.
+  locally compare that receipt with one caller-held audit hash link; D5 can
+  read-check only the caller-held requested/succeeded/review segment. None
+  reads audit storage, writes, or approves execution. All resulting evidence
+  remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
   error. There is no local fallback, provider fallback, queue worker, or
@@ -126,8 +127,9 @@ duplicate receipt only within the injected process; it is not durable,
 cross-process replay prevention. D3's receipt revalidation reads neither that
 ledger nor the audit chain and performs no write. D4 accepts one caller-held
 audit event and predecessor hash only to recompute the receipt's single
-hash-chain link; it neither reads audit storage nor proves durable retention or
-full-chain integrity. Both are local mutation checks, never signatures,
+hash-chain link. D5 checks only the internal continuity of one caller-held
+requested/succeeded/review segment; it does not prove its first predecessor or
+any durable retention. All three are local mutation checks, never signatures,
 credentials, approval workflows, or execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
 

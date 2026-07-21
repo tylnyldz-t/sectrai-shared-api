@@ -69,4 +69,8 @@ credential, approval workflow, or execution path. D4 can additionally compare
 that receipt with one caller-held audit event and predecessor hash by
 recomputing its single SHA-256 chain link. It performs no storage lookup or
 write, does not prove durable audit retention or complete-chain integrity, and
-cannot authorize any action.
+cannot authorize any action. D5 can only read-check a caller-held
+`requested → succeeded → owner_reviewed` segment, including its two internal
+links and canonical run semantics. It returns fixed `NOT_AUTHORIZED` evidence
+only, does not prove durable storage or a predecessor, and cannot authorize any
+action.

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
+import { hashAuditEvent, InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
-import { ADOS_10_MARKET_CONTROLS, MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, MARKET_REVIEW_AUDIT_WITNESS_VERSION, MARKET_REVIEW_RECEIPT_VERSION, SyntheticMarketConnector, independentlyReviewSyntheticMarketPlan, syntheticMarketConnectorFromEnvironment, validateSyntheticMarketPlanForReview, validateSyntheticMarketReviewAuditWitness, validateSyntheticMarketReviewReceipt, type MarketCapacityQuoteInput, type MarketReviewContext, type SyntheticMarketConnectorConfig, type SyntheticMarketPlan } from '../src/gcl/market.js'
+import { ADOS_10_MARKET_CONTROLS, MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, MARKET_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, MARKET_REVIEW_AUDIT_WITNESS_VERSION, MARKET_REVIEW_RECEIPT_VERSION, SyntheticMarketConnector, independentlyReviewSyntheticMarketPlan, syntheticMarketConnectorFromEnvironment, validateSyntheticMarketPlanForReview, validateSyntheticMarketReviewAuditTrailWitness, validateSyntheticMarketReviewAuditWitness, validateSyntheticMarketReviewReceipt, type MarketCapacityQuoteInput, type MarketReviewContext, type SyntheticMarketConnectorConfig, type SyntheticMarketPlan } from '../src/gcl/market.js'
 import { InMemorySyntheticMarketReviewLedger } from '../src/gcl/market-review-ledger.js'
 import { dailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
@@ -356,6 +356,95 @@ test('D4 audit-witness validation is local-only and rejects event, chain-link, c
     () => validateSyntheticMarketReviewAuditWitness(plan, reviewed, witness, { ...reviewContext, providerCredential: 'synthetic-not-accepted' } as never),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REVIEW_CONTEXT',
   )
+  assert.equal(setup.reviews.entries.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
+  assert.equal(setup.quota.requests.length, 1)
+})
+
+test('D5 audit-trail witness verifies one caller-held requested/succeeded/review segment and rejects discontinuity, semantic, time, accessor, and proxy drift without writes', async () => {
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const plan = result.data as SyntheticMarketPlan
+  const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
+  const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext)
+  const requestedEntry = setup.audit.entries[0]
+  const succeededEntry = setup.audit.entries[1]
+  const ownerReviewEntry = setup.audit.entries[2]
+  assert.ok(requestedEntry)
+  assert.ok(succeededEntry)
+  assert.ok(ownerReviewEntry)
+  const trail = () => ({
+    requestedRun: structuredClone(requestedEntry),
+    succeededRun: structuredClone(succeededEntry),
+    ownerReview: structuredClone(ownerReviewEntry),
+  })
+
+  const witness = validateSyntheticMarketReviewAuditTrailWitness(plan, reviewed, trail(), reviewContext)
+  assert.equal(witness.version, MARKET_REVIEW_AUDIT_TRAIL_WITNESS_VERSION)
+  assert.equal(witness.planId, plan.id)
+  assert.equal(witness.reviewId, reviewed.reviewId)
+  assert.equal(witness.requestedAuditHash, requestedEntry.hash)
+  assert.equal(witness.succeededAuditHash, succeededEntry.hash)
+  assert.equal(witness.reviewAuditHash, reviewed.auditHash)
+  assert.equal(witness.predecessorHash, null)
+  assert.equal(witness.mode, 'SYNTHETIC')
+  assert.equal(witness.liveStatus, 'LIVE_DISABLED')
+  assert.equal(witness.state, 'SYNTHETIC_MARKET_REVIEW_AUDIT_TRAIL_VERIFIED_NO_ACTION')
+  assert.deepEqual(witness.execution, { state: 'NOT_AUTHORIZED', externalNetwork: false, reservation: false, booking: false, publication: false })
+
+  const discontinuous = trail()
+  discontinuous.succeededRun.previousHash = '0'.repeat(64)
+  discontinuous.succeededRun.hash = hashAuditEvent(discontinuous.succeededRun.event, discontinuous.succeededRun.previousHash)
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailWitness(plan, reviewed, discontinuous, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_AUDIT_TRAIL_CHAIN_MISMATCH',
+  )
+
+  const semanticMismatch = trail()
+  semanticMismatch.succeededRun.event.actor = 'another-owner@example.test'
+  semanticMismatch.succeededRun.hash = hashAuditEvent(semanticMismatch.succeededRun.event, semanticMismatch.succeededRun.previousHash)
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailWitness(plan, reviewed, semanticMismatch, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_AUDIT_TRAIL_EVENT_MISMATCH',
+  )
+
+  const timeInversion = trail()
+  timeInversion.requestedRun.event.occurredAt = '2026-07-22T12:00:01.000Z'
+  timeInversion.requestedRun.hash = hashAuditEvent(timeInversion.requestedRun.event, timeInversion.requestedRun.previousHash)
+  timeInversion.succeededRun.previousHash = timeInversion.requestedRun.hash
+  timeInversion.succeededRun.event.detail.requestedAuditHash = timeInversion.requestedRun.hash
+  timeInversion.succeededRun.hash = hashAuditEvent(timeInversion.succeededRun.event, timeInversion.succeededRun.previousHash)
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailWitness(plan, reviewed, timeInversion, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_AUDIT_TRAIL_TIME_INVALID',
+  )
+
+  const hiddenProvider = trail() as ReturnType<typeof trail> & { requestedRun: { event: { detail: Record<string, unknown> } } }
+  Object.defineProperty(hiddenProvider.requestedRun.event.detail, 'providerCredential', { value: 'synthetic-not-accepted', enumerable: false })
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailWitness(plan, reviewed, hiddenProvider, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_MARKET_AUDIT_TRAIL_REQUESTED_DETAIL_FIELD',
+  )
+
+  const accessorTrail = trail()
+  let accessorRead = false
+  Object.defineProperty(accessorTrail.succeededRun, 'hash', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailWitness(plan, reviewed, accessorTrail, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_MARKET_AUDIT_TRAIL_ENTRY_FIELD',
+  )
+  assert.equal(accessorRead, false)
+
+  let proxyTrapRead = false
+  const proxyTrail = new Proxy(trail(), { get() { proxyTrapRead = true; throw new Error('PROXY_TRAP_MUST_NOT_RUN') } })
+  assert.throws(
+    () => validateSyntheticMarketReviewAuditTrailWitness(plan, reviewed, proxyTrail, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_MARKET_AUDIT_TRAIL_FIELD',
+  )
+  assert.equal(proxyTrapRead, false)
   assert.equal(setup.reviews.entries.length, 1)
   assert.equal(setup.audit.entries.length, 3)
   assert.equal(setup.quota.requests.length, 1)

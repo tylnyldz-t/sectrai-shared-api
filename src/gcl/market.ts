@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { types as nodeTypes } from 'node:util'
 import { hashAuditEvent } from './audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, ScopeError } from './errors.js'
 import type { MarketReviewDecision, MarketReviewLedger } from './market-review-ledger.js'
@@ -11,6 +12,7 @@ export const MARKET_LIVE_STATUS = 'MARKET_LIVE_DISABLED'
 const MARKET_REVIEW_PACKET_VERSION = 'synthetic-market-review-packet-v1'
 export const MARKET_REVIEW_RECEIPT_VERSION = 'synthetic-market-review-receipt-v1'
 export const MARKET_REVIEW_AUDIT_WITNESS_VERSION = 'synthetic-market-review-audit-witness-v1'
+export const MARKET_REVIEW_AUDIT_TRAIL_WITNESS_VERSION = 'synthetic-market-review-audit-trail-witness-v1'
 const MARKET_SCOPES = ['market:discover', 'market:capacity:quote', 'market:review'] as const
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
@@ -32,12 +34,12 @@ export const ADOS_10_MARKET_CONTROLS: readonly AdosMarketControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every plan and review packet is digest-bound to one product and workspace.' },
   { id: 'ADOS-02', control: 'SYNTHETIC_DATA_ONLY', enforcement: 'Only the bounded market request shape is accepted; no market response or provider payload is ingested.' },
   { id: 'ADOS-03', control: 'FAIL_CLOSED_CONFIGURATION', enforcement: 'Only literal GCL_MARKET_LIVE_ENABLED=false permits the synthetic adapter; absent, malformed, and true values deny.' },
-  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, while D3/D4 recheck caller-held receipt and audit-link evidence without a write.' },
+  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, while D3/D4/D5 recheck caller-held receipt and audit evidence without a write.' },
   { id: 'ADOS-05', control: 'UNTRUSTED_CONTENT_IS_DATA', enforcement: 'Request values are labelled data-only and cannot become connector instructions.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'A separate canonical owner actor with market:review is required; the plan maker cannot self-review.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIALS', enforcement: 'No network client, provider URL, credential, API key, scheduler, or automatic sync exists in this connector.' },
-  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory.' },
-  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet and review receipt permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
+  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory; D5 only read-checks a caller-supplied three-event segment.' },
+  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet, review receipt, and D4/D5 witnesses permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or market-provider integration is part of this connector.' },
 ])
 
@@ -208,6 +210,31 @@ export type SyntheticMarketReviewAuditWitness = {
   hash: string
 }
 
+/**
+ * A minimized D5 result for one caller-supplied run/review audit segment. It
+ * demonstrates internal continuity only; it is neither durable evidence nor a
+ * credential, authorization, execution, or market-action token.
+ */
+export type SyntheticMarketReviewAuditTrailWitness = {
+  version: typeof MARKET_REVIEW_AUDIT_TRAIL_WITNESS_VERSION
+  planId: string
+  reviewId: string
+  requestedAuditHash: string
+  succeededAuditHash: string
+  reviewAuditHash: string
+  predecessorHash: string | null
+  mode: 'SYNTHETIC'
+  liveStatus: 'LIVE_DISABLED'
+  state: 'SYNTHETIC_MARKET_REVIEW_AUDIT_TRAIL_VERIFIED_NO_ACTION'
+  execution: {
+    state: 'NOT_AUTHORIZED'
+    externalNetwork: false
+    reservation: false
+    booking: false
+    publication: false
+  }
+}
+
 export type MarketReviewContext = Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'scopes' | 'now'>
 
 const OWNER_ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
@@ -216,11 +243,23 @@ function positiveInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
 }
 
-function exactObject(input: unknown, allowed: readonly string[]): Record<string, unknown> {
-  if (!input || typeof input !== 'object' || Array.isArray(input) || Object.getPrototypeOf(input) !== Object.prototype || Object.getOwnPropertySymbols(input).length > 0) {
-    throw new ConnectorInputError('INVALID_MARKET_REQUEST')
+function ownDataObject(value: unknown, error: string): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+    throw new ConnectorInputError(error)
   }
-  const object = input as Record<string, unknown>
+  const fields = Object.getOwnPropertyNames(value)
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const object = Object.create(null) as Record<string, unknown>
+  for (const field of fields) {
+    const descriptor = descriptors[field]
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError(error)
+    object[field] = descriptor.value
+  }
+  return object
+}
+
+function exactObject(input: unknown, allowed: readonly string[]): Record<string, unknown> {
+  const object = ownDataObject(input, 'INVALID_MARKET_REQUEST')
   const fields = Object.getOwnPropertyNames(object)
   if (fields.length !== allowed.length || fields.some((field) => !allowed.includes(field)) || allowed.some((field) => !fields.includes(field))) {
     throw new ConnectorInputError('INVALID_MARKET_REQUEST')
@@ -271,8 +310,7 @@ function configured(config: SyntheticMarketConnectorConfig, ctx: ConnectorRunCon
 }
 
 function parse(input: unknown, limits: ConfiguredMarketLimits): SyntheticMarketInput {
-  if (!input || typeof input !== 'object' || Array.isArray(input)) throw new ConnectorInputError('INVALID_MARKET_REQUEST')
-  const candidate = input as Record<string, unknown>
+  const candidate = ownDataObject(input, 'INVALID_MARKET_REQUEST')
   const operation = marketOperation(candidate.operation)
   const object = exactObject(input, operation === 'capacity-quote'
     ? ['operation', 'transportMode', 'originCountry', 'destinationCountry', 'requestedListings', 'requestedCapacityUnits']
@@ -323,23 +361,31 @@ function reviewNow(context: unknown): Date {
 function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) {
     if (
-      Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0 ||
+      nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0 ||
       !Number.isSafeInteger(value.length) || value.length > 1_000 ||
       Object.getOwnPropertyNames(value).some((key) => key !== 'length' && !/^(0|[1-9][0-9]*)$/.test(key))
     ) return '["$unsupportedArrayShape"]'
+    const descriptors = Object.getOwnPropertyDescriptors(value)
     const items: string[] = []
     for (let index = 0; index < value.length; index += 1) {
-      if (!Object.hasOwn(value, index)) return '["$unsupportedSparseArray"]'
-      items.push(canonicalJson(value[index]))
+      const descriptor = descriptors[String(index)]
+      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return '["$unsupportedSparseArray"]'
+      items.push(canonicalJson(descriptor.value))
     }
     return `[${items.join(',')}]`
   }
   if (value && typeof value === 'object') {
     const record = value as Record<string, unknown>
-    if (Object.getPrototypeOf(record) !== Object.prototype || Object.getOwnPropertySymbols(record).length > 0) return '{"$unsupportedObjectShape":true}'
-    return `{${Object.getOwnPropertyNames(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+    if (nodeTypes.isProxy(record) || Object.getPrototypeOf(record) !== Object.prototype || Object.getOwnPropertySymbols(record).length > 0) return '{"$unsupportedObjectShape":true}'
+    const descriptors = Object.getOwnPropertyDescriptors(record)
+    const keys = Object.getOwnPropertyNames(record).sort()
+    if (keys.some((key) => {
+      const descriptor = descriptors[key]
+      return !descriptor || !('value' in descriptor) || !descriptor.enumerable
+    })) return '{"$unsupportedObjectShape":true}'
+    return `{${keys.map((key) => `${JSON.stringify(key)}:${canonicalJson(descriptors[key]!.value)}`).join(',')}}`
   }
-  return JSON.stringify(value)
+  return JSON.stringify(value) ?? '"$unsupportedScalar"'
 }
 
 function canonicallyEqual(left: unknown, right: unknown): boolean {
@@ -422,10 +468,7 @@ function canonicalTimestamp(value: unknown): string | null {
 }
 
 function exactMarketObject(value: unknown, fields: readonly string[], error: string): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) {
-    throw new ConnectorInputError(error)
-  }
-  const object = value as Record<string, unknown>
+  const object = ownDataObject(value, error)
   const names = Object.getOwnPropertyNames(object)
   if (names.length !== fields.length || names.some((field) => !fields.includes(field)) || fields.some((field) => !names.includes(field))) {
     throw new ConnectorInputError(error)
@@ -694,7 +737,7 @@ function marketReviewAuditWitnessForValidation(value: unknown): SyntheticMarketR
     candidate.version !== MARKET_REVIEW_AUDIT_WITNESS_VERSION ||
     (previousHash !== null && (typeof previousHash !== 'string' || !DIGEST_PATTERN.test(previousHash))) ||
     typeof hash !== 'string' || !DIGEST_PATTERN.test(hash) ||
-    !candidate.event || typeof candidate.event !== 'object' || Array.isArray(candidate.event) ||
+    !candidate.event || typeof candidate.event !== 'object' || Array.isArray(candidate.event) || nodeTypes.isProxy(candidate.event) ||
     Object.getPrototypeOf(candidate.event) !== Object.prototype || Object.getOwnPropertySymbols(candidate.event).length > 0
   ) throw new ConnectorInputError('INVALID_MARKET_REVIEW_AUDIT_WITNESS')
   return {
@@ -729,6 +772,125 @@ export function validateSyntheticMarketReviewAuditWitness(sourcePlan: unknown, v
     event: expectedEvent,
     previousHash: witness.previousHash,
     hash: expectedHash,
+  }
+}
+
+type MarketGovernedRunAuditEntry = {
+  event: ConnectorAuditEvent
+  previousHash: string | null
+  hash: string
+}
+
+function canonicalStringArray(value: unknown, error: string): string[] {
+  if (!Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > MARKET_SCOPES.length || Object.getOwnPropertySymbols(value).length > 0) {
+    throw new ConnectorInputError(error)
+  }
+  const names = Object.getOwnPropertyNames(value)
+  if (names.length !== value.length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+    throw new ConnectorInputError(error)
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const scopes: string[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = descriptors[String(index)]
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'string') throw new ConnectorInputError(error)
+    scopes.push(descriptor.value)
+  }
+  return scopes
+}
+
+function marketGovernedRunAuditEntry(value: unknown, expectedType: 'connector.run.requested' | 'connector.run.succeeded'): MarketGovernedRunAuditEntry {
+  const entry = exactMarketObject(value, ['event', 'previousHash', 'hash'], 'UNEXPECTED_MARKET_AUDIT_TRAIL_ENTRY_FIELD')
+  const event = exactMarketObject(entry.event, ['type', 'connectorId', 'product', 'workspaceId', 'actor', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'], 'UNEXPECTED_MARKET_AUDIT_TRAIL_EVENT_FIELD')
+  const detail = exactMarketObject(event.detail, expectedType === 'connector.run.requested' ? [] : ['requestedAuditHash'], expectedType === 'connector.run.requested'
+    ? 'UNEXPECTED_MARKET_AUDIT_TRAIL_REQUESTED_DETAIL_FIELD'
+    : 'UNEXPECTED_MARKET_AUDIT_TRAIL_SUCCEEDED_DETAIL_FIELD')
+  const product = canonicalScopeId(event.product)
+  const workspaceId = canonicalScopeId(event.workspaceId)
+  const actor = canonicalActor(event.actor)
+  const scopes = canonicalStringArray(event.scopes, 'INVALID_MARKET_AUDIT_TRAIL_SCOPES')
+  const costCapCents = positiveInteger(event.costCapCents)
+  const requestedItems = positiveInteger(event.requestedItems)
+  const occurredAt = canonicalTimestamp(event.occurredAt)
+  const previousHash = entry.previousHash
+  const hash = entry.hash
+  const requestedAuditHash = detail.requestedAuditHash
+  if (
+    event.type !== expectedType || event.connectorId !== MARKET_CONNECTOR_ID || !product || !workspaceId || !actor ||
+    !costCapCents || !requestedItems || !occurredAt ||
+    (previousHash !== null && (typeof previousHash !== 'string' || !DIGEST_PATTERN.test(previousHash))) ||
+    typeof hash !== 'string' || !DIGEST_PATTERN.test(hash) ||
+    (expectedType === 'connector.run.succeeded' && (typeof requestedAuditHash !== 'string' || !DIGEST_PATTERN.test(requestedAuditHash)))
+  ) throw new ConnectorInputError('INVALID_MARKET_AUDIT_TRAIL')
+  return {
+    event: {
+      type: expectedType,
+      connectorId: MARKET_CONNECTOR_ID,
+      product,
+      workspaceId,
+      actor,
+      scopes,
+      costCapCents,
+      requestedItems,
+      occurredAt,
+      detail: expectedType === 'connector.run.requested' ? {} : { requestedAuditHash },
+    },
+    previousHash,
+    hash,
+  }
+}
+
+function governedRunMatchesPlan(entry: MarketGovernedRunAuditEntry, plan: SyntheticMarketPlan): boolean {
+  return entry.event.product === plan.binding.product &&
+    entry.event.workspaceId === plan.binding.workspaceId &&
+    entry.event.actor === plan.binding.requestedBy &&
+    canonicallyEqual(entry.event.scopes, plan.binding.scopes) &&
+    entry.event.costCapCents === plan.binding.costCapCents &&
+    entry.event.requestedItems === plan.binding.requestedItems
+}
+
+/**
+ * D5 read-checks exactly one caller-held requested → succeeded → owner-review
+ * audit segment. It verifies only internal continuity: no audit lookup/write,
+ * quota use, egress, provider contact, handoff, authorization, or action is
+ * performed, and the first predecessor remains unproven caller input.
+ */
+export function validateSyntheticMarketReviewAuditTrailWitness(sourcePlan: unknown, value: unknown, auditTrail: unknown, context: MarketReviewContext): SyntheticMarketReviewAuditTrailWitness {
+  const trail = exactMarketObject(auditTrail, ['requestedRun', 'succeededRun', 'ownerReview'], 'UNEXPECTED_MARKET_AUDIT_TRAIL_FIELD')
+  const requested = marketGovernedRunAuditEntry(trail.requestedRun, 'connector.run.requested')
+  const succeeded = marketGovernedRunAuditEntry(trail.succeededRun, 'connector.run.succeeded')
+  const plan = validateSyntheticMarketPlanForReview(sourcePlan, context)
+
+  if (requested.hash !== hashAuditEvent(requested.event, requested.previousHash) || succeeded.hash !== hashAuditEvent(succeeded.event, succeeded.previousHash)) {
+    throw new ConnectorInputError('MARKET_AUDIT_TRAIL_HASH_INVALID')
+  }
+  if (!governedRunMatchesPlan(requested, plan) || !governedRunMatchesPlan(succeeded, plan)) {
+    throw new ConnectorInputError('MARKET_AUDIT_TRAIL_EVENT_MISMATCH')
+  }
+  if (succeeded.event.detail.requestedAuditHash !== requested.hash || succeeded.previousHash !== requested.hash) {
+    throw new ConnectorInputError('MARKET_AUDIT_TRAIL_CHAIN_MISMATCH')
+  }
+  if (new Date(requested.event.occurredAt).getTime() > new Date(succeeded.event.occurredAt).getTime()) {
+    throw new ConnectorInputError('MARKET_AUDIT_TRAIL_TIME_INVALID')
+  }
+
+  const reviewWitness = validateSyntheticMarketReviewAuditWitness(plan, value, trail.ownerReview, context)
+  if (reviewWitness.previousHash !== succeeded.hash) throw new ConnectorInputError('MARKET_AUDIT_TRAIL_CHAIN_MISMATCH')
+  if (new Date(succeeded.event.occurredAt).getTime() > new Date(reviewWitness.event.occurredAt).getTime()) {
+    throw new ConnectorInputError('MARKET_AUDIT_TRAIL_TIME_INVALID')
+  }
+  return {
+    version: MARKET_REVIEW_AUDIT_TRAIL_WITNESS_VERSION,
+    planId: plan.id,
+    reviewId: plan.reviewPacket.reviewId,
+    requestedAuditHash: requested.hash,
+    succeededAuditHash: succeeded.hash,
+    reviewAuditHash: reviewWitness.hash,
+    predecessorHash: requested.previousHash,
+    mode: 'SYNTHETIC',
+    liveStatus: 'LIVE_DISABLED',
+    state: 'SYNTHETIC_MARKET_REVIEW_AUDIT_TRAIL_VERIFIED_NO_ACTION',
+    execution: reviewExecution(),
   }
 }
 
