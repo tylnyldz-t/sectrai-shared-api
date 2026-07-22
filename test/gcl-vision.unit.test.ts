@@ -1310,6 +1310,10 @@ test('D21 binds a fail-closed audit append invocation and rejects accessor, Prox
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', thenableAudit as never, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_AUDIT_APPEND_RESULT')
   assert.equal(thenRead, false)
 
+  class AuditPromise<T> extends Promise<T> {}
+  const subclassPromiseAudit = { append(): Promise<{ hash: string }> { return new AuditPromise((resolve) => resolve({ hash: 'e'.repeat(64) })) } }
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', subclassPromiseAudit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_AUDIT_APPEND_RESULT')
+
   const throwingAudit = { append(): Promise<{ hash: string }> { throw new Error('AUDIT_APPEND_THROW_MUST_DENY') } }
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', throwingAudit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_AUDIT_APPEND_FAILED')
 
