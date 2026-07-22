@@ -135,6 +135,27 @@ function artifactDetail(value: unknown, state: 'pending-checker-approval' | 'app
     && value.autoPublish === false
 }
 
+function auditDetailArtifactId(event: ConnectorAuditEvent): string | null {
+  const detail = event.detail
+  return typeof detail.artifactId === 'string' ? detail.artifactId : null
+}
+
+function auditDetailRequestedHash(event: ConnectorAuditEvent): string | null {
+  const detail = event.detail
+  return typeof detail.requestedAuditHash === 'string' ? detail.requestedAuditHash : null
+}
+
+function artifactDetailMatchesProposal(detail: Record<string, unknown>, proposal: TranslationArtifactProposal): boolean {
+  return detail.kind === proposal.kind
+    && detail.contentHash === proposal.contentHash
+    && detail.mediaType === proposal.mediaType
+    && detail.source === proposal.source
+    && detail.synthetic === proposal.synthetic
+    && detail.reviewPolicyVersion === proposal.reviewPolicyVersion
+    && detail.reviewExpiresAt === proposal.reviewExpiresAt
+    && detail.autoPublish === proposal.autoPublish
+}
+
 /**
  * Audit rows are durable metadata, so a hash alone is not enough to trust a
  * row. This schema gate rejects hash-valid rows that carry unknown fields or
@@ -195,7 +216,10 @@ async function validatedAuditEntries(transaction: Prisma.TransactionClient, prod
   let previousHash: string | null = null
   for (const record of records) {
     const value = auditValue(record.values)
-    if (!value || value.previousHash !== previousHash || value.hash !== hashAuditEvent(value.event, value.previousHash)) {
+    if (!value
+      || value.previousHash !== previousHash
+      || value.hash !== hashAuditEvent(value.event, value.previousHash)
+      || !validAuditTransition(entries, value.event)) {
       throw new ConnectorUnavailableError('GCL_AUDIT_CHAIN_INVALID')
     }
     entries.push(value)
@@ -215,6 +239,97 @@ function atOrBefore(left: string, right: string): boolean {
 
 function before(left: string, right: string): boolean {
   return new Date(left).valueOf() < new Date(right).valueOf()
+}
+
+function sameRunContext(left: ConnectorAuditEvent, right: ConnectorAuditEvent): boolean {
+  return left.connectorId === right.connectorId
+    && left.product === right.product
+    && left.workspaceId === right.workspaceId
+    && left.actor === right.actor
+    && sameScopes(left.scopes, right.scopes)
+    && left.costCapCents === right.costCapCents
+    && left.requestedItems === right.requestedItems
+}
+
+/** A terminal run outcome is meaningful only for its exact earlier request. */
+function validRunOutcomeTransition(entries: readonly AuditRecordValue[], event: ConnectorAuditEvent): boolean {
+  const requestedAuditHash = auditDetailRequestedHash(event)
+  if (!requestedAuditHash || entries.some((entry) => {
+    const priorRequestedHash = auditDetailRequestedHash(entry.event)
+    return (entry.event.type === 'connector.run.succeeded' || entry.event.type === 'connector.run.failed') && priorRequestedHash === requestedAuditHash
+  })) return false
+  const requested = entries.find((entry) => entry.hash === requestedAuditHash)?.event
+  return Boolean(requested
+    && requested.type === 'connector.run.requested'
+    && sameRunContext(requested, event)
+    && atOrBefore(requested.occurredAt, event.occurredAt))
+}
+
+function sameArtifactMetadata(left: Record<string, unknown>, right: Record<string, unknown>): boolean {
+  return left.artifactId === right.artifactId
+    && left.kind === right.kind
+    && left.contentHash === right.contentHash
+    && left.mediaType === right.mediaType
+    && left.source === right.source
+    && left.synthetic === right.synthetic
+    && left.reviewPolicyVersion === right.reviewPolicyVersion
+    && left.reviewDigest === right.reviewDigest
+    && left.reviewExpiresAt === right.reviewExpiresAt
+    && left.runAuditHash === right.runAuditHash
+    && left.autoPublish === right.autoPublish
+}
+
+/** Creation has one successful run parent and can introduce an artifact ID once. */
+function validArtifactCreationTransition(entries: readonly AuditRecordValue[], event: ConnectorAuditEvent): boolean {
+  const detail = event.detail
+  const artifactId = auditDetailArtifactId(event)
+  const runAuditHash = typeof detail.runAuditHash === 'string' ? detail.runAuditHash : null
+  if (!artifactId || !runAuditHash || entries.some((entry) => auditDetailArtifactId(entry.event) === artifactId)) return false
+  const succeeded = entries.find((entry) => entry.hash === runAuditHash)?.event
+  const proposal = succeeded?.detail.artifact
+  return Boolean(succeeded
+    && succeeded.type === 'connector.run.succeeded'
+    && sameRunContext(succeeded, event)
+    && artifactProposalDetail(event.connectorId, proposal)
+    && isObject(proposal)
+    && artifactDetailMatchesProposal(detail, proposal)
+    && atOrBefore(succeeded.occurredAt, event.occurredAt)
+    && before(event.occurredAt, detail.reviewExpiresAt as string))
+}
+
+/** A checker decision must be the sole terminal event for its matching creation. */
+function validArtifactDecisionTransition(entries: readonly AuditRecordValue[], event: ConnectorAuditEvent): boolean {
+  const artifactId = auditDetailArtifactId(event)
+  if (!artifactId) return false
+  const artifactEvents = entries.filter((entry) => auditDetailArtifactId(entry.event) === artifactId)
+  if (artifactEvents.length !== 1) return false
+  const created = artifactEvents[0]!.event
+  const createdDetail = created.detail
+  const detail = event.detail
+  const expectedState = event.type === 'translation.artifact.approved' ? 'approved' : 'rejected'
+  return created.type === 'translation.artifact.created'
+    && created.actor !== event.actor
+    && created.connectorId === event.connectorId
+    && created.product === event.product
+    && created.workspaceId === event.workspaceId
+    && createdDetail.approvalState === 'pending-checker-approval'
+    && detail.approvalState === expectedState
+    && sameArtifactMetadata(createdDetail, detail)
+    && atOrBefore(created.occurredAt, event.occurredAt)
+    && before(event.occurredAt, detail.reviewExpiresAt as string)
+}
+
+/**
+ * A valid event schema and hash are not enough: each link must attach to its
+ * only permitted predecessor. Replaying this at append time prevents orphaned
+ * outcomes and terminal decisions from becoming durable audit history.
+ */
+function validAuditTransition(entries: readonly AuditRecordValue[], event: ConnectorAuditEvent): boolean {
+  if (event.type === 'connector.run.requested') return true
+  if (event.type === 'connector.run.succeeded' || event.type === 'connector.run.failed') return validRunOutcomeTransition(entries, event)
+  if (event.type === 'translation.artifact.created') return validArtifactCreationTransition(entries, event)
+  if (event.type === 'translation.artifact.approved' || event.type === 'translation.artifact.rejected') return validArtifactDecisionTransition(entries, event)
+  return false
 }
 
 function artifactEventMatches(event: ConnectorAuditEvent, artifact: TranslationArtifactRecord, state: 'pending-checker-approval' | 'approved' | 'rejected'): boolean {
@@ -365,6 +480,7 @@ export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionC
 export async function appendAuditEvent(transaction: Prisma.TransactionClient, event: ConnectorAuditEvent): Promise<{ hash: string }> {
   if (!validAuditEvent(event)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
   const entries = await validatedAuditEntries(transaction, event.product, event.workspaceId)
+  if (!validAuditTransition(entries, event)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
   const previousHash = entries.at(-1)?.hash ?? null
   const hash = hashAuditEvent(event, previousHash)
   await transaction.record.create({
@@ -396,6 +512,7 @@ export class InMemoryHashChainAuditLog implements AuditLog {
 
   async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
     if (!validAuditEvent(event)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
+    if (!validAuditTransition(this.entries, event)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
     const previousHash = this.entries.at(-1)?.hash ?? null
     const hash = hashAuditEvent(event, previousHash)
     this.entries.push({ event, previousHash, hash })

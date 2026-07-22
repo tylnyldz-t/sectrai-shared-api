@@ -194,6 +194,18 @@ uses another syntactically valid scope or a multi-item run is an invalid chain
 (`GCL_AUDIT_CHAIN_INVALID`), so no new audit row, proposal, or decision can be
 written from it.
 
+The audit writer also replays transition semantics while it validates the
+existing chain. A run outcome must reference its one earlier, otherwise
+identical request and no second success/failure outcome may reuse that request.
+An artifact creation must reference the exact successful run and proposal
+envelope, and a checker decision must be the first terminal event after the
+matching creation, from a different actor, before the shared expiry. A
+hash-valid persisted row that breaks one of these predecessor links makes the
+whole chain unavailable as `GCL_AUDIT_CHAIN_INVALID`; a newly submitted
+orphan, duplicate outcome, or unlinked decision is rejected before append as
+`GCL_AUDIT_EVENT_INVALID`. Neither path stores raw fixture data or creates a
+publication, send, provider, or live-execution capability.
+
 For an artifact-producing success, the `succeeded` audit event contains the
 complete metadata-only proposal envelope (binding, content hash, synthetic
 marker, review policy, and expiry), never fixture content. A durable artifact

@@ -49,7 +49,22 @@ async function running(): Promise<{ server: Server; base: string; audit: InMemor
   const audit = new InMemoryHashChainAuditLog()
   const artifacts = new InMemoryTranslationArtifactStore(audit)
   let calls = 0
-  const runner = { async run(_: RunConnectorRequest): Promise<ConnectorResult> { calls += 1; return runResult() } }
+  const runner = {
+    async run(request: RunConnectorRequest): Promise<ConnectorResult> {
+      calls += 1
+      const requested = await audit.append({
+        type: 'connector.run.requested', connectorId: request.connectorId, product: request.product, workspaceId: request.workspaceId, actor: request.actor,
+        scopes: request.scopes, costCapCents: request.costCapCents, requestedItems: request.requestedItems, occurredAt: now().toISOString(), detail: {},
+      })
+      const result = runResult()
+      const succeeded = await audit.append({
+        type: 'connector.run.succeeded', connectorId: request.connectorId, product: request.product, workspaceId: request.workspaceId, actor: request.actor,
+        scopes: request.scopes, costCapCents: request.costCapCents, requestedItems: request.requestedItems, occurredAt: now().toISOString(),
+        detail: { requestedAuditHash: requested.hash, artifact: result.artifact! },
+      })
+      return { ...result, provenance: { ...result.provenance, auditHash: succeeded.hash } }
+    },
+  }
   const app = createApp({
     prisma: {} as PrismaClient,
     now,
@@ -125,7 +140,7 @@ test('approval HTTP route rejects missing or mismatched review bindings before a
     })
     assert.equal(approved.status, 200)
     assert.equal((await approved.json() as { artifact: { approvalState: string } }).artifact.approvalState, 'approved')
-    assert.equal(service.audit.entries.length, 2)
+    assert.equal(service.audit.entries.length, 4)
     assert.equal(JSON.stringify(service.audit.entries).includes('must never be stored'), false)
   } finally {
     await close(service.server)
@@ -284,7 +299,7 @@ test('audit binds every run and artifact creation to its connector scope and exa
   }
 })
 
-test('durable proposals require a same-scope requested and succeeded audit pair before metadata storage', async () => {
+test('durable audit refuses an orphan successful run before metadata storage', async () => {
   const succeeded: ConnectorAuditEvent = {
     type: 'connector.run.succeeded', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
     scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: { requestedAuditHash: 'a'.repeat(64) },
@@ -309,8 +324,51 @@ test('durable proposals require a same-scope requested and succeeded audit pair 
     proposal: runResult().artifact!,
     runAuditHash: succeededHash,
     audit: { scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString() },
-  }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_RUN_AUDIT_LINK_INVALID')
+  }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
   assert.equal(artifactCreates, 0)
+})
+
+test('audit rejects a second run outcome and a checker decision without its matching creation', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const requested: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+  const requestedAudit = await audit.append(requested)
+  const proposal = runResult().artifact!
+  const succeededAudit = await audit.append({
+    type: 'connector.run.succeeded', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { requestedAuditHash: requestedAudit.hash, artifact: proposal },
+  })
+  const pending = { connectorId: 'translation-text-synthetic', ...proposal, runAuditHash: succeededAudit.hash }
+  const reviewDigest = translationArtifactReviewDigest(pending)
+  const unlinkedDecision: ConnectorAuditEvent = {
+    type: 'translation.artifact.approved', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'checker@example.test',
+    scopes: ['translation:artifact:approve'], costCapCents: 0, requestedItems: 0, occurredAt: now().toISOString(),
+    detail: {
+      artifactId: 'translation-artifact-unlinked-decision',
+      kind: proposal.kind,
+      contentHash: proposal.contentHash,
+      mediaType: proposal.mediaType,
+      source: proposal.source,
+      synthetic: true,
+      approvalState: 'approved',
+      reviewPolicyVersion: proposal.reviewPolicyVersion,
+      reviewDigest,
+      reviewExpiresAt: proposal.reviewExpiresAt,
+      runAuditHash: succeededAudit.hash,
+      autoPublish: false,
+    },
+  }
+
+  await assert.rejects(() => audit.append({
+    type: 'connector.run.failed', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { requestedAuditHash: requestedAudit.hash, error: 'connector_quota_exceeded' },
+  }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_EVENT_INVALID')
+  await assert.rejects(() => audit.append(unlinkedDecision), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_EVENT_INVALID')
+  assert.equal(audit.entries.length, 2)
 })
 
 test('durable proposals bind the maker, request limits, metadata envelope, and unexpired creation instant to the successful synthetic run', async () => {
@@ -536,10 +594,10 @@ test('durable terminal artifacts require a distinct checker, matching decision i
   }
 
   await assert.doesNotReject(() => lifecycle(checker, now().toISOString()).get(product, workspaceId, artifactId))
-  await assert.rejects(() => lifecycle(maker, now().toISOString()).get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+  await assert.rejects(() => lifecycle(maker, now().toISOString()).get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
   await assert.rejects(() => lifecycle(checker, '2026-07-22T12:00:01.000Z').get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
-  await assert.rejects(() => lifecycle(checker, proposal.reviewExpiresAt, proposal.reviewExpiresAt).get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
-  await assert.rejects(() => lifecycle(checker, '2026-07-22T11:59:59.999Z', '2026-07-22T11:59:59.999Z').get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+  await assert.rejects(() => lifecycle(checker, proposal.reviewExpiresAt, proposal.reviewExpiresAt).get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  await assert.rejects(() => lifecycle(checker, '2026-07-22T11:59:59.999Z', '2026-07-22T11:59:59.999Z').get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
 })
 
 test('durable audit fails closed on a hash-valid success event whose bound result carries a raw fixture field', async () => {
