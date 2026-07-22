@@ -518,7 +518,7 @@ function assertAllowedImports(source: string, name: string): void {
 }
 
 function quotaReservationIndex(registry: string): number {
-  return Math.max(registry.indexOf('await this.quota.consume'), registry.indexOf('await quotaConsume.call'))
+  return Math.max(registry.indexOf('await this.quota.consume'), registry.indexOf('await quotaConsume.call'), registry.indexOf('await this.quotaConsume'))
 }
 
 function auditCapturesQuotaFailure(registry: string): boolean {
@@ -1080,7 +1080,7 @@ test('D21 immutable boundaries reject omitted integrity bindings, shaped host se
   const translationRegistry = sourceAt(translation, 'src/gcl/registry.ts')
   const translationAudit = sourceAt(translation, 'src/gcl/audit.ts')
   const translationArtifacts = sourceAt(translation, 'src/gcl/translation-artifacts.ts')
-  assert.match(translationContext, /const PRODUCT_ID = \^sectrai-/, 'D21 translation must use a dedicated Sectrai product authority envelope')
+  assert.match(translationContext, /const PRODUCT_ID = \/\^sectrai-/, 'D21 translation must use a dedicated Sectrai product authority envelope')
   assert.match(translationContext, /export function requireGclTenantContext\(/, 'D21 translation must expose one fail-closed tenant-context assertion')
   assert.doesNotMatch(translationContext, /\.trim\(/, 'D21 translation must not broaden product/workspace authority by trimming it')
   assert.match(translationRegistry, /requireGclTenantContext\(request\)\s+if \(!request\.ownerApproved\)/, 'D21 translation must reject malformed tenant context before owner/preflight processing')
