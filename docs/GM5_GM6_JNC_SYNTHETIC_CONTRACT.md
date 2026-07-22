@@ -236,6 +236,20 @@ markers other than `data-only` / `UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`
 are rejected. The runner copies an accepted envelope into a fresh frozen value
 and only then attaches its durable success-audit hash.
 
+### D1 provenance ownership seal
+
+The final boundary makes a separate canonical, recursively frozen copy of
+`provenance.untrustedContent.value` before egress. Thus a canonical but
+adapter-owned object cannot be retained in the API result, and accepting a
+result does not freeze an object that an adapter still owns. Later in-memory
+mutation of that adapter-side value cannot change the returned review evidence.
+Malformed, accessor-backed, Proxy-backed, cyclic, sparse, or non-JSON
+provenance values fail closed as `synthetic_result_integrity_invalid`.
+
+This is a local object-ownership and data-only snapshot control. It does not
+read a credential, resolve a URI, contact a provider or JNC, start a process,
+write an artifact, send a hand-off, or publish anything.
+
 An egress failure is `503 synthetic_result_integrity_invalid`. It occurs after
 the requested audit record and quota reservation, so the runner appends a
 stable `failed` audit event and deliberately does not refund quota. No malformed

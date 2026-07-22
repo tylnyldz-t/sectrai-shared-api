@@ -1,6 +1,6 @@
 import { SyntheticResultIntegrityError } from './errors.js'
 import { JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from './jnc-pilot.js'
-import { deepFreeze, isCanonicalJsonData, isProxyValue, syntheticPlanSha256 } from './plan-integrity.js'
+import { deepFreeze, frozenCanonicalJsonCopy, isProxyValue, syntheticPlanSha256 } from './plan-integrity.js'
 import { verifiesSyntheticReviewSnapshot } from './review-snapshot.js'
 import { LIVE_DISABLED } from './safety.js'
 import type { ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
@@ -449,13 +449,21 @@ function syntheticDataMatchesSnapshot(data: unknown, connectorId: string, submit
 function safeUntrustedContent(value: unknown): IsolatedContent | null {
   const record = ownDataRecord(value)
   if (!record || !exactKeys(record, UNTRUSTED_CONTENT_KEYS) ||
-    typeof record.source !== 'string' || !/^[a-z0-9:-]{1,160}$/.test(record.source) || !isCanonicalJsonData(record.value) ||
+    typeof record.source !== 'string' || !/^[a-z0-9:-]{1,160}$/.test(record.source) ||
     record.handling !== 'data-only' || record.instructionPolicy !== 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS') return null
-  return {
-    source: record.source,
-    value: record.value,
-    handling: 'data-only',
-    instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS',
+  try {
+    // The result envelope is an egress boundary, so provenance may not retain
+    // an adapter-owned object even when that object is canonical JSON.  Taking
+    // this detached snapshot also means the boundary never freezes an object
+    // that a caller still owns as a side effect of accepting the result.
+    return {
+      source: record.source,
+      value: frozenCanonicalJsonCopy(record.value),
+      handling: 'data-only',
+      instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS',
+    }
+  } catch {
+    return null
   }
 }
 

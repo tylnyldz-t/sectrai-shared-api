@@ -1308,6 +1308,37 @@ test('the final result boundary does not invoke accessor-backed result fields or
   assert.equal(confidenceRun.audit.entries[1]?.event.type, 'connector.run.failed')
 })
 
+test('the final result boundary detaches canonical untrusted provenance before egress', async () => {
+  const genuine = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
+    { prompt: 'A local synthetic 3D proposal' }, directContext(),
+  )
+  const adapterOwnedValue = { prompt: 'A local synthetic 3D proposal', outputFormat: 'glb' }
+  const connector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() {
+      return {
+        data: genuine.data,
+        provenance: {
+          ...genuine.provenance,
+          untrustedContent: { ...genuine.provenance.untrustedContent, value: adapterOwnedValue },
+        },
+        confidence: 0,
+      }
+    },
+  }
+  const governed = runner(connector)
+  const accepted = await governed.run.run(request()) as ConnectorResult<SyntheticThreeDResult>
+  const acceptedValue = accepted.provenance.untrustedContent.value as { prompt: string; outputFormat: string }
+
+  assert.deepEqual(acceptedValue, adapterOwnedValue)
+  assert.notEqual(acceptedValue, adapterOwnedValue)
+  assert.equal(Object.isFrozen(acceptedValue), true)
+  assert.equal(Object.isFrozen(adapterOwnedValue), false)
+  adapterOwnedValue.prompt = 'A later adapter-side mutation must not reach egress'
+  assert.equal(acceptedValue.prompt, 'A local synthetic 3D proposal')
+  assert.equal(governed.audit.entries[1]?.event.type, 'connector.run.succeeded')
+})
+
 test('the final result boundary rejects re-hashed publication escalation and provenance relabelling', async () => {
   const genuineThreeD = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
     { prompt: 'A local synthetic 3D proposal' }, directContext(),
