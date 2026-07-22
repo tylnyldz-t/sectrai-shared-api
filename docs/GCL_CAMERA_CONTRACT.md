@@ -448,21 +448,43 @@ camera/media/device connection, credential, handoff, notification,
 publication, action, durable state, or capability. It is not a signature,
 authorization, delivery instruction, or permission to use a camera.
 
+## D20 — immutable governed run context
+
+After D12 has admitted the direct library envelope and D11 has captured its
+single local timestamp, the governed runner creates one immutable own-data
+context for its preflight, adapter, camera-result verification, quota request,
+and scoped audit events. Its primitive product/workspace/actor/correlation,
+owner, and limit fields cannot be retargeted; its one scope array is frozen;
+and its local clock can return only fresh copies of the D11 timestamp. A
+connector therefore cannot change a later audit, quota, or camera verification
+from the context the runner originally admitted.
+
+An uncaught write attempt fails during preflight before `requested` audit or
+quota reservation. A caught write attempt cannot alter the frozen context, so
+the ensuing quota/audit/result checks retain their originally admitted values.
+D20 is an in-process isolation boundary, not a claim that a connector is
+trusted or that attempted writes are externally observable.
+
+D20 adds no route, storage lookup/write, migration, provider or time-service
+call, camera/media/device connection, credential, handoff, notification,
+publication, action, durable state, or capability. It is not a signature,
+authorization, delivery instruction, or permission to use a camera.
+
 ## Audit and storage boundary
 
-The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1–D19 add no migration and no new persistence model.
+The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1–D20 add no migration and no new persistence model.
 
 ## ADOS 10-rule conformance
 
 1. Product/workspace digest binding keeps each run and review packet scoped to one data plane.
 2. Only minimized built-in synthetic fixture metadata is accepted.
 3. The front door default-denies absent configuration; `LIVE_DISABLED` is permanent.
-4. Unknown, hidden, symbol, Proxy, and accessor-shaped input, evidence, D8 review context, D10 execution context/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result/provenance control plane, D14/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, D18 late SHA-256 prototype hooks, and D19 camera result data/isolated-content values—plus media, device identifiers, personal identity, and biometric inference—are excluded.
+4. Unknown, hidden, symbol, Proxy, and accessor-shaped input, evidence, D8 review context, D10 execution context/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result/provenance control plane, D14/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, D18 late SHA-256 prototype hooks, D19 camera result data/isolated-content values, and D20 mutable governed context values—plus media, device identifiers, personal identity, and biometric inference—are excluded.
 5. Purpose-bound synthetic KVKK consent must match the fixture.
 6. Owner approval plus maker–checker separation are required; D1 rejects the original maker as reviewer and D2 minimizes that review evidence.
 7. The code has no device SDK, transport, network client, credential, or provider interface.
-8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, D6/D7 only minimize and recheck evidence derived from it, D8/D9 protect review context and its local clock, D10 rejects shaped execution context or an invalid provenance clock before a fixture result, D11 freezes one safe runner timestamp, D12 seals direct run envelopes before any collaborator is used, D13 seals the adapter result/provenance control plane before a success audit, D14 seals the exact append receipt shape, D15 seals every event before the audit collaborator can mutate it, D16 verifies the existing durable head before a successor can bind to it, D17 re-hashes each sealed append event while pinning the runner-known requested predecessor, D18 captures the SHA-256 operations used by all those integrity checks, and D19 rebuilds the camera result and isolated observation before success.
-9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate evidence, D8/D9 validate review context and its local clock, D10 validates only synthetic provenance, D11 validates only the local runner timestamp, D12 validates only the request envelope, D13 validates only the fixed synthetic/no-egress result control plane, D14/D17 validate and bind the audit receipt, D15 freezes the review event without evaluating accessors or Proxy traps, D16 rejects a malformed durable head without creating a follow-up transition, D18 keeps late SHA-256 hooks outside review and audit integrity, and D19 permits only the rebuilt fixed no-media observation in the returned camera data plane.
+8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, D6/D7 only minimize and recheck evidence derived from it, D8/D9 protect review context and its local clock, D10 rejects shaped execution context or an invalid provenance clock before a fixture result, D11 freezes one safe runner timestamp, D12 seals direct run envelopes before any collaborator is used, D13 seals the adapter result/provenance control plane before a success audit, D14 seals the exact append receipt shape, D15 seals every event before the audit collaborator can mutate it, D16 verifies the existing durable head before a successor can bind to it, D17 re-hashes each sealed append event while pinning the runner-known requested predecessor, D18 captures the SHA-256 operations used by all those integrity checks, D19 rebuilds the camera result and isolated observation before success, and D20 freezes the admitted run context before any connector can observe it.
+9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate evidence, D8/D9 validate review context and its local clock, D10 validates only synthetic provenance, D11 validates only the local runner timestamp, D12 validates only the request envelope, D13 validates only the fixed synthetic/no-egress result control plane, D14/D17 validate and bind the audit receipt, D15 freezes the review event without evaluating accessors or Proxy traps, D16 rejects a malformed durable head without creating a follow-up transition, D18 keeps late SHA-256 hooks outside review and audit integrity, D19 permits only the rebuilt fixed no-media observation in the returned camera data plane, and D20 keeps connector-visible governance values immutable; action, notification, publication, and handoff remain not sent.
 10. This branch contains no live launch, production migration, main/prod write, or camera hardware path.
 
 ## Explicit non-goals

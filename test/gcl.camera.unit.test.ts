@@ -7,7 +7,7 @@ import { ownerTokenMatches } from '../src/gcl/owner.js'
 import { cameraDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import type { AuditAppendReceipt, AuditLog, Connector, ConnectorAuditEvent, ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
-import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION, CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, CAMERA_REVIEW_AUDIT_WITNESS_VERSION, CAMERA_REVIEW_EVIDENCE_MANIFEST_VERSION, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, createCameraReviewAuditTrailReceipt, createCameraReviewEvidenceManifest, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewAuditTrailReceipt, validateCameraReviewAuditTrailWitness, validateCameraReviewAuditWitness, validateCameraReviewEvidenceManifest, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
+import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_SCOPE, CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION, CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, CAMERA_REVIEW_AUDIT_WITNESS_VERSION, CAMERA_REVIEW_EVIDENCE_MANIFEST_VERSION, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, createCameraReviewAuditTrailReceipt, createCameraReviewEvidenceManifest, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewAuditTrailReceipt, validateCameraReviewAuditTrailWitness, validateCameraReviewAuditWitness, validateCameraReviewEvidenceManifest, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
 const runContext = {
@@ -1101,6 +1101,58 @@ test('D19 reconstructs the camera data plane and rejects smuggled media/device s
   assert.deepEqual(accepted.audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.succeeded'])
 })
 
+test('D20 seals the admitted run context so a connector cannot retarget later governance or camera verification', async () => {
+  const valid = await enabledConnector().run(loadingDockInput, context)
+  const connector = enabledConnector()
+  let frozenContexts = 0
+  let rejectedMutationAttempts = 0
+
+  const inspectAndAttemptMutation = (candidate: ConnectorRunContext) => {
+    if (Object.isFrozen(candidate) && Object.isFrozen(candidate.scopes)) frozenContexts += 1
+    for (const mutate of [
+      () => { (candidate as unknown as { product: string }).product = 'retargeted-product' },
+      () => { (candidate.scopes as string[]).push('camera:retarget') },
+      () => { Object.defineProperty(candidate, 'ownerApproved', { value: false }) },
+    ]) {
+      try { mutate() } catch { rejectedMutationAttempts += 1 }
+    }
+  }
+
+  connector.preflight = (_input, candidate) => { inspectAndAttemptMutation(candidate) }
+  connector.run = async (_input, candidate) => {
+    inspectAndAttemptMutation(candidate)
+    return structuredClone(valid)
+  }
+
+  const setup = runnerFor(connector)
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
+
+  assert.equal(frozenContexts, 2)
+  assert.equal(rejectedMutationAttempts, 6)
+  assert.equal(result.data.reviewPacket.scopeBinding.productDigest.length, 64)
+  assert.equal(result.provenance.retrievedAt, '2026-07-22T12:00:00.000Z')
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+  assert.deepEqual(setup.audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.succeeded'])
+  assert.equal(setup.audit.entries.every((entry) => entry.event.product === runContext.product && entry.event.workspaceId === runContext.workspaceId && entry.event.scopes[0] === CAMERA_SCOPE), true)
+})
+
+test('D20 rejects an uncaught connector context mutation before request audit or quota reservation', async () => {
+  const connector = enabledConnector()
+  connector.preflight = (_input, candidate) => {
+    ;(candidate as unknown as { workspaceId: string }).workspaceId = 'retargeted-workspace'
+  }
+  const setup = runnerFor(connector)
+
+  await assert.rejects(
+    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
+    (error: unknown) => error instanceof TypeError,
+  )
+  assert.deepEqual(setup.audit.entries.map((entry) => entry.event.type), ['connector.run.denied'])
+  assert.equal((setup.quota as TestQuota).requests.length, 0)
+  assert.equal(setup.audit.entries[0]?.event.product, runContext.product)
+  assert.equal(setup.audit.entries[0]?.event.workspaceId, runContext.workspaceId)
+})
+
 test('D15 seals audit events before append: shaped or cyclic events never reach the audit collaborator', async () => {
   const received: ConnectorAuditEvent[] = []
   const audit: AuditLog = {
@@ -1465,8 +1517,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14\/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, D18 SHA-256 operations, and D19 camera result data\/provenance values/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14\/D17.*D15.*D16.*D18.*D19/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14\/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, D18 SHA-256 operations, D19 camera result data\/provenance values, and the D20 governed context snapshot/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14\/D17.*D15.*D16.*D18.*D19.*D20/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 
