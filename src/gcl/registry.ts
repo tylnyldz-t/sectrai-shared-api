@@ -26,6 +26,7 @@ const DIGEST_PATTERN = /^[a-f0-9]{64}$/
 const MAX_REGISTERED_CONNECTORS = 12
 const CONNECTOR_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,79}$/
 const CONNECTOR_SCOPE_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
+const CONNECTOR_RUN_FAILED_DETAIL = 'CONNECTOR_RUN_FAILED'
 
 type RegisteredConnector = Readonly<{
   id: string
@@ -510,10 +511,17 @@ export class GovernedConnectorRunner {
     try {
       result = connectorResultSnapshot(await connector.run(connectorInput, context), connector.id)
     } catch (error) {
+      // D24: a rejected connector value is opaque, untrusted host data. Do
+      // not inspect `instanceof`, `message`, or a custom coercion hook here:
+      // doing so could evaluate a Proxy/accessor or persist a provider-shaped
+      // error (including a credential) in the audit chain. The fixed detail
+      // preserves the requested/failed audit pairing without retaining any
+      // connector-supplied fault text. If this append fails, the run remains
+      // fail-closed and its original rejection is not converted to success.
       auditAppendResult(await auditAppend({
         type: 'connector.run.failed', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
         scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(),
-        detail: { requestedAuditHash: requestedAudit.hash, error: error instanceof Error ? error.message : 'UNKNOWN_ERROR' },
+        detail: { requestedAuditHash: requestedAudit.hash, error: CONNECTOR_RUN_FAILED_DETAIL },
       }))
       throw error
     }
