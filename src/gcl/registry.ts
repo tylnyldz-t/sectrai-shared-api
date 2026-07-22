@@ -88,14 +88,15 @@ function governedInputSnapshot(value: unknown, depth = 0, ancestors = new Set<ob
     }
     const names = Object.getOwnPropertyNames(value)
     const descriptors = Object.getOwnPropertyDescriptors(value)
-    const length = descriptors.length
-    if (!length || !('value' in length) || !Number.isSafeInteger(length.value) || length.value > MAX_GOVERNED_INPUT_ARRAY_ITEMS ||
-      names.length !== length.value + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    const itemCount = lengthDescriptor?.value
+    if (!lengthDescriptor || !Object.prototype.hasOwnProperty.call(lengthDescriptor, 'value') || typeof itemCount !== 'number' || !Number.isSafeInteger(itemCount) || itemCount > MAX_GOVERNED_INPUT_ARRAY_ITEMS ||
+      names.length !== itemCount + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
       throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
     }
     const nextAncestors = new Set(ancestors).add(value)
     const snapshot: unknown[] = []
-    for (let index = 0; index < length.value; index += 1) {
+    for (let index = 0; index < itemCount; index += 1) {
       const descriptor = descriptors[String(index)]
       if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
       snapshot.push(governedInputSnapshot(descriptor.value, depth + 1, nextAncestors))
