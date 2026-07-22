@@ -17,7 +17,7 @@ const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v21' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v22' as const
 const SYNTHETIC_DOCUMENT_DATA_BOUNDARY = {
   evidenceSource: 'synthetic-fixture',
   inputShape: 'plain-own-data-only',
@@ -94,6 +94,11 @@ const SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY = {
   appendResult: 'native-promise-only',
   accessorOrProxyAuditTargetsAccepted: false,
   rejectedOrThenableAuditResultsAccepted: false,
+} as const
+const SYNTHETIC_DOCUMENT_AUDIT_METHOD_BOUNDARY = {
+  appendMethod: 'own-or-direct-prototype-data-method-only',
+  inheritedFromObjectPrototypeAccepted: false,
+  inheritedBeyondDirectPrototypeAccepted: false,
 } as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
@@ -264,6 +269,12 @@ export type SyntheticDocumentReviewPacket = {
     appendResult: typeof SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY.appendResult
     accessorOrProxyAuditTargetsAccepted: typeof SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY.accessorOrProxyAuditTargetsAccepted
     rejectedOrThenableAuditResultsAccepted: typeof SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY.rejectedOrThenableAuditResultsAccepted
+  }
+  /** An audit method cannot arrive through Object.prototype or a prototype chain. */
+  auditMethodBoundaryBinding: {
+    appendMethod: typeof SYNTHETIC_DOCUMENT_AUDIT_METHOD_BOUNDARY.appendMethod
+    inheritedFromObjectPrototypeAccepted: typeof SYNTHETIC_DOCUMENT_AUDIT_METHOD_BOUNDARY.inheritedFromObjectPrototypeAccepted
+    inheritedBeyondDirectPrototypeAccepted: typeof SYNTHETIC_DOCUMENT_AUDIT_METHOD_BOUNDARY.inheritedBeyondDirectPrototypeAccepted
   }
   /** Metadata-only freshness limit for the synthetic evidence reference. */
   evidenceBinding: {
@@ -575,6 +586,7 @@ function reviewPacketIntegrityMaterial(
   proxyInspectionBoundaryBinding: SyntheticDocumentReviewPacket['proxyInspectionBoundaryBinding'],
   auditReceiptBoundaryBinding: SyntheticDocumentReviewPacket['auditReceiptBoundaryBinding'],
   auditAppendBoundaryBinding: SyntheticDocumentReviewPacket['auditAppendBoundaryBinding'],
+  auditMethodBoundaryBinding: SyntheticDocumentReviewPacket['auditMethodBoundaryBinding'],
   evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
   reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): Record<string, unknown> {
@@ -614,6 +626,7 @@ function reviewPacketIntegrityMaterial(
     proxyInspectionBoundaryBinding,
     auditReceiptBoundaryBinding,
     auditAppendBoundaryBinding,
+    auditMethodBoundaryBinding,
     evidenceBinding,
     reviewWindow,
   }
@@ -670,11 +683,12 @@ function reviewPacketFor(
   const proxyInspectionBoundaryBinding = { ...SYNTHETIC_DOCUMENT_PROXY_INSPECTION_BOUNDARY }
   const auditReceiptBoundaryBinding = { ...SYNTHETIC_DOCUMENT_AUDIT_RECEIPT_BOUNDARY }
   const auditAppendBoundaryBinding = { ...SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY }
+  const auditMethodBoundaryBinding = { ...SYNTHETIC_DOCUMENT_AUDIT_METHOD_BOUNDARY }
   const evidenceBinding = evidenceBindingFor(proposal.evidence, issuedAt, maxEvidenceAgeSeconds)
   const reviewWindow = { issuedAt: intrinsicDateToISOString.call(issuedAt), reviewBy: intrinsicDateToISOString.call(reviewByFor(issuedAt, consent.expiresAt, evidenceBinding.expiresAt, maxReviewAgeSeconds)) }
   return {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
-    integrityDigest: digest(canonicalJson(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, integrityEncodingBoundaryBinding, intrinsicBoundaryBinding, hashBoundaryBinding, patternBoundaryBinding, proxyInspectionBoundaryBinding, auditReceiptBoundaryBinding, auditAppendBoundaryBinding, evidenceBinding, reviewWindow))),
+    integrityDigest: digest(canonicalJson(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, integrityEncodingBoundaryBinding, intrinsicBoundaryBinding, hashBoundaryBinding, patternBoundaryBinding, proxyInspectionBoundaryBinding, auditReceiptBoundaryBinding, auditAppendBoundaryBinding, auditMethodBoundaryBinding, evidenceBinding, reviewWindow))),
     scopeBinding,
     consentBinding,
     governanceBinding,
@@ -693,6 +707,7 @@ function reviewPacketFor(
     proxyInspectionBoundaryBinding,
     auditReceiptBoundaryBinding,
     auditAppendBoundaryBinding,
+    auditMethodBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -943,6 +958,13 @@ function reviewedAuditAppendBoundaryBinding(value: unknown): SyntheticDocumentRe
   return { ...SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY }
 }
 
+function reviewedAuditMethodBoundaryBinding(value: unknown): SyntheticDocumentReviewPacket['auditMethodBoundaryBinding'] {
+  if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_AUDIT_METHOD_BOUNDARY_BINDING')
+  exactKeys(value, ['appendMethod', 'inheritedFromObjectPrototypeAccepted', 'inheritedBeyondDirectPrototypeAccepted'], 'UNEXPECTED_DOCUMENT_REVIEW_AUDIT_METHOD_BOUNDARY_BINDING_FIELD')
+  if (value.appendMethod !== SYNTHETIC_DOCUMENT_AUDIT_METHOD_BOUNDARY.appendMethod || value.inheritedFromObjectPrototypeAccepted !== false || value.inheritedBeyondDirectPrototypeAccepted !== false) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_AUDIT_METHOD_BOUNDARY_BINDING')
+  return { ...SYNTHETIC_DOCUMENT_AUDIT_METHOD_BOUNDARY }
+}
+
 /**
  * Resolve an audit append method through data descriptors only. Audit classes
  * may expose a normal prototype method, but accessors and Proxy targets are
@@ -950,17 +972,13 @@ function reviewedAuditAppendBoundaryBinding(value: unknown): SyntheticDocumentRe
  */
 function auditAppendMethod(value: unknown): (event: ConnectorAuditEvent) => Promise<{ hash: string }> {
   if (!value || (typeof value !== 'object' && typeof value !== 'function') || isProxyObject(value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_AUDIT_APPEND_TARGET')
-  let candidate: object | null = value as object
-  for (let depth = 0; candidate !== null && depth < 16; depth += 1) {
-    if (isProxyObject(candidate)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_AUDIT_APPEND_TARGET')
-    const descriptor = intrinsicObjectGetOwnPropertyDescriptor(candidate, 'append')
-    if (descriptor) {
-      if (descriptor.get || descriptor.set || !('value' in descriptor) || typeof descriptor.value !== 'function' || isProxyObject(descriptor.value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_AUDIT_APPEND_TARGET')
-      return descriptor.value as (event: ConnectorAuditEvent) => Promise<{ hash: string }>
-    }
-    candidate = intrinsicObjectGetPrototypeOf(candidate)
-  }
-  throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_AUDIT_APPEND_TARGET')
+  const ownDescriptor = intrinsicObjectGetOwnPropertyDescriptor(value, 'append')
+  const directPrototype = intrinsicObjectGetPrototypeOf(value)
+  const descriptor = ownDescriptor ?? (directPrototype && directPrototype !== intrinsicObjectPrototype && !isProxyObject(directPrototype)
+    ? intrinsicObjectGetOwnPropertyDescriptor(directPrototype, 'append')
+    : undefined)
+  if (!descriptor || descriptor.get || descriptor.set || !('value' in descriptor) || typeof descriptor.value !== 'function' || isProxyObject(descriptor.value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_AUDIT_APPEND_TARGET')
+  return descriptor.value as (event: ConnectorAuditEvent) => Promise<{ hash: string }>
 }
 
 /** The audit adapter must return an exact native Promise, never a thenable. */
