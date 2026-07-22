@@ -1393,6 +1393,114 @@ test('D21 copies governance-visible result data before the succeeded-audit await
   assert.equal(quota.requests.length, 1)
 })
 
+test('D22 seals registered market connector metadata and method references against later retargeting', async () => {
+  const valid = await new SyntheticMarketConnector(limits).run(capacityQuote, context)
+  let capturedPreflightCalls = 0
+  let capturedRunCalls = 0
+  let replacedMethodCalls = 0
+  const connector: Connector = {
+    id: MARKET_CONNECTOR_ID,
+    kind: 'market',
+    authKind: 'owner-token',
+    quotaGroup: 'market',
+    scopes: ['market:capacity:quote'],
+    preflight() { capturedPreflightCalls += 1 },
+    async run(): Promise<ConnectorResult> { capturedRunCalls += 1; return structuredClone(valid) },
+  }
+  const registry = new ConnectorRegistry([connector])
+  const registered = registry.get(MARKET_CONNECTOR_ID)
+
+  assert.equal(Object.isFrozen(registered), true)
+  assert.equal(Object.isFrozen(registered.scopes), true)
+  connector.id = 'retargeted-market'
+  connector.quotaGroup = 'retargeted-market'
+  connector.scopes = ['market:retarget']
+  connector.preflight = () => { replacedMethodCalls += 1 }
+  connector.run = async () => { replacedMethodCalls += 1; throw new Error('REPLACED_METHOD_MUST_NOT_RUN') }
+  assert.throws(() => { (registered as unknown as { id: string }).id = 'retargeted-market' }, TypeError)
+  assert.throws(() => { (registered.scopes as string[]).push('market:retarget') }, TypeError)
+
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(registry, audit, quota, now)
+  const result = await runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
+
+  assert.equal(capturedPreflightCalls, 1)
+  assert.equal(capturedRunCalls, 1)
+  assert.equal(replacedMethodCalls, 0)
+  assert.equal(result.provenance.auditHash, audit.entries[1]?.hash)
+  assert.deepEqual(audit.entries.map((entry) => entry.event.connectorId), [MARKET_CONNECTOR_ID, MARKET_CONNECTOR_ID])
+  assert.deepEqual(quota.requests, [{ connectorId: MARKET_CONNECTOR_ID, quotaGroup: 'market', requestedItems: 1 }])
+})
+
+test('D22 rejects shaped market registry collections, connector control metadata, scopes, and callbacks without evaluating traps', () => {
+  const connector = (): Connector => ({
+    id: MARKET_CONNECTOR_ID,
+    kind: 'market',
+    authKind: 'owner-token',
+    quotaGroup: 'market',
+    scopes: ['market:capacity:quote'],
+    async run(): Promise<ConnectorResult> { return await new SyntheticMarketConnector(limits).run(capacityQuote, context) },
+  })
+  const rejectsRegistration = (candidate: unknown) => {
+    assert.throws(
+      () => new ConnectorRegistry([candidate] as Connector[]),
+      (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'INVALID_CONNECTOR_REGISTRATION',
+    )
+  }
+
+  let idAccessorRead = false
+  const accessorId = connector()
+  Object.defineProperty(accessorId, 'id', {
+    enumerable: true,
+    get() { idAccessorRead = true; throw new Error('REGISTRY_ID_ACCESSOR_MUST_NOT_RUN') },
+  })
+
+  let methodAccessorRead = false
+  const accessorMethod = connector()
+  Object.defineProperty(accessorMethod, 'run', {
+    enumerable: true,
+    get() { methodAccessorRead = true; throw new Error('REGISTRY_METHOD_ACCESSOR_MUST_NOT_RUN') },
+  })
+
+  const sparseScopes = connector()
+  sparseScopes.scopes = Object.assign([], { 1: 'market:capacity:quote', length: 2 })
+
+  const duplicateScopes = connector()
+  duplicateScopes.scopes = ['market:capacity:quote', 'market:capacity:quote']
+
+  const inheritedMetadata = Object.create(connector()) as Connector
+
+  const hiddenProviderField = connector()
+  Object.defineProperty(hiddenProviderField, 'providerCredential', { value: 'synthetic-not-accepted' })
+
+  let proxyTrapRead = false
+  const proxyConnector = new Proxy(connector(), {
+    get() { proxyTrapRead = true; throw new Error('REGISTRY_PROXY_MUST_NOT_RUN') },
+    getOwnPropertyDescriptor() { proxyTrapRead = true; throw new Error('REGISTRY_PROXY_MUST_NOT_RUN') },
+  })
+
+  const proxyRun = connector()
+  proxyRun.run = new Proxy(proxyRun.run, {
+    apply() { proxyTrapRead = true; throw new Error('REGISTRY_METHOD_PROXY_MUST_NOT_RUN') },
+  })
+
+  for (const candidate of [accessorId, accessorMethod, sparseScopes, duplicateScopes, inheritedMetadata, hiddenProviderField, proxyConnector, proxyRun]) rejectsRegistration(candidate)
+  assert.equal(idAccessorRead, false)
+  assert.equal(methodAccessorRead, false)
+  assert.equal(proxyTrapRead, false)
+
+  const collection = new Proxy([connector()], {
+    get() { proxyTrapRead = true; throw new Error('REGISTRY_COLLECTION_PROXY_MUST_NOT_RUN') },
+    getOwnPropertyDescriptor() { proxyTrapRead = true; throw new Error('REGISTRY_COLLECTION_PROXY_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => new ConnectorRegistry(collection as unknown as Connector[]),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'INVALID_CONNECTOR_REGISTRATION',
+  )
+  assert.equal(proxyTrapRead, false)
+})
+
 test('D1 review packet reconstruction rejects injection, source/quote/action drift, scope drift, and whitespace identity bypasses before audit append', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
@@ -1816,6 +1924,9 @@ test('ADOS 10 controls are complete and explicitly prohibit egress and productio
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D18 freezes the emitted synthetic plan/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D19 freezes review and derived evidence/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D20 freezes outward preflight\/result data/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D21 copies strict result\/provenance ingress/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D22 fixes the registered connector control plane/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[8]?.enforcement ?? '', /D22 evidence permanently report no quote/i)
   assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
   assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })

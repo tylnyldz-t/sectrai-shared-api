@@ -23,8 +23,151 @@ const CONNECTOR_PROVENANCE_OPTIONAL_FIELDS = ['actorId', 'runId', 'datasetId'] a
 const CONNECTOR_UNTRUSTED_CONTENT_FIELDS = ['source', 'value', 'handling', 'instructionPolicy'] as const
 const MAX_RUN_SCOPES = 64
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
+const MAX_REGISTERED_CONNECTORS = 12
+const CONNECTOR_ID_PATTERN = /^[a-z0-9][a-z0-9-]{0,79}$/
+const CONNECTOR_SCOPE_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
+
+type RegisteredConnector = Readonly<{
+  id: string
+  kind: Connector['kind']
+  authKind: Connector['authKind']
+  quotaGroup?: string
+  scopes: readonly string[]
+  preflight?: (input: unknown, context: ConnectorRunContext) => Promise<unknown | void> | unknown | void
+  run: (input: unknown, context: ConnectorRunContext) => Promise<ConnectorResult>
+}>
+
+const REGISTERED_CONNECTOR_METADATA_FIELDS = ['id', 'kind', 'authKind', 'quotaGroup', 'scopes'] as const
+const REGISTERED_CONNECTOR_METHOD_FIELDS = ['preflight', 'run'] as const
 
 type SnapshottedRunConnectorRequest = Omit<RunConnectorRequest, 'scopes' | 'ownerApproved'> & { scopes: string[]; ownerApproved: unknown }
+
+/**
+ * D22 fixes the connector control plane when a registry is built. Only dense,
+ * ordinary own-data collections and connector metadata are admitted, so later
+ * caller mutation cannot retarget a governed run's connector ID, quota group,
+ * scopes, preflight hook, or run hook. The admitted synthetic connector keeps
+ * its own private implementation state; this boundary snapshots only the
+ * registry-visible control plane.
+ */
+function connectorRegistrationError(): never {
+  throw new ConnectorUnavailableError('INVALID_CONNECTOR_REGISTRATION')
+}
+
+function registeredConnectorList(value: unknown): readonly unknown[] {
+  if (
+    !Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype ||
+    Object.getOwnPropertySymbols(value).length > 0
+  ) return connectorRegistrationError()
+  const names = Object.getOwnPropertyNames(value)
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const length = Object.getOwnPropertyDescriptor(value, 'length')
+  if (
+    !length || !('value' in length) || length.enumerable || typeof length.value !== 'number' ||
+    !Number.isSafeInteger(length.value) || length.value > MAX_REGISTERED_CONNECTORS ||
+    names.length !== length.value + 1 || !names.includes('length') ||
+    names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))
+  ) return connectorRegistrationError()
+
+  const connectors: unknown[] = []
+  for (let index = 0; index < length.value; index += 1) {
+    const descriptor = descriptors[String(index)]
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return connectorRegistrationError()
+    connectors.push(descriptor.value)
+  }
+  return Object.freeze(connectors)
+}
+
+function registeredConnectorMetadata(value: object, field: typeof REGISTERED_CONNECTOR_METADATA_FIELDS[number]): unknown {
+  const descriptor = Object.getOwnPropertyDescriptor(value, field)
+  if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return connectorRegistrationError()
+  return descriptor.value
+}
+
+function registeredConnectorScopes(value: unknown): readonly string[] {
+  if (
+    !Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype ||
+    Object.getOwnPropertySymbols(value).length > 0
+  ) return connectorRegistrationError()
+  const names = Object.getOwnPropertyNames(value)
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const length = Object.getOwnPropertyDescriptor(value, 'length')
+  if (
+    !length || !('value' in length) || length.enumerable || typeof length.value !== 'number' ||
+    !Number.isSafeInteger(length.value) || length.value < 1 || length.value > MAX_RUN_SCOPES ||
+    names.length !== length.value + 1 || !names.includes('length') ||
+    names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))
+  ) return connectorRegistrationError()
+
+  const scopes: string[] = []
+  for (let index = 0; index < length.value; index += 1) {
+    const descriptor = descriptors[String(index)]
+    if (
+      !descriptor || !('value' in descriptor) || !descriptor.enumerable ||
+      typeof descriptor.value !== 'string' || !CONNECTOR_SCOPE_PATTERN.test(descriptor.value)
+    ) return connectorRegistrationError()
+    scopes.push(descriptor.value)
+  }
+  if (new Set(scopes).size !== scopes.length) return connectorRegistrationError()
+  return Object.freeze(scopes.sort())
+}
+
+function registeredConnectorMethod(value: object, field: typeof REGISTERED_CONNECTOR_METHOD_FIELDS[number], required: boolean): Function | undefined {
+  let candidate: object | null = value
+  for (let depth = 0; candidate && depth < 8; depth += 1) {
+    if (nodeTypes.isProxy(candidate)) return connectorRegistrationError()
+    const descriptor = Object.getOwnPropertyDescriptor(candidate, field)
+    if (descriptor) {
+      if (!('value' in descriptor) || typeof descriptor.value !== 'function' || nodeTypes.isProxy(descriptor.value)) {
+        return connectorRegistrationError()
+      }
+      return descriptor.value
+    }
+    candidate = Object.getPrototypeOf(candidate)
+  }
+  if (required) return connectorRegistrationError()
+  return undefined
+}
+
+function registeredConnector(value: unknown): RegisteredConnector {
+  if (
+    !value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value) ||
+    Object.getOwnPropertySymbols(value).length > 0
+  ) return connectorRegistrationError()
+  const candidate = value as object
+  const names = Object.getOwnPropertyNames(candidate)
+  const allowedFields: readonly string[] = [...REGISTERED_CONNECTOR_METADATA_FIELDS, ...REGISTERED_CONNECTOR_METHOD_FIELDS]
+  if (names.some((field) => !allowedFields.includes(field))) return connectorRegistrationError()
+
+  const id = registeredConnectorMetadata(candidate, 'id')
+  const kind = registeredConnectorMetadata(candidate, 'kind')
+  const authKind = registeredConnectorMetadata(candidate, 'authKind')
+  const scopes = registeredConnectorScopes(registeredConnectorMetadata(candidate, 'scopes'))
+  const quotaGroupDescriptor = Object.getOwnPropertyDescriptor(candidate, 'quotaGroup')
+  if (quotaGroupDescriptor && (!('value' in quotaGroupDescriptor) || !quotaGroupDescriptor.enumerable)) return connectorRegistrationError()
+  const quotaGroup = quotaGroupDescriptor?.value
+  if (
+    typeof id !== 'string' || !CONNECTOR_ID_PATTERN.test(id) ||
+    (kind !== 'external-data' && kind !== 'market') ||
+    (authKind !== 'owner-token' && authKind !== 'oauth') ||
+    (quotaGroup !== undefined && (typeof quotaGroup !== 'string' || !CONNECTOR_ID_PATTERN.test(quotaGroup)))
+  ) return connectorRegistrationError()
+
+  const preflight = registeredConnectorMethod(candidate, 'preflight', false)
+  const run = registeredConnectorMethod(candidate, 'run', true)
+  const call = (method: Function, args: readonly unknown[]): unknown => Reflect.apply(method, candidate, args)
+  return Object.freeze({
+    id,
+    kind,
+    authKind,
+    ...(quotaGroup === undefined ? {} : { quotaGroup }),
+    scopes,
+    ...(preflight ? {
+      preflight: (input: unknown, context: ConnectorRunContext) => call(preflight, [input, context]) as ReturnType<NonNullable<Connector['preflight']>>,
+    } : {}),
+    run: (input: unknown, context: ConnectorRunContext) => call(run as Function, [input, context]) as ReturnType<Connector['run']>,
+  })
+}
 
 /**
  * The governed runner is the first library boundary before connector
@@ -272,16 +415,17 @@ function governedRunTime(value: unknown): Date {
 }
 
 export class ConnectorRegistry {
-  private readonly connectors = new Map<string, Connector>()
+  private readonly connectors = new Map<string, RegisteredConnector>()
 
   constructor(connectors: readonly Connector[]) {
-    for (const connector of connectors) {
+    for (const candidate of registeredConnectorList(connectors)) {
+      const connector = registeredConnector(candidate)
       if (this.connectors.has(connector.id)) throw new Error(`DUPLICATE_CONNECTOR:${connector.id}`)
       this.connectors.set(connector.id, connector)
     }
   }
 
-  get(connectorId: string): Connector {
+  get(connectorId: string): RegisteredConnector {
     const connector = this.connectors.get(connectorId)
     if (!connector) throw new ConnectorUnavailableError('CONNECTOR_NOT_REGISTERED')
     return connector

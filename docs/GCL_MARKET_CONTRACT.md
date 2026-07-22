@@ -628,6 +628,28 @@ handling, network call, route, storage, migration, queue, worker, quote,
 reservation, booking, publication, handoff, send, durable approval, signature,
 authorization, or execution capability.
 
+## D22 — immutable registered connector control plane
+
+`ConnectorRegistry` now admits only a bounded, dense own-data connector
+collection. At registration it copies and freezes each connector's visible
+control plane: ID, kind, auth kind, optional quota group, deduplicated scopes,
+and data-descriptor `preflight`/`run` method references. The resulting registry
+entry invokes the captured method against the originally admitted connector;
+later mutation cannot retarget connector identity, quota grouping, scope
+admission, preflight, or run behavior while a runner is live.
+
+Accessor, Proxy, inherited metadata, hidden/symbol/extra (including
+credential/provider-shaped) own fields, sparse or duplicate scopes, malformed
+IDs/groups, and getter- or Proxy-shaped callbacks fail closed at registry
+construction as `INVALID_CONNECTOR_REGISTRATION`. No clock, preflight, audit,
+quota, connector run, provider, or market-action seam is reached. D22 fixes a
+local in-process control plane only; it does not turn a connector entry into a
+credential, signature, durable approval, authorization, or execution token.
+
+D22 adds no provider code, credential handling, network call, route, storage,
+migration, queue, worker, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution capability.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -692,7 +714,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -723,7 +745,10 @@ freezes direct preflight output and direct/governed result and provenance
 egress, including data-only untrusted-content metadata after the governed
 audit summary is attached. D21 rejects shaped or forged connector-result
 wrappers before a succeeded audit, copies result/provenance metadata before
-that asynchronous append, and freezes the copied final egress.
+that asynchronous append, and freezes the copied final egress. D22 snapshots
+the market registry's control-plane metadata, scope tuple, quota group, and
+method references at construction, so later connector mutation cannot retarget
+a governed run.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -795,6 +820,11 @@ runner code can inspect it.) It proves a retained,
 mutable connector result cannot change the copied confidence, provenance
 source, or data-only instruction label while the succeeded-audit append is
 pending.
+D22 additionally rejects shaped registry collections, connector metadata,
+scope tuples, hidden credential/provider-shaped fields, and callbacks without
+evaluating their traps. It proves a later mutation of a registered connector's
+ID, quota group, scopes, preflight, or run function cannot alter the frozen
+entry's audit, quota, or synthetic no-action result.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -826,7 +856,8 @@ pending.
    canonical review result and D3–D7 evidence branch before it reaches a
    caller; D20 freezes direct preflight output and direct/governed
    result/provenance output after audit enrichment; D21 validates and copies
-   strict connector-result ingress before the succeeded-audit seam.
+   strict connector-result ingress before the succeeded-audit seam; D22 fixes
+   registry-visible connector metadata, scopes, quota group, and methods.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.
@@ -845,8 +876,9 @@ pending.
    emitted no-action plan before it reaches a caller; D19 freezes the review
    result and its derived no-action evidence before they reach a caller; D20
    freezes the direct/governed no-action preflight/result/provenance boundary;
-   D21 copies exact result/provenance metadata before the succeeded audit.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21 evidence cannot quote, reserve, book,
+   D21 copies exact result/provenance metadata before the succeeded audit; D22
+   fixes the registered connector control plane before a governed run.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -856,4 +888,4 @@ pending.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22.

@@ -81,7 +81,10 @@ Every registered connector is governed by these rules:
   including the final audit-enriched result wrapper; any changed copy remains
   fail-closed and no-action. D21 rejects a shaped or forged connector result
   before its succeeded audit, copies exact result/provenance metadata before
-  that asynchronous seam, and freezes the copied final egress.
+  that asynchronous seam, and freezes the copied final egress. D22 snapshots
+  the bounded registry-visible connector ID, auth/quota metadata, scopes, and
+  method references before a runner can invoke them; shaped registration fails
+  closed before any governed seam.
   All resulting evidence remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
@@ -196,7 +199,9 @@ result and every D3–D7 emitted evidence branch before they reach a caller.
 D20 freezes direct preflight and direct/governed result/provenance branches
 after audit enrichment. D21 accepts only exact data-only connector-result
 metadata before the succeeded-audit seam, rejects a connector-supplied audit
-hash, and freezes the copied final result egress. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21 are local mutation checks or
+hash, and freezes the copied final result egress. D22 fixes the bounded
+registry-visible connector ID, auth/quota metadata, scopes, and method
+references at construction before any governed seam. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22 are local mutation checks or
 boundary hardening, never signatures, credentials, approval workflows, or
 execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
