@@ -212,6 +212,29 @@ function snapshotClock(snapshot: Date): () => Date {
   return () => new Date(Date.prototype.getTime.call(snapshot))
 }
 
+/**
+ * D20 gives every governed collaborator one immutable, own-data run-context
+ * snapshot. A connector cannot retarget a later audit event, quota request, or
+ * camera review/result check by changing product/workspace/actor/scope/limit
+ * fields that the runner already admitted. The local clock remains the D11
+ * copy factory: callers only receive fresh copies of the one trusted instant.
+ */
+function governedRunContext(request: RunConnectorRequest, occurredAt: Date): ConnectorRunContext {
+  const scopes = Object.freeze([...new Set(request.scopes)].sort())
+  return Object.freeze({
+    product: request.product,
+    workspaceId: request.workspaceId,
+    requestedBy: request.requestedBy,
+    checkedBy: request.checkedBy,
+    correlationId: request.correlationId,
+    ownerApproved: request.ownerApproved,
+    scopes,
+    costCapCents: request.costCapCents,
+    requestedItems: request.requestedItems,
+    now: snapshotClock(occurredAt),
+  })
+}
+
 function auditFailureDetail(error: unknown, stage: 'admission' | 'execution'): Record<string, unknown> {
   return {
     stage,
@@ -252,18 +275,7 @@ export class GovernedConnectorRunner {
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
     const normalizedRequest = governedRunRequest(request)
     const occurredAt = governedRunTimeSnapshot(this.now)
-    const context: ConnectorRunContext = {
-      product: normalizedRequest.product,
-      workspaceId: normalizedRequest.workspaceId,
-      requestedBy: normalizedRequest.requestedBy,
-      checkedBy: normalizedRequest.checkedBy,
-      correlationId: normalizedRequest.correlationId,
-      ownerApproved: normalizedRequest.ownerApproved,
-      scopes: [...new Set(normalizedRequest.scopes)].sort(),
-      costCapCents: normalizedRequest.costCapCents,
-      requestedItems: normalizedRequest.requestedItems,
-      now: snapshotClock(occurredAt),
-    }
+    const context = governedRunContext(normalizedRequest, occurredAt)
     let connector: Connector
     try {
       connector = this.registry.get(normalizedRequest.connectorId)
