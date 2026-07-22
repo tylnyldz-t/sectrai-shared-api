@@ -979,11 +979,17 @@ test('D2 policy capsules reject nested credentials and cannot mutate the normali
 
 test('D9 rejects declared asynchronous or generator family policies before preflight invokes them', async () => {
   let asyncCalls = 0
-  const asynchronous = async () => { asyncCalls += 1; return { allowed: true } }
+  const asynchronous = new Proxy(async () => ({ allowed: true }), {
+    apply: (target, receiver, argumentsList) => { asyncCalls += 1; return Reflect.apply(target, receiver, argumentsList) },
+  })
   let generatorCalls = 0
-  const generator = function* () { generatorCalls += 1; yield { allowed: true } }
+  const generator = new Proxy(function* () { yield { allowed: true } }, {
+    apply: (target, receiver, argumentsList) => { generatorCalls += 1; return Reflect.apply(target, receiver, argumentsList) },
+  })
   let asyncGeneratorCalls = 0
-  const asyncGenerator = async function* () { asyncGeneratorCalls += 1; yield { allowed: true } }
+  const asyncGenerator = new Proxy(async function* () { yield { allowed: true } }, {
+    apply: (target, receiver, argumentsList) => { asyncGeneratorCalls += 1; return Reflect.apply(target, receiver, argumentsList) },
+  })
 
   for (const [label, assess] of [
     ['async', asynchronous],
