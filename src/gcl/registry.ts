@@ -36,8 +36,10 @@ export class GovernedConnectorRunner {
   constructor(private readonly registry: ConnectorRegistry, private readonly auditLog: AuditLog, private readonly quota: ConnectorQuota, private readonly now: () => Date = () => new Date()) {}
 
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
+    // Runtime callers can bypass TypeScript, so owner approval is an exact
+    // authority value, never a truthiness check.
+    if (request.ownerApproved !== true) throw new OwnerGateError()
     const connector = this.registry.get(request.connectorId)
-    if (!request.ownerApproved) throw new OwnerGateError()
     if (!isSafeNonNegativeInteger(request.costCapCents) || request.costCapCents < 1) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
     if (!Number.isSafeInteger(request.requestedItems) || request.requestedItems < 1) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
     if (request.scopes.length === 0 || request.scopes.some((scope) => !connector.scopes.includes(scope))) throw new ScopeError()

@@ -56,7 +56,9 @@ Every registered connector is governed by these rules:
   snapshots caller-held plan material and validates host-ledger descriptors.
   D10 snapshots the review context's bounded scope data and invokes its one
   allowed clock seam only after descriptor validation, copying the returned
-  intrinsic `Date`. None reads audit storage, writes, or approves execution.
+  intrinsic `Date`. D11 requires literal boolean owner approval at the runner,
+  direct market, and independent-review boundaries before later seams are
+  reached. None reads audit storage, writes, or approves execution.
   All resulting evidence remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
@@ -145,7 +147,8 @@ still process-local, no-action, and retryable after a failed append.
 D9 snapshots caller-held plan material and checks the injected ledger
 descriptor/result boundary. D10 snapshots review-context data and copies one
 verified intrinsic clock value; shaped context, scope, clock, and date values
-fail closed. D3/D4/D5/D6/D7/D8/D9/D10 are local mutation checks or boundary hardening, never
+fail closed. D11 rejects every non-boolean owner-approval lookalike before a
+direct run or review can reach later seams. D3/D4/D5/D6/D7/D8/D9/D10/D11 are local mutation checks or boundary hardening, never
 signatures, credentials, approval workflows, or execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
 

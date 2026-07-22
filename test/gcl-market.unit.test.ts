@@ -169,6 +169,10 @@ test('synthetic market owner gate rejects before proposal creation', async () =>
 test('synthetic market also rejects invalid direct-run governance values instead of trusting only the runner', async () => {
   const connector = new SyntheticMarketConnector(limits)
   await assert.rejects(
+    () => connector.run(capacityQuote, { ...context, ownerApproved: false }),
+    OwnerGateError,
+  )
+  await assert.rejects(
     () => connector.run(capacityQuote, { ...context, costCapCents: 0 }),
     (error: unknown) => error instanceof CostCapError && error.message === 'MARKET_COST_CAP_REQUIRED',
   )
@@ -188,6 +192,64 @@ test('synthetic market also rejects invalid direct-run governance values instead
     () => connector.run(Object.create(capacityQuote), context),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REQUEST',
   )
+})
+
+test('D11 requires literal boolean owner approval across runner, direct run, and independent review before later seams', async () => {
+  const approvalLookalikes: unknown[] = [false, 0, 1, '', 'true', new Boolean(false), new Boolean(true), {}, null, undefined]
+  const direct = new SyntheticMarketConnector(limits)
+  const directSetup = marketRunner()
+
+  for (const ownerApproved of approvalLookalikes) {
+    await assert.rejects(
+      () => direct.run(capacityQuote, { ...context, ownerApproved: ownerApproved as never }),
+      OwnerGateError,
+    )
+    await assert.rejects(
+      () => directSetup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context, ownerApproved: ownerApproved as never }),
+      OwnerGateError,
+    )
+  }
+  assert.equal(directSetup.audit.entries.length, 0)
+  assert.equal(directSetup.quota.requests.length, 0)
+
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const plan = result.data as SyntheticMarketPlan
+  let clockCalls = 0
+  let ledgerCalls = 0
+  const guardedContext: MarketReviewContext = {
+    product: context.product,
+    workspaceId: context.workspaceId,
+    scopes: ['market:review'],
+    now: () => { clockCalls += 1; return now() },
+  }
+  const ledger = {
+    recordTerminalReview: async () => {
+      ledgerCalls += 1
+      return { hash: 'a'.repeat(64) }
+    },
+  }
+  for (const ownerApproved of approvalLookalikes) {
+    await assert.rejects(
+      () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', ownerApproved as never, 'checker@example.test', ledger, guardedContext),
+      OwnerGateError,
+    )
+  }
+
+  let contextTrapRead = false
+  const shapedContext = new Proxy({}, {
+    get() { contextTrapRead = true; throw new Error('CONTEXT_MUST_NOT_BE_READ') },
+  })
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', 'true' as never, 'checker@example.test', ledger, shapedContext as never),
+    OwnerGateError,
+  )
+  assert.equal(contextTrapRead, false)
+  assert.equal(clockCalls, 0)
+  assert.equal(ledgerCalls, 0)
+  assert.equal(setup.reviews.entries.length, 0)
+  assert.equal(setup.audit.entries.length, 2)
+  assert.equal(setup.quota.requests.length, 1)
 })
 
 test('a distinct owner can audit a market review, but neither decision can authorize an execution', async () => {

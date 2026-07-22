@@ -360,6 +360,27 @@ or write, migration, queue, worker, quote, reservation, booking, publication,
 handoff, send, durable approval, signature, authorization, or execution path.
 Every successful result remains fixed at `NOT_AUTHORIZED`.
 
+## D11 — literal owner-approval boundary
+
+Every market owner gate accepts only the primitive boolean `true`. This rule
+applies identically to the governed runner, a direct
+`SyntheticMarketConnector.run()` call, and
+`independentlyReviewSyntheticMarketPlan()`. Falsy values and truthy lookalikes
+such as `1`, `'true'`, boxed `Boolean` values, objects, `null`, and
+`undefined` fail closed with the normal owner-gate error; no coercion,
+unboxing, or truthiness conversion occurs.
+
+Independent review checks this scalar gate before it reads the caller-held
+review context, plan, injected ledger, or clock seam. A failed D11 gate cannot
+invoke a context getter/Proxy trap, terminal-ledger method, audit append, quota
+operation, or clock. Direct execution repeats the same exact check rather than
+trusting the governed runner alone.
+
+D11 adds no credential, API key, provider, route, storage read/write,
+migration, worker, queue, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution path. Every
+successful result remains fixed at `NOT_AUTHORIZED`.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -424,7 +445,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -436,7 +457,8 @@ and audit-append boundary. D9 snapshots every caller-held review-plan branch
 before semantic reads and validates the injected ledger's member/result
 descriptors before any review receipt can be returned. D10 snapshots every
 review context and limits its clock to one verified host call whose intrinsic
-`Date` value is copied before a terminal ledger operation.
+`Date` value is copied before a terminal ledger operation. D11 requires the
+literal boolean `true` at every owner-gate boundary.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -462,7 +484,9 @@ occurs before the ledger call; a host-owned ledger that is invoked and returns
 invalid data remains unable to create a local receipt. D10 additionally rejects
 scope accessors/Proxies/sparse arrays/oversized arrays, Proxy-shaped clocks,
 and throwing or Proxy-shaped date results without evaluating a shaped value;
-these failures occur before terminal-ledger entry or audit append.
+these failures occur before terminal-ledger entry or audit append. D11 rejects
+both falsy values and truthy scalar/object lookalikes before direct execution,
+review context, clock, terminal-ledger, audit, or quota seams are reached.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -480,9 +504,11 @@ these failures occur before terminal-ledger entry or audit append.
    only exact own-data ledger/audit ingress and leaves a malformed append
    undecided; D9 snapshots all caller-held plan material and rejects shaped
    host-ledger results before a receipt can be formed; D10 snapshots bounded
-   review context and copies one verified intrinsic clock value.
+   review context and copies one verified intrinsic clock value; D11 permits
+   only literal boolean owner approval before any market review seam.
 5. Request content is explicitly data-only, never an instruction.
-6. Owner gate, `market:review`, and maker–checker separation are mandatory.
+6. A literal boolean owner gate, `market:review`, and maker–checker separation
+   are mandatory.
 7. The module has no network client, provider URL, credential/API-key field,
    scheduler, or automatic sync.
 8. Preflight, cost caps, independent grouped quotas, and the scoped SHA-256
@@ -490,7 +516,7 @@ these failures occur before terminal-ledger entry or audit append.
    segment, a minimized rendering, and a further compact binding of it; D8
    only hardens D2's in-process append seam and D9 only validates in-process
    review inputs/results.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10 evidence cannot quote, reserve, book,
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -500,4 +526,4 @@ these failures occur before terminal-ledger entry or audit append.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11.

@@ -91,4 +91,7 @@ action. D10 applies the same descriptor-based boundary to the review context:
 its scope array is copied as bounded own data and its clock is a one-call host
 seam whose intrinsic `Date` value is copied. Shaped context/clock values fail
 closed and cannot change the already-snapshotted review scope or authorize an
+action. D11 requires the primitive boolean `true` at the governed runner,
+direct market-run, and independent-review owner gates; truthy lookalikes fail
+before context, clock, ledger, audit, or quota seams and cannot authorize an
 action.

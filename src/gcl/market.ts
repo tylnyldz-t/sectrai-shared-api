@@ -38,12 +38,12 @@ export const ADOS_10_MARKET_CONTROLS: readonly AdosMarketControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every plan and review packet is digest-bound to one product and workspace.' },
   { id: 'ADOS-02', control: 'SYNTHETIC_DATA_ONLY', enforcement: 'Only the bounded market request shape is accepted; no market response or provider payload is ingested.' },
   { id: 'ADOS-03', control: 'FAIL_CLOSED_CONFIGURATION', enforcement: 'Only literal GCL_MARKET_LIVE_ENABLED=false permits the synthetic adapter; absent, malformed, and true values deny.' },
-  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, D8/D9 harden local ingress, D10 snapshots context and its clock boundary, and D3/D4/D5/D6/D7 recheck evidence without a write.' },
+  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, D8/D9 harden local ingress, D10 snapshots context and its clock boundary, D11 requires literal owner approval, and D3/D4/D5/D6/D7 recheck evidence without a write.' },
   { id: 'ADOS-05', control: 'UNTRUSTED_CONTENT_IS_DATA', enforcement: 'Request values are labelled data-only and cannot become connector instructions.' },
-  { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'A separate canonical owner actor with market:review is required; the plan maker cannot self-review.' },
+  { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'Only the primitive boolean true passes every market owner gate; a separate canonical owner actor with market:review is required and the plan maker cannot self-review.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIALS', enforcement: 'No network client, provider URL, credential, API key, scheduler, or automatic sync exists in this connector.' },
-  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory; D5 reconstructs one caller-supplied segment, D6/D7 only minimize and recheck derived evidence, D8 leaves a malformed append undecided, D9 rejects shaped host results, and D10 bounds review context and clock values.' },
-  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet, review receipt, and D4/D5/D6/D7/D8/D9/D10 evidence permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
+  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory; D5 reconstructs one caller-supplied segment, D6/D7 only minimize and recheck derived evidence, D8 leaves a malformed append undecided, D9 rejects shaped host results, D10 bounds review context and clock values, and D11 rejects non-boolean approval values before later seams.' },
+  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet, review receipt, and D4/D5/D6/D7/D8/D9/D10/D11 evidence permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or market-provider integration is part of this connector.' },
 ])
 
@@ -747,6 +747,8 @@ function requiredScope(request: SyntheticMarketInput): 'market:discover' | 'mark
 }
 
 function validatedRequest(config: SyntheticMarketConnectorConfig, input: unknown, ctx: ConnectorRunContext): SyntheticMarketInput {
+  // Keep direct connector invocation as fail-closed as the governed runner.
+  if (ctx.ownerApproved !== true) throw new OwnerGateError()
   const limits = configured(config, ctx)
   if (!canonicalScopeId(ctx.product) || !canonicalScopeId(ctx.workspaceId)) throw new ConnectorInputError('INVALID_MARKET_CONTEXT')
   if (!Array.isArray(ctx.scopes) || ctx.scopes.length === 0 || ctx.scopes.some((scope) => typeof scope !== 'string' || !MARKET_SCOPES.includes(scope as typeof MARKET_SCOPES[number]))) {
@@ -1399,8 +1401,10 @@ export class SyntheticMarketConnector implements Connector<SyntheticMarketInput,
  * function deliberately has no HTTP route or durable review-state layer.
  */
 export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMarketPlan, decision: MarketReviewDecision, ownerApproved: boolean, reviewer: string, reviewLedger: MarketReviewLedger, context: MarketReviewContext): Promise<ReviewedSyntheticMarketPlan> {
+  // D11: reject every truthy lookalike before reading caller-held context,
+  // plan, ledger, or the narrow clock seam.
+  if (ownerApproved !== true) throw new OwnerGateError()
   const reviewedContext = reviewContext(context)
-  if (!ownerApproved) throw new OwnerGateError()
   const canonicalReviewer = canonicalActor(reviewer)
   if (!canonicalReviewer) throw new OwnerGateError('MARKET_REVIEWER_REQUIRED')
   if (!reviewedContext.scopes.includes('market:review')) throw new ScopeError('MARKET_REVIEW_SCOPE_REQUIRED')
