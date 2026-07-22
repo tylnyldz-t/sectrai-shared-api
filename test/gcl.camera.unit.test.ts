@@ -1504,6 +1504,8 @@ test('D24 keeps late Date prototype hooks out of governed, audit, fixture, and r
 test('D25 keeps late data-boundary and canonical-JSON hooks out of governed, audit, fixture, and review work', async () => {
   const setup = runnerFor()
   const originalArrayIsArray = Array.isArray
+  const originalArrayIncludes = Array.prototype.includes
+  const originalArrayIterator = Array.prototype[Symbol.iterator]
   const originalArrayMap = Array.prototype.map
   const originalArraySort = Array.prototype.sort
   const originalJsonStringify = JSON.stringify
@@ -1512,13 +1514,13 @@ test('D25 keeps late data-boundary and canonical-JSON hooks out of governed, aud
   const originalObjectCreate = Object.create
   const originalObjectEntries = Object.entries
   const originalObjectFreeze = Object.freeze
-  const originalObjectFromEntries = Object.fromEntries
   const originalGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor
   const originalGetOwnPropertyDescriptors = Object.getOwnPropertyDescriptors
   const originalGetOwnPropertyNames = Object.getOwnPropertyNames
   const originalGetOwnPropertySymbols = Object.getOwnPropertySymbols
   const originalGetPrototypeOf = Object.getPrototypeOf
   const originalSet = globalThis.Set
+  const originalCharCodeAt = String.prototype.charCodeAt
   const originalLocaleCompare = String.prototype.localeCompare
   let hostileHookCalls = 0
   const hostileHook = () => { hostileHookCalls += 1; throw new Error('LATE_D25_HOOK_MUST_NOT_RUN') }
@@ -1528,6 +1530,8 @@ test('D25 keeps late data-boundary and canonical-JSON hooks out of governed, aud
 
   try {
     Array.isArray = hostileHook as unknown as typeof Array.isArray
+    Array.prototype.includes = hostileHook as unknown as typeof Array.prototype.includes
+    Array.prototype[Symbol.iterator] = hostileHook as unknown as typeof Array.prototype[Symbol.iterator]
     Array.prototype.map = hostileHook as unknown as typeof Array.prototype.map
     Array.prototype.sort = hostileHook as unknown as typeof Array.prototype.sort
     JSON.stringify = hostileHook as typeof JSON.stringify
@@ -1536,13 +1540,13 @@ test('D25 keeps late data-boundary and canonical-JSON hooks out of governed, aud
     Object.create = hostileHook as typeof Object.create
     Object.entries = hostileHook as typeof Object.entries
     Object.freeze = hostileHook as typeof Object.freeze
-    Object.fromEntries = hostileHook as typeof Object.fromEntries
     Object.getOwnPropertyDescriptor = hostileHook as typeof Object.getOwnPropertyDescriptor
     Object.getOwnPropertyDescriptors = hostileHook as typeof Object.getOwnPropertyDescriptors
     Object.getOwnPropertyNames = hostileHook as typeof Object.getOwnPropertyNames
     Object.getOwnPropertySymbols = hostileHook as typeof Object.getOwnPropertySymbols
     Object.getPrototypeOf = hostileHook as typeof Object.getPrototypeOf
     globalThis.Set = hostileHook as unknown as SetConstructor
+    String.prototype.charCodeAt = hostileHook as typeof String.prototype.charCodeAt
     String.prototype.localeCompare = hostileHook as typeof String.prototype.localeCompare
 
     result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
@@ -1558,6 +1562,8 @@ test('D25 keeps late data-boundary and canonical-JSON hooks out of governed, aud
     reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
   } finally {
     Array.isArray = originalArrayIsArray
+    Array.prototype.includes = originalArrayIncludes
+    Array.prototype[Symbol.iterator] = originalArrayIterator
     Array.prototype.map = originalArrayMap
     Array.prototype.sort = originalArraySort
     JSON.stringify = originalJsonStringify
@@ -1566,13 +1572,13 @@ test('D25 keeps late data-boundary and canonical-JSON hooks out of governed, aud
     Object.create = originalObjectCreate
     Object.entries = originalObjectEntries
     Object.freeze = originalObjectFreeze
-    Object.fromEntries = originalObjectFromEntries
     Object.getOwnPropertyDescriptor = originalGetOwnPropertyDescriptor
     Object.getOwnPropertyDescriptors = originalGetOwnPropertyDescriptors
     Object.getOwnPropertyNames = originalGetOwnPropertyNames
     Object.getOwnPropertySymbols = originalGetOwnPropertySymbols
     Object.getPrototypeOf = originalGetPrototypeOf
     globalThis.Set = originalSet
+    String.prototype.charCodeAt = originalCharCodeAt
     String.prototype.localeCompare = originalLocaleCompare
   }
 

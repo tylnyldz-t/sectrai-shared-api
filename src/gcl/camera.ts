@@ -2,10 +2,10 @@ import { createHash, Hash } from 'node:crypto'
 import { appendVerifiedAuditEvent, hashAuditEvent } from './audit.js'
 import { CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError } from './errors.js'
 import {
-  intrinsicArrayIsArray, intrinsicArrayPrototype, intrinsicDate, intrinsicDateGetTime, intrinsicDateToISOString, intrinsicIsDate,
+  intrinsicArrayIncludes, intrinsicArrayIsArray, intrinsicArrayPrototype, intrinsicDate, intrinsicDateGetTime, intrinsicDateToISOString, intrinsicIsDate,
   intrinsicIsProxy, intrinsicJsonStringify, intrinsicNumber, intrinsicNumberIsFinite, intrinsicNumberIsNaN, intrinsicNumberIsSafeInteger,
   intrinsicObjectCreate, intrinsicObjectFreeze, intrinsicObjectGetOwnPropertyDescriptors, intrinsicObjectGetOwnPropertyNames,
-  intrinsicObjectGetOwnPropertySymbols, intrinsicObjectGetPrototypeOf, intrinsicObjectPrototype, intrinsicReflectApply,
+  intrinsicObjectGetOwnPropertySymbols, intrinsicObjectGetPrototypeOf, intrinsicObjectPrototype, intrinsicReflectApply, intrinsicStringCharCodeAt,
 } from './intrinsics.js'
 import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorResult, ConnectorRunContext } from './types.js'
 
@@ -249,6 +249,26 @@ const CAMERA_REVIEW_CONTEXT_FIELDS = [
   'ownerApproved', 'scopes', 'costCapCents', 'requestedItems', 'now',
 ] as const
 
+function arrayIncludes(values: readonly unknown[], value: unknown): boolean {
+  return intrinsicReflectApply(intrinsicArrayIncludes, values, [value]) as boolean
+}
+
+function hasDisallowedName(names: readonly string[], allowed: readonly string[]): boolean {
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index]
+    if (name === undefined || !arrayIncludes(allowed, name)) return true
+  }
+  return false
+}
+
+function hasUnexpectedArrayName(names: readonly string[]): boolean {
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index]
+    if (name === undefined || (name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return true
+  }
+  return false
+}
+
 /**
  * D18 captures the Node SHA-256 operations used by every fixture and review
  * digest. Public Hash prototype hooks added after module initialization stay
@@ -303,10 +323,12 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function exactObject(value: unknown, allowed: readonly string[], error: string): Record<string, unknown> {
   if (!isRecord(value)) throw new ConnectorInputError(error)
   const names = intrinsicObjectGetOwnPropertyNames(value)
-  if (intrinsicObjectGetOwnPropertySymbols(value).length > 0 || names.some((key) => !allowed.includes(key))) throw new ConnectorInputError(error)
+  if (intrinsicObjectGetOwnPropertySymbols(value).length > 0 || hasDisallowedName(names, allowed)) throw new ConnectorInputError(error)
   const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
   const normalized = intrinsicObjectCreate(null) as Record<string, unknown>
-  for (const key of names) {
+  for (let index = 0; index < names.length; index += 1) {
+    const key = names[index]
+    if (key === undefined) throw new ConnectorInputError(error)
     const descriptor = descriptors[key]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError(error)
     normalized[key] = descriptor.value
@@ -319,7 +341,7 @@ function exactStringArray(value: unknown, error: string, maximumItems: number, m
   if (!intrinsicArrayIsArray(value) || intrinsicIsProxy(value) || intrinsicObjectGetPrototypeOf(value) !== intrinsicArrayPrototype) throw new ConnectorInputError(error)
   if (value.length > maximumItems || intrinsicObjectGetOwnPropertySymbols(value).length > 0) throw new ConnectorInputError(error)
   const names = intrinsicObjectGetOwnPropertyNames(value)
-  if (names.length !== value.length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+  if (names.length !== value.length + 1 || !arrayIncludes(names, 'length') || hasUnexpectedArrayName(names)) {
     throw new ConnectorInputError(error)
   }
   const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
@@ -327,7 +349,7 @@ function exactStringArray(value: unknown, error: string, maximumItems: number, m
   for (let index = 0; index < value.length; index += 1) {
     const descriptor = descriptors[`${index}`]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError(error)
-    normalized.push(requiredString(descriptor.value, error, maximumItemLength))
+    normalized[normalized.length] = requiredString(descriptor.value, error, maximumItemLength)
   }
   return normalized
 }
@@ -360,10 +382,11 @@ function cameraReviewContext(context: Pick<ConnectorRunContext, 'product' | 'wor
 }
 
 function containsControlCharacter(value: string): boolean {
-  return [...value].some((character) => {
-    const code = character.codePointAt(0)
-    return code !== undefined && (code < 32 || code === 127)
-  })
+  for (let index = 0; index < value.length; index += 1) {
+    const code = intrinsicReflectApply(intrinsicStringCharCodeAt, value, [index]) as number
+    if (code < 32 || code === 127) return true
+  }
+  return false
 }
 
 function normalizedActor(value: unknown): string | null {

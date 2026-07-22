@@ -1,7 +1,7 @@
 import { appendVerifiedAuditEvent } from './audit.js'
 import { AuditChainError, AuditEventError, AuditReceiptError, ConnectorInputError, ConnectorResultError, CostCapError, GclError, MakerCheckerError, OwnerGateError, ScopeError, ConnectorUnavailableError } from './errors.js'
 import {
-  intrinsicArrayIsArray, intrinsicArrayPrototype, intrinsicArraySort, intrinsicDate, intrinsicDateGetTime, intrinsicDateToISOString, intrinsicIsDate, intrinsicIsProxy,
+  intrinsicArrayIncludes, intrinsicArrayIsArray, intrinsicArrayPrototype, intrinsicArraySort, intrinsicDate, intrinsicDateGetTime, intrinsicDateToISOString, intrinsicIsDate, intrinsicIsProxy,
   intrinsicNumberIsFinite, intrinsicNumberIsSafeInteger, intrinsicObjectCreate, intrinsicObjectFreeze, intrinsicObjectGetOwnPropertyDescriptor,
   intrinsicObjectGetOwnPropertyDescriptors, intrinsicObjectGetOwnPropertyNames, intrinsicObjectGetOwnPropertySymbols,
   intrinsicObjectGetPrototypeOf, intrinsicObjectPrototype, intrinsicReflectApply, intrinsicSet, intrinsicSetAdd, intrinsicSetDelete, intrinsicSetHas,
@@ -23,6 +23,26 @@ export type RunConnectorRequest = {
 }
 
 function isSafePositiveInteger(value: number): boolean { return intrinsicNumberIsSafeInteger(value) && value > 0 }
+
+function arrayIncludes(values: readonly unknown[], value: unknown): boolean {
+  return intrinsicReflectApply(intrinsicArrayIncludes, values, [value]) as boolean
+}
+
+function hasUnexpectedArrayName(names: readonly string[]): boolean {
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index]
+    if (name === undefined || (name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return true
+  }
+  return false
+}
+
+function hasDisallowedName(names: readonly string[], allowed: readonly string[]): boolean {
+  for (let index = 0; index < names.length; index += 1) {
+    const name = names[index]
+    if (name === undefined || !arrayIncludes(allowed, name)) return true
+  }
+  return false
+}
 
 const GOVERNED_RUN_REQUEST_FIELDS = [
   'connectorId', 'input', 'product', 'workspaceId', 'requestedBy', 'checkedBy',
@@ -71,14 +91,14 @@ function registeredConnectorList(value: unknown): readonly unknown[] {
   const lengthDescriptor = intrinsicObjectGetOwnPropertyDescriptor(value, 'length')
   const length = lengthDescriptor?.value
   if (!lengthDescriptor || !('value' in lengthDescriptor) || typeof length !== 'number' || !intrinsicNumberIsSafeInteger(length) || length > MAX_REGISTERED_CONNECTORS ||
-    names.length !== length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+    names.length !== length + 1 || !arrayIncludes(names, 'length') || hasUnexpectedArrayName(names)) {
     return connectorRegistrationError()
   }
   const connectors: unknown[] = []
   for (let index = 0; index < length; index += 1) {
     const descriptor = descriptors[String(index)]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return connectorRegistrationError()
-    connectors.push(descriptor.value)
+    connectors[connectors.length] = descriptor.value
   }
   return intrinsicObjectFreeze(connectors)
 }
@@ -98,7 +118,7 @@ function registeredConnectorScopes(value: unknown): readonly string[] {
   const lengthDescriptor = intrinsicObjectGetOwnPropertyDescriptor(value, 'length')
   const length = lengthDescriptor?.value
   if (!lengthDescriptor || !('value' in lengthDescriptor) || typeof length !== 'number' || !intrinsicNumberIsSafeInteger(length) || length < 1 || length > 12 ||
-    names.length !== length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+    names.length !== length + 1 || !arrayIncludes(names, 'length') || hasUnexpectedArrayName(names)) {
     return connectorRegistrationError()
   }
   const scopes: string[] = []
@@ -107,10 +127,12 @@ function registeredConnectorScopes(value: unknown): readonly string[] {
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'string' || !descriptor.value || descriptor.value.length > 80) {
       return connectorRegistrationError()
     }
-    scopes.push(descriptor.value)
+    scopes[scopes.length] = descriptor.value
   }
   const uniqueScopes = new intrinsicSet<string>()
-  for (const scope of scopes) {
+  for (let index = 0; index < scopes.length; index += 1) {
+    const scope = scopes[index]
+    if (scope === undefined) return connectorRegistrationError()
     if (intrinsicReflectApply(intrinsicSetHas, uniqueScopes, [scope])) return connectorRegistrationError()
     intrinsicReflectApply(intrinsicSetAdd, uniqueScopes, [scope])
   }
@@ -172,7 +194,7 @@ function governedRunScopes(value: unknown): string[] {
     throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
   }
   const names = intrinsicObjectGetOwnPropertyNames(value)
-  if (names.length !== value.length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+  if (names.length !== value.length + 1 || !arrayIncludes(names, 'length') || hasUnexpectedArrayName(names)) {
     throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
   }
   const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
@@ -182,7 +204,7 @@ function governedRunScopes(value: unknown): string[] {
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'string' || !descriptor.value || descriptor.value.length > 80) {
       throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
     }
-    scopes.push(descriptor.value)
+    scopes[scopes.length] = descriptor.value
   }
   return scopes
 }
@@ -217,7 +239,7 @@ function governedInputSnapshot(value: unknown, depth = 0, ancestors = new intrin
     const lengthDescriptor = intrinsicObjectGetOwnPropertyDescriptor(value, 'length')
     const itemCount = lengthDescriptor?.value
     if (!lengthDescriptor || !('value' in lengthDescriptor) || typeof itemCount !== 'number' || !intrinsicNumberIsSafeInteger(itemCount) || itemCount > MAX_GOVERNED_INPUT_ARRAY_ITEMS ||
-      names.length !== itemCount + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+      names.length !== itemCount + 1 || !arrayIncludes(names, 'length') || hasUnexpectedArrayName(names)) {
       throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
     }
     const snapshot: unknown[] = []
@@ -226,7 +248,7 @@ function governedInputSnapshot(value: unknown, depth = 0, ancestors = new intrin
       for (let index = 0; index < itemCount; index += 1) {
         const descriptor = descriptors[`${index}`]
         if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
-        snapshot.push(governedInputSnapshot(descriptor.value, depth + 1, ancestors))
+        snapshot[snapshot.length] = governedInputSnapshot(descriptor.value, depth + 1, ancestors)
       }
     } finally {
       intrinsicReflectApply(intrinsicSetDelete, ancestors, [value])
@@ -244,7 +266,9 @@ function governedInputSnapshot(value: unknown, depth = 0, ancestors = new intrin
   const snapshot = intrinsicObjectCreate(null) as Record<string, unknown>
   intrinsicReflectApply(intrinsicSetAdd, ancestors, [value])
   try {
-    for (const name of names) {
+    for (let index = 0; index < names.length; index += 1) {
+      const name = names[index]
+      if (name === undefined) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
       const descriptor = descriptors[name]
       if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
       snapshot[name] = governedInputSnapshot(descriptor.value, depth + 1, ancestors)
@@ -269,12 +293,14 @@ function governedRunRequest(value: unknown): RunConnectorRequest {
   const prototype = intrinsicObjectGetPrototypeOf(value)
   if (prototype !== intrinsicObjectPrototype && prototype !== null) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
   const names = intrinsicObjectGetOwnPropertyNames(value)
-  if (intrinsicObjectGetOwnPropertySymbols(value).length > 0 || names.length !== GOVERNED_RUN_REQUEST_FIELDS.length || names.some((name) => !GOVERNED_RUN_REQUEST_FIELDS.includes(name as typeof GOVERNED_RUN_REQUEST_FIELDS[number]))) {
+  if (intrinsicObjectGetOwnPropertySymbols(value).length > 0 || names.length !== GOVERNED_RUN_REQUEST_FIELDS.length || hasDisallowedName(names, GOVERNED_RUN_REQUEST_FIELDS)) {
     throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
   }
   const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
   const normalized = intrinsicObjectCreate(null) as Record<string, unknown>
-  for (const field of GOVERNED_RUN_REQUEST_FIELDS) {
+  for (let index = 0; index < GOVERNED_RUN_REQUEST_FIELDS.length; index += 1) {
+    const field = GOVERNED_RUN_REQUEST_FIELDS[index]
+    if (field === undefined) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
     const descriptor = descriptors[field]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
     normalized[field] = descriptor.value
@@ -313,12 +339,14 @@ function governedResultRecord(value: unknown, fields: readonly string[]): Record
   const prototype = intrinsicObjectGetPrototypeOf(value)
   if (prototype !== intrinsicObjectPrototype && prototype !== null) throw new ConnectorResultError('INVALID_GOVERNED_CONNECTOR_RESULT')
   const names = intrinsicObjectGetOwnPropertyNames(value)
-  if (intrinsicObjectGetOwnPropertySymbols(value).length > 0 || names.length !== fields.length || names.some((name) => !fields.includes(name))) {
+  if (intrinsicObjectGetOwnPropertySymbols(value).length > 0 || names.length !== fields.length || hasDisallowedName(names, fields)) {
     throw new ConnectorResultError('INVALID_GOVERNED_CONNECTOR_RESULT')
   }
   const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
   const normalized = intrinsicObjectCreate(null) as Record<string, unknown>
-  for (const field of fields) {
+  for (let index = 0; index < fields.length; index += 1) {
+    const field = fields[index]
+    if (field === undefined) throw new ConnectorResultError('INVALID_GOVERNED_CONNECTOR_RESULT')
     const descriptor = descriptors[field]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorResultError('INVALID_GOVERNED_CONNECTOR_RESULT')
     normalized[field] = descriptor.value
@@ -421,10 +449,12 @@ function snapshotClock(snapshot: Date): () => Date {
 function governedRunContext(request: RunConnectorRequest, occurredAt: Date): ConnectorRunContext {
   const uniqueScopes = new intrinsicSet<string>()
   const scopes: string[] = []
-  for (const scope of request.scopes) {
+  for (let index = 0; index < request.scopes.length; index += 1) {
+    const scope = request.scopes[index]
+    if (scope === undefined) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
     if (!intrinsicReflectApply(intrinsicSetHas, uniqueScopes, [scope])) {
       intrinsicReflectApply(intrinsicSetAdd, uniqueScopes, [scope])
-      scopes.push(scope)
+      scopes[scopes.length] = scope
     }
   }
   return intrinsicObjectFreeze({
@@ -500,7 +530,10 @@ export class ConnectorRegistry {
   readonly #connectors = new Map<string, RegisteredConnector>()
 
   constructor(connectors: readonly Connector[]) {
-    for (const candidate of registeredConnectorList(connectors)) {
+    const registered = registeredConnectorList(connectors)
+    for (let index = 0; index < registered.length; index += 1) {
+      const candidate = registered[index]
+      if (candidate === undefined) throw new ConnectorUnavailableError('INVALID_CONNECTOR_REGISTRATION')
       const connector = registeredConnector(candidate)
       if (this.#connectors.has(connector.id)) throw new Error(`DUPLICATE_CONNECTOR:${connector.id}`)
       this.#connectors.set(connector.id, connector)
@@ -549,7 +582,12 @@ export class GovernedConnectorRunner {
       if (context.requestedBy === context.checkedBy) throw new MakerCheckerError()
       if (!isSafePositiveInteger(context.costCapCents)) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
       if (!isSafePositiveInteger(context.requestedItems)) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
-      if (context.scopes.length === 0 || context.scopes.some((scope) => !connector.scopes.includes(scope))) throw new ScopeError()
+      let scopeDenied = context.scopes.length === 0
+      for (let index = 0; index < context.scopes.length; index += 1) {
+        const scope = context.scopes[index]
+        if (scope === undefined || !arrayIncludes(connector.scopes, scope)) scopeDenied = true
+      }
+      if (scopeDenied) throw new ScopeError()
       await connector.preflight?.(normalizedRequest.input, context)
     } catch (error) {
       await appendVerifiedAuditEvent(auditLog, this.#event('connector.run.denied', connector.id, context, occurredAt, auditFailureDetail(error, 'admission')))
