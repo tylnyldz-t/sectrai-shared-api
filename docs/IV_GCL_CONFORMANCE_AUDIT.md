@@ -1414,3 +1414,99 @@ job is launched; and synthetic evidence is never deployment or live-enable
 authority. D17 loaded no credential, contacted no provider or network, used no
 device or production database, sent nothing, and made no `main`/production
 write.
+
+## D18 — direct immutable successor package
+
+D18 pins the exact direct Git child of every D17 package: RA OCR `a9e040a`, RA
+image `111bcb8`, RA 3D/game `f3dd0b9`, RA market `441f4b7`, RFID `9fb39bb`,
+translation `564b7b0`, language education `c297207`, and camera `7591c86`.
+The fixture verifies each child’s immediate parent, then resolves the connector,
+runner, and named local-closure blobs through `git show <revision>:<path>`.
+No mutable sibling worktree file is evidence. RA voice still has no successor
+beyond D1.
+
+D18 remains source-only and fail closed. It does not import target runtime
+code, read an environment file or credential, open a socket, contact a
+provider, access a device or database, start JARVIS/JNC, run a migration,
+publish, send, or write `main`/production.
+
+| Connector | D18 source-only evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D18 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Binds the Proxy-rejection claim into the v13 review packet, but a revoked Proxy supplied as `syntheticFields` reaches `Array.isArray` before an explicit Proxy check; its runner also treats a truthy non-boolean owner value as approval | `requested` only | Pass | Nonconformant; Proxy-array and owner-gate gaps |
+| RA image | Documentation-only direct successor; D17 connector and protected quota runner remain pinned | `requested`, `failed` | Pass | Conformant |
+| RA 3D/game | Result review now requires the synthetic artifact format to exactly equal the normalized `glb`/`obj` request format | `requested` only | Pass | Nonconformant; quota gap |
+| RA market | Preflight returns a canonical scalar-only request snapshot and the runner supplies it to `run`, closing caller mutation between preflight and asynchronous seams | `requested` only | Pass | Nonconformant; quota gap |
+| RFID | Adds a fixed exception/waiver rejection fixture with no waiver input, grant, control, egress, pilot, or production bypass | `requested`, `failed` | Pass | Nonconformant; truthy non-boolean owner bypass |
+| Translation | Canonical scope admission rejects duplicate/noncanonical scope authority before clock, preflight, audit, or quota | `requested`, `failed` | Pass | Nonconformant; truthy non-boolean owner bypass |
+| Language education | Adds a bounded reflection-reference connector; no reflection text, learner response, sentiment, wellbeing, profile, or personalization input/output exists | `requested`, `failed` | Pass | Conformant |
+| Camera | Unit-only direct successor; D17 descriptor-safe audit receipts and maker–checker runner remain pinned | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` is limited to the immutable source satisfying this IV synthetic
+governance envelope. It is not authorization to configure a provider/key, make
+egress, capture OCR/media/RFID/camera input, use hardware, write a database,
+migrate, launch JARVIS/JNC, reserve/book/publish/handoff, send output, or
+enable a live operation.
+
+### D18 negative and edge evidence
+
+- Direct-child validation is now executable: every D18 commit must resolve to
+  the stated D17 commit as its immediate parent; a rebased, skipped, or later
+  descendant object fails the fixture.
+- A new exact-boolean owner classifier rejects an erased TypeScript annotation
+  plus `if (!ownerApproved)` as sufficient authority. It accepts either
+  `ownerApproved === true`/`!== true` semantics or a preceding runtime boolean
+  validation. It therefore records the RA OCR, RFID, and translation gaps
+  rather than letting a truthy string/object consume quota or reach an adapter.
+- The OCR probe distinguishes a top-level Proxy guard from safe nested-array
+  ingress. The exact D18 unit test demonstrates that a revoked Proxy in
+  `syntheticFields` throws native `Array.isArray` `TypeError` instead of the
+  required closed `ConnectorInputError`; the snapshot remains nonconformant
+  until Proxy detection occurs before that inspection.
+- The 3D probe rejects an artifact whose output format differs from the
+  review-snapshot request. The market probe requires the preflight-produced
+  canonical input to be used by `run`, not the original caller-owned object.
+- RFID's new exception-waiver fixture is asserted to be
+  `SYNTHETIC_EXCEPTION_WAIVER_BOUNDARY_REVIEW_PROPOSAL_ONLY_NOT_EXECUTED`, with
+  waiver input `NOT_ACCEPTED` and owner/role override `NOT_GRANTED`.
+  Translation’s duplicate scope check and language education’s exact
+  reflection `{ synthetic, reflectionRef, reflectionHash, locale, activity }`
+  shape are likewise explicit negative probes.
+- The prior closure scan remains in force: no egress primitive, endpoint,
+  credential-like environment access, subprocess/worker launch, automatic
+  publication, dynamic/runtime escape, or non-local runtime import may occur.
+  Market, translation, language education, and camera still hard-deny a live
+  opt-in; all other D18 connectors expose no live-enable surface.
+
+### D18 test evidence and ADOS boundary
+
+The local immutable D1–D18 fixture passes all 19 tests. It checks blob pins,
+direct-parent lineage, local import closures, disabled mode, no-egress safety,
+owner/quota classifications, the inherited runtime-escape probes, and the D18
+negative edges using only local Git objects and in-process TypeScript parsing.
+
+Ten selected GCL unit files were also run from exact D18 Git archives with an
+empty environment except `PATH`; database integration and migration tests were
+excluded. Eight files pass: image, 3D/game, both market files, both translation
+files, language education, and camera. No credential, network/provider/device
+call, database connection, migration, send, publication, or launch was
+attempted.
+
+Two exact-commit unit suites are regressions and are not counted as positive
+evidence:
+
+- OCR has 20 passing and one failing test. Its new Proxy test exposes the
+  revoked-Proxy `Array.isArray` boundary gap above; this is a source defect,
+  not a live-test failure.
+- RFID has 40 passing and one failing test. Its older ADOS-text regular
+  expression requires the prior sentence to end after `control access`, while
+  D18 correctly adds the exception-waiver fixture and the no-waiver wording.
+  The owning unit assertion must be widened before that exact package can be
+  called unit-certified.
+
+All ten ADOS rules remain active: product data planes are separate; data stays
+minimal/synthetic; missing or malformed gates deny; maker–checker constraints
+remain; audit/unit gaps are reported; no migration is introduced; outputs are
+proposal-only/no-action; no JARVIS/JNC job launches; and synthetic evidence is
+never deployment or live-enable authority. The D18 audit loaded no credential,
+contacted no provider or network, used no device or production database, sent
+nothing, and made no `main`/production write.

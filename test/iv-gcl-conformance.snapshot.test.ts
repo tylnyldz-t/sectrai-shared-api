@@ -36,6 +36,8 @@ type Snapshot = {
   quotaFailureAudited: boolean
   /** A truthy runtime value must not substitute for an explicit owner approval. */
   strictOwnerApproval?: boolean
+  /** A Proxy array must be rejected before an intrinsic Array inspection can throw. */
+  proxyArrayIngressSafe?: boolean
   /** A package module gets an exact blob pin in addition to its closure scan. */
   pinnedClosureBlobs?: readonly PinnedClosureBlob[]
   /** A package companion requires review even when it is not imported by the public connector. */
@@ -191,7 +193,7 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D17', name: 'Translation', revision: 'a57b677', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '46280bb34960ee1ae5794bd8ee952ccfc1262708', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: '3bc0b92de9e503f6f0d4a4384e619776ab6cff74' }] },
   { batch: 'D17', name: 'Language education', revision: '7f21473', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: 'c016c22ff9c9dc8fd017e18b5c237f173ce9b6f5', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
   { batch: 'D17', name: 'Camera', revision: '1adcf01', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '41e83266ea7f68a06fdf3220137943c4276abb47', registryBlob: '5fc1d513d6ade75defca073e34c2a7d6cd92ee50', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/audit.ts', blob: 'f1d877895b7ba805b3359a40cdd6e76b3c36bf24' }, { path: 'src/gcl/errors.ts', blob: '0cb36107c3f6844d399c7fe1a11f71b07b2a0951' }] },
-  { batch: 'D18', name: 'RA OCR', revision: 'a9e040a', parentRevision: '3ff9d1d', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: '6fa36ca1fe83aaee1bb15d97cf2a256e35a67b95', registryBlob: '2407ff38734546832bd9a8e2e97fae488198e7f9', hardDeniesLiveOptIn: false, quotaFailureAudited: false, strictOwnerApproval: false },
+  { batch: 'D18', name: 'RA OCR', revision: 'a9e040a', parentRevision: '3ff9d1d', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: '6fa36ca1fe83aaee1bb15d97cf2a256e35a67b95', registryBlob: '2407ff38734546832bd9a8e2e97fae488198e7f9', hardDeniesLiveOptIn: false, quotaFailureAudited: false, strictOwnerApproval: false, proxyArrayIngressSafe: false },
   { batch: 'D18', name: 'RA image', revision: '111bcb8', parentRevision: '2e021b3', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: 'bf63ec84ac4f49d2a96be90c30b77b186e065cae', registryBlob: '6faf3cd1be37336d7cdc4181a81d90199aa2e9a2', hardDeniesLiveOptIn: false, quotaFailureAudited: true, strictOwnerApproval: true },
   { batch: 'D18', name: 'RA 3D/game', revision: 'f3dd0b9', parentRevision: 'a9dbbe6', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: 'eccfc749f420702b6c7f206f72d54241a71ce05d', registryBlob: '400933ad278d07687541967370fae5ef584abbc9', hardDeniesLiveOptIn: false, quotaFailureAudited: false, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/result-boundary.ts', blob: 'cf6127caa4fb7549a73f92acdff69e6d7d7cf172' }] },
   { batch: 'D18', name: 'RA market', revision: '441f4b7', parentRevision: 'f501388', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: 'b9fa623e97bc2913955ed6993b6e1ba51ac70966', registryBlob: '1221f840ebab9e1cb893c22b799eb257222dd9de', hardDeniesLiveOptIn: true, quotaFailureAudited: false, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: 'af015f263316247e31302ae615ae02cef03d06f0' }] },
@@ -547,6 +549,11 @@ function strictOwnerApprovalGate(registry: string): boolean {
   return runtimeBooleanValidation && falsyGate
 }
 
+/** A revoked Proxy can throw during Array.isArray, so detection must come first. */
+function proxyArrayIngressRejectedBeforeInspection(source: string): boolean {
+  return /isProxyObject\(value\.syntheticFields\)\s*\|\|\s*!Array\.isArray\(value\.syntheticFields\)/.test(source)
+}
+
 test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
@@ -811,6 +818,10 @@ test('D18 direct-successor package preserves immutable lineage and classifies tr
     assert.notEqual(snapshot.parentRevision, undefined, `${snapshot.name} must name its audited parent`)
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(strictOwnerApprovalGate(registry), snapshot.strictOwnerApproval, `${snapshot.name} strict owner-approval classification changed`)
+    if (snapshot.proxyArrayIngressSafe !== undefined) {
+      const connector = sourceAt(snapshot, snapshot.connectorPath)
+      assert.equal(proxyArrayIngressRejectedBeforeInspection(connector), snapshot.proxyArrayIngressSafe, `${snapshot.name} Proxy-array ingress classification changed`)
+    }
   }
 
   assert.equal(strictOwnerApprovalGate('if (!request.ownerApproved) throw new OwnerGateError()'), false, 'an erased TypeScript type cannot reject a truthy owner value')
@@ -825,8 +836,9 @@ test('D18 synthetic boundary additions remain proposal-only and reject the newly
   }
 
   const ocr = sourceAt(snapshot('RA OCR'), 'src/gcl/vision.ts')
-  assert.match(ocr, /if \(!value \|\| typeof value !== 'object'\) return false\s+if \(isProxyObject\(value\)\) return false\s+if \(Array\.isArray\(value\)\) return false/, 'D18 OCR must reject a Proxy before Array or prototype inspection')
+  assert.match(ocr, /if \(!value \|\| typeof value !== 'object'\) return false\s+if \(isProxyObject\(value\)\) return false\s+if \(Array\.isArray\(value\)\) return false/, 'D18 OCR must retain its top-level Proxy-before-Array record guard')
   assert.match(ocr, /value\.proxyObjectsAccepted !== false \|\| value\.proxyArraysAccepted !== false/, 'D18 OCR packet must bind both Proxy rejection claims')
+  assert.equal(proxyArrayIngressRejectedBeforeInspection(ocr), false, 'D18 OCR must remain classified nonconformant until a Proxy array is rejected before Array.isArray')
 
   const threeD = sourceAt(snapshot('RA 3D/game'), 'src/gcl/result-boundary.ts')
   assert.match(threeD, /input\.outputFormat === 'glb' \|\| input\.outputFormat === 'obj'/, 'D18 3D result review must retain a bounded requested format')
