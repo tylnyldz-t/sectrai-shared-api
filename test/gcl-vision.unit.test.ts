@@ -105,7 +105,7 @@ test('GM2 run requires owner gate, scope, cost cap, quota, consent, and creates 
   assert.deepEqual(proposal.reviewPacket.makerCheckerBinding, { actorIdentity: 'ascii-case-insensitive-trimmed', independentReviewerRequired: true })
   assert.deepEqual(proposal.reviewPacket.collectionBoundaryBinding, { collectionShape: 'array-prototype-dense-own-data-only', sparseOrInheritedElementsAccepted: false, accessorElementsAccepted: false })
   assert.deepEqual(proposal.reviewPacket.stringBoundaryBinding, { valueEncoding: 'well-formed-unicode-utf8', controlCharactersAccepted: false, unpairedSurrogateCodeUnitsAccepted: false })
-  assert.deepEqual(proposal.reviewPacket.timeBoundaryBinding, { clockValue: 'utc-epoch-milliseconds', clockObject: 'exact-date-prototype-no-own-properties', issuedAtSource: 'governed-run-context-clock' })
+  assert.deepEqual(proposal.reviewPacket.timeBoundaryBinding, { clockValue: 'utc-epoch-milliseconds', clockObject: 'exact-date-prototype-no-own-properties', issuedAtSource: 'validated-run-context-clock' })
   assert.equal(proposal.reviewPacket.evidenceBinding.capturedAt, input.evidence.capturedAt)
   assert.equal(proposal.reviewPacket.evidenceBinding.expiresAt, '2026-07-22T12:04:00.000Z')
   assert.equal(proposal.reviewPacket.reviewWindow.issuedAt, now().toISOString())
@@ -604,11 +604,32 @@ test('D11 freezes an exact built-in clock and binds that boundary before any res
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
 
-  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
+  let proxiedClockTrapRead = false
+  const proxiedClockRunner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, () => new Proxy(new Date('2026-07-22T12:00:00.000Z'), {
+    getPrototypeOf: () => {
+      proxiedClockTrapRead = true
+      throw new Error('PROXY_TRAP_MUST_NOT_RUN')
+    },
+    ownKeys: () => {
+      proxiedClockTrapRead = true
+      throw new Error('PROXY_TRAP_MUST_NOT_RUN')
+    },
+  }))
+  await assert.rejects(() => proxiedClockRunner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CONNECTOR_TIME')
+  assert.equal(proxiedClockTrapRead, false)
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+
+  let clockCalls = 0
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, () => {
+    clockCalls += 1
+    return now()
+  })
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
+  assert.equal(clockCalls, 1)
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
   assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v11')
-  assert.deepEqual(result.data.proposal.reviewPacket.timeBoundaryBinding, { clockValue: 'utc-epoch-milliseconds', clockObject: 'exact-date-prototype-no-own-properties', issuedAtSource: 'governed-run-context-clock' })
+  assert.deepEqual(result.data.proposal.reviewPacket.timeBoundaryBinding, { clockValue: 'utc-epoch-milliseconds', clockObject: 'exact-date-prototype-no-own-properties', issuedAtSource: 'validated-run-context-clock' })
 
   const missingBinding = clone()
   delete (missingBinding.reviewPacket as { timeBoundaryBinding?: unknown }).timeBoundaryBinding

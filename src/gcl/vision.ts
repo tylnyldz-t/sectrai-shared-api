@@ -38,7 +38,7 @@ const SYNTHETIC_DOCUMENT_STRING_BOUNDARY = {
 const SYNTHETIC_DOCUMENT_TIME_BOUNDARY = {
   clockValue: 'utc-epoch-milliseconds',
   clockObject: 'exact-date-prototype-no-own-properties',
-  issuedAtSource: 'governed-run-context-clock',
+  issuedAtSource: 'validated-run-context-clock',
 } as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
@@ -285,14 +285,14 @@ function parsedDate(value: unknown, error: string): Date {
  * built-in Date before it can affect packet timing or an audit decision.
  */
 function exactClockDate(value: unknown, error: string): Date {
-  if (!(value instanceof Date) || Object.getPrototypeOf(value) !== Date.prototype || Reflect.ownKeys(value).length !== 0) throw new ConnectorInputError(error)
+  if (!value || typeof value !== 'object') throw new ConnectorInputError(error)
   let milliseconds: number
   try {
     milliseconds = Date.prototype.getTime.call(value)
   } catch {
     throw new ConnectorInputError(error)
   }
-  if (!Number.isFinite(milliseconds)) throw new ConnectorInputError(error)
+  if (!Number.isFinite(milliseconds) || Object.getPrototypeOf(value) !== Date.prototype || Reflect.ownKeys(value).length !== 0) throw new ConnectorInputError(error)
   return new Date(milliseconds)
 }
 function isFieldName(value: unknown): value is DocumentFieldName { return typeof value === 'string' && (fieldNames as readonly string[]).includes(value) }

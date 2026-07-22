@@ -22,14 +22,14 @@ function isSafeActor(value: unknown): value is string { return typeof value === 
 /** Copy an intrinsic Date once so an injected/subclassed clock cannot affect audit timing. */
 function governedNow(clock: () => Date): Date {
   const value = clock()
-  if (!(value instanceof Date) || Object.getPrototypeOf(value) !== Date.prototype || Reflect.ownKeys(value).length !== 0) throw new ConnectorInputError('INVALID_CONNECTOR_TIME')
+  if (!value || typeof value !== 'object') throw new ConnectorInputError('INVALID_CONNECTOR_TIME')
   let milliseconds: number
   try {
     milliseconds = Date.prototype.getTime.call(value)
   } catch {
     throw new ConnectorInputError('INVALID_CONNECTOR_TIME')
   }
-  if (!Number.isFinite(milliseconds)) throw new ConnectorInputError('INVALID_CONNECTOR_TIME')
+  if (!Number.isFinite(milliseconds) || Object.getPrototypeOf(value) !== Date.prototype || Reflect.ownKeys(value).length !== 0) throw new ConnectorInputError('INVALID_CONNECTOR_TIME')
   return new Date(milliseconds)
 }
 

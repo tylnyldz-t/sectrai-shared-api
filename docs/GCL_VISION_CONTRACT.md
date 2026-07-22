@@ -98,7 +98,7 @@ D10 does not normalize, reinterpret, repair, or retain raw document text. It add
 
 ## D11 — exact clock-object boundary
 
-New proposals use `synthetic-document-review-packet-v11`. Its integrity material adds a fixed `timeBoundaryBinding`: `clockValue: "utc-epoch-milliseconds"`, `clockObject: "exact-date-prototype-no-own-properties"`, and `issuedAtSource: "governed-run-context-clock"`.
+New proposals use `synthetic-document-review-packet-v11`. Its integrity material adds a fixed `timeBoundaryBinding`: `clockValue: "utc-epoch-milliseconds"`, `clockObject: "exact-date-prototype-no-own-properties"`, and `issuedAtSource: "validated-run-context-clock"`.
 
 The governed runner samples its configured clock exactly once before preflight. It accepts only a valid built-in `Date` with the exact `Date.prototype` and no own properties, extracts the epoch with the intrinsic `Date.prototype.getTime`, and copies that value into fresh built-in dates for preflight, proposal issue time, quota, provenance, and audit events. A subclass, proxy, invalid date, or a date carrying an overridden/accessor `getTime` or `toISOString` is denied without reading that property. Direct connector and review entry points enforce the same exact-clock rule before a synthetic packet deadline or review audit can be evaluated.
 
