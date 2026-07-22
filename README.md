@@ -74,6 +74,12 @@ rewrite its source-run binding, candidate set, deadline, or blocked publication
 state across an awaited append. It remains local SVG-only,
 `LIVE_DISABLED`, owner-only, and publication-blocked.
 
+D9 rejects declared async, generator, and async-generator optional
+family-safety callables while connector configuration is closed. Such a policy
+is never invoked during preflight and cannot be accepted as an asynchronous
+policy adapter; all output remains synthetic,
+`LIVE_DISABLED`, owner-only, and publication-blocked.
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:

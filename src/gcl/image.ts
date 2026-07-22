@@ -285,6 +285,20 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): b
 }
 
 /**
+ * A custom family-safety capsule is deliberately a same-turn local seam.
+ * Reject declared async/generator callables while the configuration is still
+ * being closed, rather than invoking one during preflight and discovering a
+ * Promise only after it has had an opportunity to start asynchronous work.
+ */
+function synchronousPolicyAssess(value: unknown): ((...args: unknown[]) => unknown) | null {
+  try {
+    return typeof value === 'function' && Object.getPrototypeOf(value) === Function.prototype
+      ? value as (...args: unknown[]) => unknown
+      : null
+  } catch { return null }
+}
+
+/**
  * A custom policy remains a local, synchronous host seam, but its identity
  * and callable must be its entire own-data shape. A nested endpoint,
  * credential, inherited getter, or mutable receiver is never retained as
@@ -295,8 +309,9 @@ function closedFamilySafetyFilter(value: unknown): ClosedFamilySafetyFilter | nu
   if (!candidate || !hasExactKeys(candidate, FAMILY_SAFETY_FILTER_KEYS)) return null
   const id = ownDataValue(candidate, 'id')
   const assess = ownDataValue(candidate, 'assess')
-  if (!id.present || !assess.present || typeof id.value !== 'string' || typeof assess.value !== 'function') return null
-  return Object.freeze({ id: id.value, assess: assess.value as (...args: unknown[]) => unknown })
+  const synchronousAssess = assess.present ? synchronousPolicyAssess(assess.value) : null
+  if (!id.present || !synchronousAssess || typeof id.value !== 'string') return null
+  return Object.freeze({ id: id.value, assess: synchronousAssess })
 }
 
 /**

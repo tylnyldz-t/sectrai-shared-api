@@ -977,6 +977,39 @@ test('D2 policy capsules reject nested credentials and cannot mutate the normali
   assert.equal(mutationQuota.requests.length, 0)
 })
 
+test('D9 rejects declared asynchronous or generator family policies before preflight invokes them', async () => {
+  let asyncCalls = 0
+  const asynchronous = async () => { asyncCalls += 1; return { allowed: true } }
+  let generatorCalls = 0
+  const generator = function* () { generatorCalls += 1; yield { allowed: true } }
+  let asyncGeneratorCalls = 0
+  const asyncGenerator = async function* () { asyncGeneratorCalls += 1; yield { allowed: true } }
+
+  for (const [label, assess] of [
+    ['async', asynchronous],
+    ['generator', generator],
+    ['async-generator', asyncGenerator],
+  ] as const) {
+    const audit = new InMemoryHashChainAuditLog()
+    const quota = new TestQuota()
+    const connector = new SyntheticImageTtiConnector({
+      liveMode: LIVE_DISABLED,
+      maxCostCapCents: 20,
+      maxItems: 2,
+      ownerReviewTtlSeconds: 300,
+      familySafetyFilter: { id: `d9-${label}`, assess: assess as never },
+    })
+    const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+    await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_CONFIGURATION_INVALID')
+    assert.equal(audit.entries.length, 0)
+    assert.equal(quota.requests.length, 0)
+  }
+
+  assert.equal(asyncCalls, 0)
+  assert.equal(generatorCalls, 0)
+  assert.equal(asyncGeneratorCalls, 0)
+})
+
 test('D2 synthetic outputs are immutable review snapshots before issuance', async () => {
   const connector = configuredConnector()
   const result = await connector.run({ prompt: 'A child-friendly solar system poster' }, context)

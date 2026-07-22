@@ -300,6 +300,22 @@ validates the event and its bound source audit. This remains local synthetic
 integrity hardening only: no provider, network, GPU, dispatch, credential,
 migration, send, or publication capability is introduced.
 
+## D9 — same-turn family-policy capsule
+
+An optional family-safety `assess` callable must be a regular synchronous
+function at connector construction. Declared `async`, generator, and async
+generator callables are rejected as `IMAGE_TTI_CONFIGURATION_INVALID` before
+preflight invokes the policy, reserves quota, appends an audit event, or
+creates a candidate. This closes the visible asynchronous policy categories
+instead of first calling one and only then rejecting its Promise-like result.
+
+The policy remains a deliberately local host seam, not an adapter mechanism:
+the accepted regular function still receives only the frozen normalized input,
+without the policy object as its receiver, and its result must keep the
+existing closed `{ allowed, reason? }` data shape. This package adds no
+provider, network, credential, dispatch, GPU, migration, send, publication,
+or live-mode capability.
+
 ## Negative and edge-case guarantees
 
 - Prompt fields accept only the documented four keys. Empty text, a value over
@@ -333,6 +349,10 @@ migration, send, or publication capability is introduced.
   a hidden endpoint/credential field in the accepted policy shape. The emitted
   result is frozen through every review-relevant nested value; adding a raw
   prompt, provider URI, or executable graph node to that instance fails.
+- Declared async, generator, and async-generator family-policy callables are
+  rejected while the connector is constructed. They are never invoked during
+  preflight, so the rejection occurs before audit or quota reservation and
+  before an asynchronous policy body could become an integration path.
 - The review audit records only candidate IDs, maker/checker identities,
   controlled decision fields, blocked publication state, and SHA-256 lineage
   hashes. It never records the prompt, negative prompt, preview bytes,
@@ -444,9 +464,9 @@ migration, send, or publication capability is introduced.
 4. The exact `image:generate` scope, positive cost cap/item count, connector
    limits, and daily quota gate execution before the adapter runs.
 5. Prompt and policy input are untrusted data only, never instructions; the
-   mandatory baseline gate runs before any optional frozen, receiverless policy
-   input is exposed, while malformed/accessor/inherited shapes and
-   family-unsafe content are rejected.
+   mandatory baseline gate runs before any optional frozen, receiverless,
+   same-turn policy input is exposed, while malformed/accessor/inherited or
+   declared asynchronous shapes and family-unsafe content are rejected.
 6. Candidates, receipts, and audit events retain only blocked metadata,
    digests, and provenance—never prompt text, preview bytes, provider output,
    endpoint, or credentials.
