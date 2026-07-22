@@ -797,6 +797,69 @@ test('durable proposals reject a creation audit timestamp that is not bound to t
   assert.equal(transactionCalls, 0)
 })
 
+test('artifact mutations snapshot only the native Date instant and reject invalid or proxied clocks before state changes', async () => {
+  class PoisonedDate extends Date {
+    override valueOf(): number { throw new Error('caller date valueOf must not run') }
+    override toISOString(): string { throw new Error('caller date toISOString must not run') }
+  }
+
+  const audit = new InMemoryHashChainAuditLog()
+  const artifacts = new InMemoryTranslationArtifactStore(audit)
+  const proposal = runResult().artifact!
+  const maker = 'maker@example.test'
+  const requested = await audit.append({
+    type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: maker,
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  })
+  const succeeded = await audit.append({
+    type: 'connector.run.succeeded', connectorId: 'translation-text-synthetic', product, workspaceId, actor: maker,
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { requestedAuditHash: requested.hash, artifact: proposal },
+  })
+
+  const created = await artifacts.proposeAndAudit({
+    product,
+    workspaceId,
+    actor: maker,
+    connectorId: 'translation-text-synthetic',
+    proposal,
+    runAuditHash: succeeded.hash,
+    now: new PoisonedDate('2026-07-22T12:00:00.000Z'),
+    audit: { scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: '2026-07-22T12:00:00.000Z' },
+  })
+  assert.equal(created.artifact.createdAt, '2026-07-22T12:00:00.000Z')
+  assert.equal(audit.entries.length, 3)
+
+  const decided = await artifacts.decideAndAudit({
+    product,
+    workspaceId,
+    id: created.artifact.id,
+    actor: 'checker@example.test',
+    decision: 'approved',
+    reviewDigest: created.artifact.reviewDigest,
+    now: new PoisonedDate('2026-07-22T12:00:00.001Z'),
+    audit: { scopes: ['translation:artifact:approve'], costCapCents: 0, requestedItems: 0, occurredAt: '2026-07-22T12:00:00.001Z' },
+  })
+  assert.equal(decided.artifact?.decidedAt, '2026-07-22T12:00:00.001Z')
+  assert.equal(audit.entries.length, 4)
+  assert.equal(JSON.stringify(audit.entries).includes('must never be stored'), false)
+
+  const rejectedBeforeWrite = new InMemoryTranslationArtifactStore(new InMemoryHashChainAuditLog())
+  const invalidInput = {
+    product,
+    workspaceId,
+    actor: maker,
+    connectorId: 'translation-text-synthetic',
+    proposal,
+    runAuditHash: succeeded.hash,
+    audit: { scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString() },
+  }
+  for (const invalidNow of [new Date('invalid'), new Proxy(now(), {}) as unknown as Date]) {
+    await assert.rejects(() => rejectedBeforeWrite.proposeAndAudit({ ...invalidInput, now: invalidNow }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_CREATION_AUDIT_INVALID')
+  }
+  assert.equal(rejectedBeforeWrite.entries.length, 0)
+})
+
 test('durable terminal artifacts require a distinct checker, matching decision instant, and a pre-expiry chronology', async () => {
   const proposal = runResult().artifact!
   const artifactId = 'translation-artifact-terminal-lifecycle'

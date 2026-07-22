@@ -61,9 +61,28 @@ function canonicalActor(value: unknown): value is string {
   return typeof value === 'string' && value.trim() === value && Boolean(value) && /^[a-zA-Z0-9:_@. -]{1,160}$/.test(value)
 }
 
-function canonicalNow(value: unknown): string | null {
-  if (!(value instanceof Date) || Number.isNaN(value.valueOf())) return null
-  return value.toISOString()
+type ArtifactMutationClock = {
+  now: Date
+  occurredAt: string
+}
+
+/**
+ * Artifact stores are also public programmatic GCL entry points. Snapshot the
+ * native Date slot once instead of calling caller-controlled Date overrides
+ * while a metadata/audit mutation is in progress. This mirrors the governed
+ * runner's clock boundary and makes a Date subclass or Proxy fail closed (or
+ * harmlessly reduce to its real native instant) before a transaction opens.
+ */
+function artifactMutationClock(value: unknown): ArtifactMutationClock | null {
+  try {
+    if (!(value instanceof Date)) return null
+    const milliseconds = Date.prototype.getTime.call(value)
+    if (!Number.isFinite(milliseconds)) return null
+    const now = new Date(milliseconds)
+    return { now, occurredAt: now.toISOString() }
+  } catch {
+    return null
+  }
 }
 
 function validArtifactBinding(input: Pick<TranslationArtifactRecord, 'connectorId' | 'kind' | 'mediaType' | 'source'>): boolean {
@@ -132,26 +151,22 @@ function storedArtifact(value: unknown): StoredArtifact | null {
 }
 
 /** A decision's durable row and audit event must share one canonical instant. */
-function validDecisionAuditInput(input: { actor: string; decision: TranslationArtifactDecision; now: Date; audit: ArtifactAuditContext }): boolean {
-  const decidedAt = canonicalNow(input.now)
-  return Boolean(decidedAt)
-    && canonicalActor(input.actor)
+function validDecisionAuditInput(input: { actor: string; decision: TranslationArtifactDecision; occurredAt: string; audit: ArtifactAuditContext }): boolean {
+  return canonicalActor(input.actor)
     && (input.decision === 'approved' || input.decision === 'rejected')
     && Array.isArray(input.audit.scopes)
     && input.audit.scopes.length === 1
     && input.audit.scopes[0] === 'translation:artifact:approve'
     && input.audit.costCapCents === 0
     && input.audit.requestedItems === 0
-    && input.audit.occurredAt === decidedAt
+    && input.audit.occurredAt === input.occurredAt
 }
 
 /** A creation has the same single-clock binding as a terminal decision. */
-function validCreationAuditInput(input: { actor: string; now: Date; audit: ArtifactAuditContext }): boolean {
-  const createdAt = canonicalNow(input.now)
-  return Boolean(createdAt)
-    && canonicalActor(input.actor)
+function validCreationAuditInput(input: { actor: string; occurredAt: string; audit: ArtifactAuditContext }): boolean {
+  return canonicalActor(input.actor)
     && Array.isArray(input.audit.scopes)
-    && input.audit.occurredAt === createdAt
+    && input.audit.occurredAt === input.occurredAt
 }
 
 /** A record envelope is part of the artifact state: values alone are not trusted. */
@@ -212,7 +227,10 @@ export class PrismaTranslationArtifactStore {
   /** Atomically persists metadata and its creation audit row; no raw content enters either. */
   async proposeAndAudit(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: TranslationArtifactProposal; runAuditHash: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord; auditHash: string }> {
     requireGclTenantContext(input)
-    if (!validCreationAuditInput(input)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_CREATION_AUDIT_INVALID')
+    const clock = artifactMutationClock(input.now)
+    if (!clock || !validCreationAuditInput({ actor: input.actor, occurredAt: clock.occurredAt, audit: input.audit })) {
+      throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_CREATION_AUDIT_INVALID')
+    }
     return this.prisma.$transaction(async (transaction) => {
       const proposal = translationArtifactProposal(input.connectorId, input.proposal)
       if (!proposal || !AUDIT_SHA256.test(input.runAuditHash)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_PROPOSAL_INVALID')
@@ -237,7 +255,7 @@ export class PrismaTranslationArtifactStore {
           moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID,
           values: { ...pending, reviewDigest: translationArtifactReviewDigest(pending) } as Prisma.InputJsonValue,
           status: 'pending-checker-approval',
-          createdAt: input.now,
+          createdAt: clock.now,
           createdBy: input.actor,
         },
       })
@@ -263,8 +281,11 @@ export class PrismaTranslationArtifactStore {
   /** The compare-and-set decision and its audit row share one transaction. */
   async decideAndAudit(input: { product: string; workspaceId: string; id: string; actor: string; decision: TranslationArtifactDecision; reviewDigest: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord | null; auditHash?: string }> {
     requireGclTenantContext(input)
-    if (!validDecisionAuditInput(input)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_DECISION_AUDIT_INVALID')
-    const decidedAt = input.now.toISOString()
+    const clock = artifactMutationClock(input.now)
+    if (!clock || !validDecisionAuditInput({ actor: input.actor, decision: input.decision, occurredAt: clock.occurredAt, audit: input.audit })) {
+      throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_DECISION_AUDIT_INVALID')
+    }
+    const decidedAt = clock.occurredAt
     return this.prisma.$transaction(async (transaction) => {
       const record = await transaction.record.findFirst({ where: { id: input.id, product: input.product, workspaceId: input.workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID } })
       if (!record) return { artifact: null }
@@ -274,7 +295,7 @@ export class PrismaTranslationArtifactStore {
       if (artifact.approvalState !== 'pending-checker-approval') throw new ArtifactStateError()
       if (artifact.createdBy === input.actor) throw new MakerCheckerError()
       if (!constantTimeEqual(input.reviewDigest, artifact.reviewDigest)) throw new ArtifactReviewBindingError()
-      if (new Date(artifact.reviewExpiresAt).valueOf() <= input.now.valueOf()) throw new ArtifactReviewExpiredError()
+      if (new Date(artifact.reviewExpiresAt).valueOf() <= clock.now.valueOf()) throw new ArtifactReviewExpiredError()
       const approvalState = input.decision
       const next: TranslationArtifactRecord = { ...artifact, approvalState, decidedAt, decidedBy: input.actor }
       const updated = await transaction.record.updateMany({
@@ -297,7 +318,7 @@ export class PrismaTranslationArtifactStore {
             decidedBy: input.actor,
           } as Prisma.InputJsonValue,
           status: approvalState,
-          updatedAt: input.now,
+          updatedAt: clock.now,
         },
       })
       if (updated.count !== 1) {
@@ -346,10 +367,13 @@ export class InMemoryTranslationArtifactStore {
   /** Test seam that mirrors the production atomic write contract. */
   async proposeAndAudit(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: TranslationArtifactProposal; runAuditHash: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord; auditHash: string }> {
     const auditLog = this.requireAuditLog()
-    if (!validCreationAuditInput(input)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_CREATION_AUDIT_INVALID')
+    const clock = artifactMutationClock(input.now)
+    if (!clock || !validCreationAuditInput({ actor: input.actor, occurredAt: clock.occurredAt, audit: input.audit })) {
+      throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_CREATION_AUDIT_INVALID')
+    }
     const before = this.entries.length
     const proposed = await this.propose(input)
-    const artifact: TranslationArtifactRecord = { ...proposed, createdAt: input.now.toISOString() }
+    const artifact: TranslationArtifactRecord = { ...proposed, createdAt: clock.occurredAt }
     this.entries[before] = artifact
     try {
       const audit = await auditLog.append(artifactAuditEvent({ artifact, product: input.product, workspaceId: input.workspaceId, actor: input.actor, audit: input.audit, type: 'translation.artifact.created' }))
@@ -385,6 +409,8 @@ export class InMemoryTranslationArtifactStore {
 
   async decide(input: { product: string; workspaceId: string; id: string; actor: string; decision: TranslationArtifactDecision; reviewDigest: string; now: Date }): Promise<TranslationArtifactRecord | null> {
     requireGclTenantContext(input)
+    const clock = artifactMutationClock(input.now)
+    if (!clock) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_CLOCK_INVALID')
     const index = this.entries.findIndex((entry) => entry.id === input.id && entry.product === input.product && entry.workspaceId === input.workspaceId)
     if (index < 0) return null
     const artifact = await this.get(input.product, input.workspaceId, input.id)
@@ -392,8 +418,8 @@ export class InMemoryTranslationArtifactStore {
     if (artifact.approvalState !== 'pending-checker-approval') throw new ArtifactStateError()
     if (artifact.createdBy === input.actor) throw new MakerCheckerError()
     if (!constantTimeEqual(input.reviewDigest, artifact.reviewDigest)) throw new ArtifactReviewBindingError()
-    if (new Date(artifact.reviewExpiresAt).valueOf() <= input.now.valueOf()) throw new ArtifactReviewExpiredError()
-    const updated: TranslationArtifactRecord = { ...artifact, approvalState: input.decision, decidedAt: input.now.toISOString(), decidedBy: input.actor }
+    if (new Date(artifact.reviewExpiresAt).valueOf() <= clock.now.valueOf()) throw new ArtifactReviewExpiredError()
+    const updated: TranslationArtifactRecord = { ...artifact, approvalState: input.decision, decidedAt: clock.occurredAt, decidedBy: input.actor }
     this.entries[index] = updated
     return { ...updated }
   }
@@ -401,10 +427,14 @@ export class InMemoryTranslationArtifactStore {
   /** Test seam that restores the prior entry when its corresponding audit fails. */
   async decideAndAudit(input: { product: string; workspaceId: string; id: string; actor: string; decision: TranslationArtifactDecision; reviewDigest: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord | null; auditHash?: string }> {
     const auditLog = this.requireAuditLog()
+    const clock = artifactMutationClock(input.now)
+    if (!clock || !validDecisionAuditInput({ actor: input.actor, decision: input.decision, occurredAt: clock.occurredAt, audit: input.audit })) {
+      throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_DECISION_AUDIT_INVALID')
+    }
     const index = this.entries.findIndex((entry) => entry.id === input.id && entry.product === input.product && entry.workspaceId === input.workspaceId)
     if (index < 0) return { artifact: null }
     const prior = { ...this.entries[index]! }
-    const artifact = await this.decide(input)
+    const artifact = await this.decide({ ...input, now: clock.now })
     if (!artifact) return { artifact: null }
     try {
       const audit = await auditLog.append(artifactAuditEvent({ artifact, product: input.product, workspaceId: input.workspaceId, actor: input.actor, audit: input.audit, type: input.decision === 'approved' ? 'translation.artifact.approved' : 'translation.artifact.rejected' }))

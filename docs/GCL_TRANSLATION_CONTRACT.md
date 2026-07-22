@@ -97,6 +97,14 @@ may remain terminally audited if the later artifact-creation clock is invalid,
 but it creates no metadata, review authority, publication, send, provider, or
 live-execution path.
 
+This native snapshot rule also applies to direct programmatic artifact-store
+calls, not only the HTTP boundary. The store reads the intrinsic `Date` time
+slot once and works from a fresh native copy; it never calls caller-overridden
+`valueOf()` or `toISOString()` while creating or deciding an artifact. A
+proxied, non-Date, or invalid clock is rejected before a transaction or
+in-memory metadata change. A valid `Date` subclass therefore cannot substitute
+a later timestamp through an override, and does not broaden review authority.
+
 ## Connector routes
 
 ```text
