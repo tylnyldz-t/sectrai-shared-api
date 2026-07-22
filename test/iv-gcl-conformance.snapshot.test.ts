@@ -5,7 +5,7 @@ import { posix as path } from 'node:path'
 import test from 'node:test'
 import ts from 'typescript'
 
-type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11'
+type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12'
 
 type PinnedClosureBlob = {
   path: string
@@ -46,7 +46,7 @@ const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
 const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
 
 /*
- * These are immutable local Git snapshots from the D1 through D11 audit batches.
+ * These are immutable local Git snapshots from the D1 through D12 audit batches.
  * Every source read below is `git show <revision>:<path>`, never the mutable
  * worktree file. This fixture does not import target runtime code, load an
  * env file, open a socket, or make a network request. A missing worktree,
@@ -139,6 +139,14 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D11', name: 'Translation', revision: 'e7146d1', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '542a39d3ac9849469d5a39aca21dd60a58ec374a', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: 'f981309efe34aaec9df537146e2c6924dc6db9e8' }] },
   { batch: 'D11', name: 'Language education', revision: '5dad6ba', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '5ed6ce490238a24a808074bd9e8a298c58cb42a8', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
   { batch: 'D11', name: 'Camera', revision: '71d5779', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '0f8779b81972e76c15389b25fa52b8b011da4f41', registryBlob: 'b8787e9af75503bb5b1f5b0c8269545846dfaa95', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D12', name: 'RA OCR', revision: '420a039', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: 'ef24e6ff8e83cfbcac6d43b2f5405825f3e44049', registryBlob: '7fb5b5e5ece8b9442423bd49eb38db978b6371ab', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D12', name: 'RA image', revision: '86a2582', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: '33d0ecbde9345e8d4c6683342e5011ee04bda5e8', registryBlob: '76221dc13d588bd7a042735badf6bc825b573ca3', hardDeniesLiveOptIn: false, quotaFailureAudited: false, pinnedClosureBlobs: [{ path: 'src/gcl/image-candidate-ledger.ts', blob: 'cf9b264e070602028d2ae94bf7c8aa0923930165' }, { path: 'src/gcl/image-review-ledger.ts', blob: 'c7f078c2c831d2231626f566bf033d14dca71531' }] },
+  { batch: 'D12', name: 'RA 3D/game', revision: '31d3052', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: '59cbc705c64fd856c2eccae8842bc2aac307e782', registryBlob: '9b317ca768bfb32d43acb66ce86abadb71debcd5', hardDeniesLiveOptIn: false, quotaFailureAudited: false, pinnedClosureBlobs: [{ path: 'src/gcl/jnc-pilot.ts', blob: 'ed77b9715a54b38eddf56691f0432ccc0a4c28a6' }, { path: 'src/gcl/result-boundary.ts', blob: 'b3e407331974122741cb4ab578d651c1fe8db6ff' }], pinnedSupplementalBlobs: [{ path: 'src/gcl/game-engine.ts', blob: '5654a2a3e92462209742948e28ec2fe47f6bdb03' }] },
+  { batch: 'D12', name: 'RA market', revision: 'c64c310', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: '11636d2d9a96d8e1662e66324430120c77428308', registryBlob: '66f1a5872dd8ccad258fceb833476f46e9a373c8', hardDeniesLiveOptIn: true, quotaFailureAudited: false },
+  { batch: 'D12', name: 'RFID', revision: 'a7fa389', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: 'efbdc7237dbc3bb34da40960878e45ead685a75b', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D12', name: 'Translation', revision: 'af3be75', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '542a39d3ac9849469d5a39aca21dd60a58ec374a', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: '362e0dd89efe2ebfc735b9f88693736f3a8ee8d3' }, { path: 'src/gcl/translation-artifacts.ts', blob: 'b3a30c025ce226fb80dfb5ef4c37a163d3454487' }, { path: 'src/gcl/translation-artifact-review.ts', blob: 'b0f485a6542ffeb245f0811ebf858d8dd8d584b2' }] },
+  { batch: 'D12', name: 'Language education', revision: '5d10f3f', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '77f7d4544eba690ea7ae2b61b5b83c81cd474a8b', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: 'cffd9481bcc2e4ddb02bec7f87c57d4a6e5dd6f5' }] },
+  { batch: 'D12', name: 'Camera', revision: '9660feb', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '0f8779b81972e76c15389b25fa52b8b011da4f41', registryBlob: '01d5bbfb071b806d4c6ba77fa5974fc838c0febc', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
 ]
 
 function repositoryFor(snapshot: Snapshot): string {
@@ -293,8 +301,9 @@ function assertNoRuntimeEscape(source: string, name: string): void {
   assert.doesNotMatch(code, /\b(?:require|createRequire|eval)\b|\bimport\s*(?:\?\.)?\s*\(|\bimport\s*\.\s*meta\b|\bmodule\s*(?:\.|\?\.)\s*(?:require|constructor\s*(?:\.|\?\.)\s*_load)\b|\b(?:process|module)\s*(?:\.|\?\.)\s*(?:getBuiltinModule|binding|dlopen|mainModule|constructor)\b/, `${name} must not dynamically load or evaluate a runtime module`)
   assert.doesNotMatch(code, /\b(?:globalThis|global|window|Bun|Deno)\b|\bself\s*(?:\?\.|\.)|\bself\s*\[/, `${name} must not access a global runtime capability`)
   assert.doesNotMatch(code, /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|WebTransport|navigator|sendBeacon|axios|undici|node-fetch)\b/, `${name} must not retain an egress capability by direct or aliased access`)
-  assert.doesNotMatch(code, /\bReflect\s*(?:\?\.)?\s*(?:\.\s*get|\[\s*['"`]get['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not reflectively obtain a runtime or environment capability`)
-  assert.doesNotMatch(code, /\bObject\s*(?:\?\.)?\s*(?:\.\s*getOwnPropertyDescriptors?|\[\s*['"`]getOwnPropertyDescriptors?['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process\s*(?:\.|\?\.)\s*env)\b/, `${name} must not obtain a runtime or environment capability by descriptor`)
+  assert.doesNotMatch(code, /\bReflect\s*(?:\?\.)?\s*(?:\.\s*get|\[\s*['"`]get['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process(?:\s*(?:\.|\?\.)\s*env)?|module)\b/, `${name} must not reflectively obtain a runtime, module, or environment capability`)
+  assert.doesNotMatch(code, /\bObject\s*(?:\?\.)?\s*(?:\.\s*getOwnPropertyDescriptors?|\[\s*['"`]getOwnPropertyDescriptors?['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process(?:\s*(?:\.|\?\.)\s*env)?|module)\b/, `${name} must not obtain a runtime, module, or environment capability by descriptor`)
+  assert.doesNotMatch(code, /\b(?:Object|Reflect)\s*(?:\?\.)?\s*(?:\.\s*getPrototypeOf|\[\s*['"`]getPrototypeOf['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process|module)\b/, `${name} must not recover a host capability prototype`)
   assert.doesNotMatch(code, /\b(?:process|environment)\s*(?:\?\.)?\s*\[/, `${name} must not use computed environment access`)
   assert.doesNotMatch(code, /\bmodule\s*(?:\?\.)?\s*\[/, `${name} must not use computed module capability recovery`)
   assert.doesNotMatch(code, /\bprocess\s*(?:\.|\?\.)\s*env\s*(?:\?\.)?\s*\[/, `${name} must not use computed environment access`)
@@ -371,7 +380,7 @@ function ownerDenialPrecedesReservations(registry: string): boolean {
   return ownerGate >= 0 && ownerGate < preflight && preflight < requestedAudit && requestedAudit < quota
 }
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11 source fixture pins every audited connector and its governance runner to local Git objects', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
     assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
@@ -388,7 +397,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11 source fixture pins every audited conne
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
     const closure = [...sourceClosure(snapshot).values()].join('\n')
@@ -407,7 +416,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11 synthetic source closure has no egress,
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
@@ -535,4 +544,19 @@ test('D11 permits only a strict descriptor-walker comparison to Function.prototy
     'const terminal = target !== Function?.prototype',
     'const terminal = target === Function.prototype',
   ]) assert.throws(() => assertNoRuntimeEscape(source, `D11 Function capability probe: ${source}`))
+})
+
+test('D12 fail-closed safety checks reject reflective recovery from the Node and CommonJS roots', () => {
+  for (const source of [
+    "const environment = Reflect.get(process, 'env')",
+    "const environment = Reflect?.['get'](process, 'env')",
+    "const environment = Object.getOwnPropertyDescriptor(process, 'env')?.value",
+    "const environment = Object?.['getOwnPropertyDescriptors'](process).env.value",
+    "const loader = Reflect.get(module, 'require')",
+    "const loader = Object.getOwnPropertyDescriptor(module, 'require')?.value",
+    'const prototype = Object.getPrototypeOf(process)',
+    "const prototype = Reflect['getPrototypeOf'](module)",
+  ]) assert.throws(() => assertNoRuntimeEscape(source, `D12 host-root recovery probe: ${source}`))
+  assert.doesNotThrow(() => assertNoRuntimeEscape("const keys = Reflect.ownKeys(input)", 'D12 allowed own-data reflection'))
+  assert.doesNotThrow(() => assertNoRuntimeEscape("const descriptor = Object.getOwnPropertyDescriptor(input, 'value')", 'D12 allowed own-data descriptor'))
 })
