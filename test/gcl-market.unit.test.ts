@@ -409,6 +409,125 @@ test('D14 snapshots connector configuration before preflight and rejects shaped 
   assert.equal(proxyRead, false)
 })
 
+test('D15 fixes governed host method seams at construction and never evaluates getter or Proxy-shaped members', async () => {
+  const registry = new ConnectorRegistry([new SyntheticMarketConnector(limits)])
+  let auditGetterRead = false
+  const accessorAudit = {}
+  Object.defineProperty(accessorAudit, 'append', {
+    get() { auditGetterRead = true; throw new Error('AUDIT_MEMBER_GETTER_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => new GovernedConnectorRunner(registry, accessorAudit as never, new TestQuota(), now),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_AUDIT_LOG_UNAVAILABLE',
+  )
+  assert.equal(auditGetterRead, false)
+
+  let quotaGetterRead = false
+  const accessorQuota = {}
+  Object.defineProperty(accessorQuota, 'consume', {
+    get() { quotaGetterRead = true; throw new Error('QUOTA_MEMBER_GETTER_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => new GovernedConnectorRunner(registry, new InMemoryHashChainAuditLog(), accessorQuota as never, now),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_QUOTA_UNAVAILABLE',
+  )
+  assert.equal(quotaGetterRead, false)
+
+  let proxyRead = false
+  const proxyAudit = new Proxy({}, {
+    get() { proxyRead = true; throw new Error('AUDIT_PROXY_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => new GovernedConnectorRunner(registry, proxyAudit as never, new TestQuota(), now),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_AUDIT_LOG_UNAVAILABLE',
+  )
+  assert.equal(proxyRead, false)
+
+  const hostAudit = { calls: 0, async append() { this.calls += 1; return { hash: 'a'.repeat(64) } } }
+  const hostQuota = { calls: 0, async consume() { this.calls += 1 } }
+  const runner = new GovernedConnectorRunner(registry, hostAudit, hostQuota, now)
+  hostAudit.append = async () => { throw new Error('MUTATED_AUDIT_MEMBER_MUST_NOT_RUN') }
+  hostQuota.consume = async () => { throw new Error('MUTATED_QUOTA_MEMBER_MUST_NOT_RUN') }
+
+  const result = await runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
+  assert.equal((result.data as SyntheticMarketPlan).liveStatus, 'LIVE_DISABLED')
+  assert.equal(hostAudit.calls, 2)
+  assert.equal(hostQuota.calls, 1)
+})
+
+test('D15 copies one verified runner clock and rejects malformed audit results before they can cross quota or fabricate success', async () => {
+  let clockCalls = 0
+  const setup = marketRunner()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([setup.connector]), setup.audit, setup.quota, () => {
+    clockCalls += 1
+    return new Date('2026-07-22T12:34:56.000Z')
+  })
+  const result = await runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
+  const plan = result.data as SyntheticMarketPlan
+  assert.equal(clockCalls, 1)
+  assert.equal(result.provenance.retrievedAt, '2026-07-22T12:34:56.000Z')
+  assert.equal(setup.audit.entries[0]?.event.occurredAt, result.provenance.retrievedAt)
+  assert.equal(setup.audit.entries[1]?.event.occurredAt, result.provenance.retrievedAt)
+  assert.equal(plan.liveStatus, 'LIVE_DISABLED')
+
+  const invalidClockAudit = new InMemoryHashChainAuditLog()
+  const invalidClockQuota = new TestQuota()
+  let invalidClockCalls = 0
+  const invalidClockRunner = new GovernedConnectorRunner(
+    new ConnectorRegistry([new SyntheticMarketConnector(limits)]), invalidClockAudit, invalidClockQuota, () => {
+      invalidClockCalls += 1
+      return new Date('not-a-real-time')
+    },
+  )
+  await assert.rejects(
+    () => invalidClockRunner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext }),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'INVALID_GOVERNED_RUN_TIME',
+  )
+  assert.equal(invalidClockCalls, 1)
+  assert.equal(invalidClockAudit.entries.length, 0)
+  assert.equal(invalidClockQuota.requests.length, 0)
+
+  const malformedQuota = new TestQuota()
+  let resultGetterRead = false
+  const accessorResultAudit = {
+    async append() {
+      const result = {}
+      Object.defineProperty(result, 'hash', {
+        enumerable: true,
+        get() { resultGetterRead = true; throw new Error('AUDIT_RESULT_GETTER_MUST_NOT_RUN') },
+      })
+      return result
+    },
+  }
+  const malformedRunner = new GovernedConnectorRunner(
+    new ConnectorRegistry([new SyntheticMarketConnector(limits)]), accessorResultAudit as never, malformedQuota, now,
+  )
+  await assert.rejects(
+    () => malformedRunner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext }),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_AUDIT_APPEND_INVALID',
+  )
+  assert.equal(resultGetterRead, false)
+  assert.equal(malformedQuota.requests.length, 0)
+
+  const successQuota = new TestQuota()
+  let appendCalls = 0
+  const malformedSuccessAudit = {
+    async append() {
+      appendCalls += 1
+      return appendCalls === 1 ? { hash: 'b'.repeat(64) } : { hash: 'not-a-sha256-digest' }
+    },
+  }
+  const malformedSuccessRunner = new GovernedConnectorRunner(
+    new ConnectorRegistry([new SyntheticMarketConnector(limits)]), malformedSuccessAudit, successQuota, now,
+  )
+  await assert.rejects(
+    () => malformedSuccessRunner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext }),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_AUDIT_APPEND_INVALID',
+  )
+  assert.equal(appendCalls, 2)
+  assert.equal(successQuota.requests.length, 1)
+})
+
 test('a distinct owner can audit a market review, but neither decision can authorize an execution', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })

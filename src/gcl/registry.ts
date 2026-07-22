@@ -1,6 +1,6 @@
 import { types as nodeTypes } from 'node:util'
 import { ConnectorInputError, CostCapError, ConnectorUnavailableError, OwnerGateError, ScopeError } from './errors.js'
-import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
+import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export type RunConnectorRequest = {
   connectorId: string
@@ -18,6 +18,7 @@ function isSafeNonNegativeInteger(value: number): boolean { return Number.isSafe
 
 const RUN_REQUEST_FIELDS = ['connectorId', 'input', 'product', 'workspaceId', 'actor', 'ownerApproved', 'scopes', 'costCapCents', 'requestedItems'] as const
 const MAX_RUN_SCOPES = 64
+const DIGEST_PATTERN = /^[a-f0-9]{64}$/
 
 type SnapshottedRunConnectorRequest = Omit<RunConnectorRequest, 'scopes' | 'ownerApproved'> & { scopes: string[]; ownerApproved: unknown }
 
@@ -101,6 +102,72 @@ function snapshotRunRequest(value: unknown): SnapshottedRunConnectorRequest {
   }
 }
 
+/**
+ * D15 keeps the runner's three unavoidable host seams deliberately narrow.
+ * Members are obtained from data descriptors only, so a getter or Proxy cannot
+ * execute while governance is being assembled. The callback itself is fixed at
+ * runner construction; later host-object mutation cannot replace it mid-run.
+ */
+function hostMethod<TArgument>(value: unknown, member: string, error: string): (argument: TArgument) => Promise<unknown> {
+  try {
+    if (!value || typeof value !== 'object' || nodeTypes.isProxy(value)) throw new ConnectorUnavailableError(error)
+    let current: object | null = value
+    for (let depth = 0; current && depth < 8; depth += 1) {
+      if (nodeTypes.isProxy(current)) throw new ConnectorUnavailableError(error)
+      const descriptor = Object.getOwnPropertyDescriptor(current, member)
+      if (descriptor) {
+        if (!('value' in descriptor) || typeof descriptor.value !== 'function' || nodeTypes.isProxy(descriptor.value)) {
+          throw new ConnectorUnavailableError(error)
+        }
+        return async (argument) => Reflect.apply(descriptor.value, value, [argument]) as unknown
+      }
+      current = Object.getPrototypeOf(current)
+    }
+  } catch (cause) {
+    if (cause instanceof ConnectorUnavailableError) throw cause
+  }
+  throw new ConnectorUnavailableError(error)
+}
+
+/** A runner audit append may return only an exact SHA-256-shaped data record. */
+function auditAppendResult(value: unknown): { hash: string } {
+  try {
+    if (
+      !value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value) ||
+      Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0
+    ) throw new ConnectorUnavailableError('CONNECTOR_AUDIT_APPEND_INVALID')
+    const names = Object.getOwnPropertyNames(value)
+    const descriptor = Object.getOwnPropertyDescriptor(value, 'hash')
+    if (
+      names.length !== 1 || names[0] !== 'hash' || !descriptor || !descriptor.enumerable ||
+      !('value' in descriptor) || typeof descriptor.value !== 'string' || !DIGEST_PATTERN.test(descriptor.value)
+    ) throw new ConnectorUnavailableError('CONNECTOR_AUDIT_APPEND_INVALID')
+    return { hash: descriptor.value }
+  } catch (cause) {
+    if (cause instanceof ConnectorUnavailableError) throw cause
+    throw new ConnectorUnavailableError('CONNECTOR_AUDIT_APPEND_INVALID')
+  }
+}
+
+/**
+ * The time value is copied before it crosses connector, audit, or quota
+ * seams. A malformed clock is a deployment failure rather than a coercion or
+ * post-quota failure path.
+ */
+function governedRunTime(value: unknown): Date {
+  if (typeof value !== 'function' || nodeTypes.isProxy(value)) throw new ConnectorUnavailableError('INVALID_GOVERNED_RUN_TIME')
+  let candidate: unknown
+  try {
+    candidate = Reflect.apply(value, undefined, [])
+  } catch {
+    throw new ConnectorUnavailableError('INVALID_GOVERNED_RUN_TIME')
+  }
+  if (!nodeTypes.isDate(candidate) || nodeTypes.isProxy(candidate)) throw new ConnectorUnavailableError('INVALID_GOVERNED_RUN_TIME')
+  const epoch = Date.prototype.getTime.call(candidate)
+  if (!Number.isFinite(epoch)) throw new ConnectorUnavailableError('INVALID_GOVERNED_RUN_TIME')
+  return new Date(epoch)
+}
+
 export class ConnectorRegistry {
   private readonly connectors = new Map<string, Connector>()
 
@@ -119,7 +186,16 @@ export class ConnectorRegistry {
 }
 
 export class GovernedConnectorRunner {
-  constructor(private readonly registry: ConnectorRegistry, private readonly auditLog: AuditLog, private readonly quota: ConnectorQuota, private readonly now: () => Date = () => new Date()) {}
+  private readonly auditAppend: (event: ConnectorAuditEvent) => Promise<unknown>
+  private readonly quotaConsume: (context: Parameters<ConnectorQuota['consume']>[0]) => Promise<unknown>
+  private readonly runClock: () => Date
+
+  constructor(private readonly registry: ConnectorRegistry, auditLog: AuditLog, quota: ConnectorQuota, now: () => Date = () => new Date()) {
+    this.auditAppend = hostMethod<ConnectorAuditEvent>(auditLog, 'append', 'CONNECTOR_AUDIT_LOG_UNAVAILABLE')
+    this.quotaConsume = hostMethod<Parameters<ConnectorQuota['consume']>[0]>(quota, 'consume', 'CONNECTOR_QUOTA_UNAVAILABLE')
+    if (typeof now !== 'function' || nodeTypes.isProxy(now)) throw new ConnectorUnavailableError('INVALID_GOVERNED_RUN_TIME')
+    this.runClock = now
+  }
 
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
     // D12: do not read a caller-owned request after this exact own-data copy.
@@ -132,7 +208,11 @@ export class GovernedConnectorRunner {
     if (!Number.isSafeInteger(safeRequest.requestedItems) || safeRequest.requestedItems < 1) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
     if (safeRequest.scopes.length === 0 || safeRequest.scopes.some((scope) => !connector.scopes.includes(scope))) throw new ScopeError()
 
-    const occurredAt = this.now()
+    // D15: copy one verified clock value before connector preflight, audit, or
+    // quota. Every event and the connector's provenance context derive from
+    // this local instant, so a host clock cannot mutate later async seams.
+    const occurredAt = governedRunTime(this.runClock)
+    const localNow = () => new Date(occurredAt.getTime())
     const context: ConnectorRunContext = {
       product: safeRequest.product,
       workspaceId: safeRequest.workspaceId,
@@ -141,7 +221,7 @@ export class GovernedConnectorRunner {
       scopes: [...new Set(safeRequest.scopes)].sort(),
       costCapCents: safeRequest.costCapCents,
       requestedItems: safeRequest.requestedItems,
-      now: this.now,
+      now: localNow,
     }
     // A connector that returns a canonical preflight value owns its input
     // schema and can close a caller-mutation gap before any async audit or
@@ -149,25 +229,29 @@ export class GovernedConnectorRunner {
     // opaque-input contract.
     const preparedInput = await connector.preflight?.(safeRequest.input, context)
     const connectorInput = preparedInput === undefined ? safeRequest.input : preparedInput
-    const requestedAudit = await this.auditLog.append({
+    const requestedAudit = auditAppendResult(await this.auditAppend({
       type: 'connector.run.requested', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
       scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(), detail: {},
-    })
-    await this.quota.consume({ ...context, connectorId: connector.id, quotaGroup: connector.quotaGroup, occurredAt })
+    }))
+    await this.quotaConsume({ ...context, connectorId: connector.id, quotaGroup: connector.quotaGroup, occurredAt })
+    let result: ConnectorResult
     try {
-      const result = await connector.run(connectorInput, context)
-      const succeededAudit = await this.auditLog.append({
-        type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
-        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(), detail: { requestedAuditHash: requestedAudit.hash },
-      })
-      return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
+      result = await connector.run(connectorInput, context)
     } catch (error) {
-      await this.auditLog.append({
+      auditAppendResult(await this.auditAppend({
         type: 'connector.run.failed', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
-        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(),
+        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(),
         detail: { requestedAuditHash: requestedAudit.hash, error: error instanceof Error ? error.message : 'UNKNOWN_ERROR' },
-      })
+      }))
       throw error
     }
+    // Keep a malformed host result from being mistaken for a successful run;
+    // do not append a second, misleading failure event after the success append
+    // itself has already crossed the host seam.
+    const succeededAudit = auditAppendResult(await this.auditAppend({
+        type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
+        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(), detail: { requestedAuditHash: requestedAudit.hash },
+    }))
+    return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
   }
 }
