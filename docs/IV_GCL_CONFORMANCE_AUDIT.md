@@ -1666,3 +1666,93 @@ introduced; outputs are proposal-only/no-action; no JARVIS/JNC job launches;
 and synthetic evidence is never deployment or live-enable authority. D20
 loaded no credential, contacted no provider/network, used no device or
 production database, sent nothing, and made no `main`/production write.
+
+## D21 — next immutable direct-successor package
+
+D21 pins the immediate child of every D20 package: RA OCR `361c978`, RA image
+`a68c433`, RA 3D/game `d739681`, RA market `112b3d8`, RFID `f77a7f6`,
+translation `702b63f`, language education `13b8963`, and camera `d896224`.
+Each commit names its D20 revision as its exact parent. RA voice still has no
+successor beyond D1. The fixture reads local Git objects only with
+`git show <revision>:src/gcl/...`; mutable sibling worktrees are not evidence.
+In addition to the public connector and runner pins, D21 pins 3D audit,
+translation audit/context/errors/artifact companion modules, language-education
+types, and camera audit/errors/types.
+
+D21 is source-only and fail closed. It does not import target runtime code,
+load an environment file or credential, open a socket, invoke a provider,
+read a device, capture media, run RFID/camera hardware, write a database, run
+a migration, start JARVIS/JNC, publish, send, or write `main`/production.
+
+| Connector | D21 source-only evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D21 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Review-time packet validation now requires, independently validates, and integrity-binds the checked date-arithmetic boundary | `requested` only | Pass | Nonconformant; truthy-owner and quota-audit gaps remain |
+| RA image | Direct successor changes README/contract documentation only; connector and runner blobs are byte-identical to D20 | `requested`, `failed` | Pass | Conformant |
+| RA 3D/game | Audit validation keeps the meaningful request→terminal time relation and no duplicate terminal event, while allowing valid interleaved concurrent runs | `requested` only | Pass | Nonconformant; quota gap remains |
+| RA market | Constructor binds descriptor-only audit/quota methods and a copied clock; Proxy, getter, malformed receipt, and altered host seams fail before a governed lifecycle transition is trusted | `requested` only | Pass | Nonconformant; quota gap remains |
+| RFID | Adds a fixed PSMS-SIM open-owner-decision boundary fixture that accepts no decision, attestation, trigger, legal review, ANPR stance, budget, procurement, pilot, or live authorization | `requested`, `failed` | Pass | Nonconformant; truthy-owner gap remains |
+| Translation | A shared `sectrai-*` product/workspace assertion is applied at runner, audit, and artifact-store tenant boundaries | `requested`, `failed` | Pass | Nonconformant; truthy-owner gap remains |
+| Language education | Adds a safety-fixture reference proposal with no incident, risk, judgement, or escalation processing; environment gates are read only as own enumerable data and a present live flag is fail-closed | `requested`, `failed` | Pass | Conformant |
+| Camera | Append receipts contain both event hash and predecessor, are re-hashed against the sealed event, and requested-hash linkage is checked for either terminal state | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` remains limited to this IV synthetic governance envelope. It is
+not authority to configure credentials, enable a provider, make egress, use a
+device, capture audio/video/RFID data, launch JARVIS/JNC, migrate, persist
+production data, reserve/book/publish, hand off, send output, or enable a live
+operation.
+
+### D21 negative and edge evidence
+
+- The direct-parent assertion covers all eight D21 commits. A missing,
+  rebased, skipped, or later descendant fails before source classification.
+- OCR rejects a packet whose date-arithmetic binding is missing, extra,
+  altered, or excluded from the recomputed integrity material; an overflow
+  claim cannot be silently detached from independent review.
+- 3D rejects a terminal event before its own requested event and a second
+  terminal event for one request, but no longer mistakes an otherwise valid
+  interleaved concurrent run for a global wall-clock rollback.
+- Market copies only descriptor-derived host methods and a verified `Date`.
+  A Proxy, getter, malformed collaborator, invalid clock, or shaped audit
+  receipt is unavailable before the corresponding input reaches trusted audit,
+  quota, or result provenance. Its quota refusal still remains outside the
+  protected failure-audit block and is deliberately reported as a gap.
+- RFID's owner-decision exercise accepts exactly `synthetic`, `scenario`,
+  `siteRef`, and a fixed fixture selector. Its output explicitly records
+  `NOT_ACCEPTED`, `NOT_MADE`, `NOT_EXECUTED`, `NOT_GRANTED`, `FORBIDDEN`, and
+  `automaticAction: false`; it neither receives nor infers an owner decision.
+- Translation rejects tenant identifiers outside the common `sectrai-*` /
+  bounded-workspace envelope before preflight, audit acceptance, or artifact
+  mutation. It does not trim or broaden authority data. This does not repair
+  its independent truthy-owner-approval classification.
+- Language education accepts only a synthetic safety reference/hash/locale/
+  activity tuple and produces a reference-only, pending-owner-review proposal.
+  Incident reports, disclosures, identities, contact data, risk levels,
+  safety decisions, escalation requests, and direct/inherited/accessor/Proxy
+  environment gates are not accepted.
+- Camera rejects append receipts without exactly a SHA-256 event hash and a
+  SHA-256-or-null predecessor; it re-hashes the sealed event and stops on an
+  invalid witness rather than appending an invented follow-up failure event.
+- The inherited closure scan continues to reject egress/endpoints,
+  credential-like environment access, subprocess/worker launch,
+  dynamic/runtime escape, and automatic publication. Market, translation,
+  language education, and camera hard-deny any live-opt-in surface; the other
+  connectors expose no live-enable path.
+
+### D21 test evidence and ADOS boundary
+
+`npm run test:conformance` passes with the D1–D21 immutable fixture. The suite
+checks exact direct-parent lineage, connector/runner and selected companion
+blob hashes, local source closures, disabled mode and no-egress rules, owner
+and quota classifications, and D21's review-binding, concurrent-audit,
+host-seam, decision-boundary, tenant, safety-fixture, environment-gate, and
+append-witness negative edges. It parses local TypeScript source in process;
+it does not execute a target connector, integration suite, migration, or
+external call.
+
+All ten ADOS rules remain active: product/workspace boundaries stay isolated;
+data stays minimal and synthetic; absent/malformed gates deny; maker–checker
+requirements remain; gaps are reported rather than waived; no migration is
+introduced; outputs are proposal-only/no-action; no JARVIS/JNC job launches;
+and synthetic evidence is never deployment or live-enable authority. D21
+loaded no credential, contacted no provider/network, used no device or
+production database, sent nothing, and made no `main`/production write.
