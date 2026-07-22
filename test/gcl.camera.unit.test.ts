@@ -1365,6 +1365,20 @@ test('D22 rejects shaped registry collections, connector control metadata, scope
     (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'INVALID_CONNECTOR_REGISTRATION',
   )
   assert.equal(proxyTrapRead, false)
+
+  const originalObjectPrototypeRun = Object.getOwnPropertyDescriptor(Object.prototype, 'run')
+  const inheritedRun = connector()
+  delete (inheritedRun as { run?: Connector['run'] }).run
+  try {
+    Object.defineProperty(Object.prototype, 'run', {
+      configurable: true,
+      value: async () => { throw new Error('OBJECT_PROTOTYPE_RUN_MUST_NOT_RUN') },
+    })
+    rejectsRegistration(inheritedRun)
+  } finally {
+    if (originalObjectPrototypeRun) Object.defineProperty(Object.prototype, 'run', originalObjectPrototypeRun)
+    else delete (Object.prototype as { run?: unknown }).run
+  }
 })
 
 test('D15 seals audit events before append: shaped or cyclic events never reach the audit collaborator', async () => {
@@ -1731,8 +1745,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14\/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, D18 SHA-256 operations, D19 camera result data\/provenance values, the D20 governed context snapshot, and the D21 governed input snapshot/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14\/D17.*D15.*D16.*D18.*D19.*D20.*D21/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14\/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, D18 SHA-256 operations, D19 camera result data\/provenance values, the D20 governed context snapshot, the D21 governed input snapshot, and D22 registry\/control-plane values/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14\/D17.*D15.*D16.*D18.*D19.*D20.*D21.*D22/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 

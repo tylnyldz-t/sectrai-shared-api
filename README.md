@@ -68,6 +68,8 @@ D20 freezes the admitted governed context, including its sole scope array, befor
 
 D21 deep-snapshots and freezes generic governed input before the runner touches its clock, registry, audit, quota, or adapter. Hidden, symbol, inherited, accessor, Proxy, sparse, cyclic, exotic, over-deep, non-finite, and function-shaped values fail closed; a caller or preflight hook cannot retarget the later camera run by mutating a shared input alias. It adds no storage lookup, provider/time-service call, credential, camera connection, handoff, publication, action, or capability.
 
+D22 snapshots the selected synthetic connector control plane at registry construction: immutable ID/scopes plus captured descriptor-only callbacks. Shaped collections/metadata/callbacks fail closed, and later connector property replacement cannot retarget audit, quota, scope, or the selected callback path. It is not a plug-in sandbox and adds no route, credential, provider/device call, handoff, publication, action, or capability.
+
 No migration, camera connection, notification, action, or publication is part of this connector.
 
 ## Run and migrate

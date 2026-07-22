@@ -111,7 +111,7 @@ function registeredConnectorScopes(value: unknown): readonly string[] {
 
 function registeredConnectorMethod(value: object, field: typeof REGISTERED_CONNECTOR_METHOD_FIELDS[number], required: boolean): Function | undefined {
   let candidate: object | null = value
-  for (let depth = 0; candidate !== null && depth < 8; depth += 1) {
+  for (let depth = 0; candidate !== null && candidate !== Object.prototype && depth < 8; depth += 1) {
     if (nodeTypes.isProxy(candidate)) return connectorRegistrationError()
     const descriptor = Object.getOwnPropertyDescriptor(candidate, field)
     if (descriptor) {
