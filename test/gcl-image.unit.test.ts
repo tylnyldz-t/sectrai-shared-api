@@ -561,6 +561,26 @@ test('direct image contexts and ledger capability boundaries reject accessors wi
   assert.equal(audit.entries.length, 3)
 })
 
+test('direct GM3 paths require a complete owner-approved image context and a boolean terminal gate', async () => {
+  await assert.rejects(() => configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, { ...context, ownerApproved: false }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_TTI_CONTEXT')
+  await assert.rejects(() => configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, { ...context, scopes: ['image:read'] }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_TTI_CONTEXT')
+
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
+  const candidates = new InMemoryImageCandidateLedger(audit)
+  await assert.rejects(() => issueSyntheticImageCandidates(result, candidates, { ...context, ownerApproved: false } as ConnectorRunContext), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+  assert.equal(audit.entries.length, 2)
+
+  await issueSyntheticImageCandidates(result, candidates, context)
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  const reviews = new InMemoryImageOwnerReviewLedger(audit)
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, 'true' as never, 'checker@example.test', reviews, candidates, context), OwnerGateError)
+  await assert.rejects(() => ownerRejectSyntheticImage(candidate, true, 'checker@example.test', 'NEEDS_REVISION', reviews, candidates, { ...context, scopes: ['image:read'] } as ConnectorRunContext), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+  assert.equal(audit.entries.length, 3)
+})
+
 test('test-only image ledgers fail closed on accessor-backed audit seams and responses', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)

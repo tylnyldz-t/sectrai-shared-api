@@ -218,11 +218,15 @@ decision and must be implemented behind its own bounded approval path.
   data envelopes. Each accepts only its documented envelope or the complete
   shared `ConnectorRunContext`; arbitrary extra fields, accessor fields,
   hidden non-enumerable own fields, malformed scope arrays, or malformed
-  clocks fail before identity, scope, or time values are read. An injected
-  direct-path clock must return an ordinary built-in `Date`; subclasses and
-  overridden date methods are rejected without calling those methods, and a
-  validated clock value is copied before it can set a candidate, issuance, or
-  review timestamp.
+  clocks fail before identity, scope, or time values are read. A complete
+  shared context must also remain owner-approved, have exactly the
+  `image:generate` scope, and carry positive safe-integer cost/item values;
+  it cannot be treated as a permissive subset by issuance or review helpers.
+  Terminal approval is exactly boolean `true`—truthy values fail before a
+  candidate-ledger or review-ledger call. An injected direct-path clock must
+  return an ordinary built-in `Date`; subclasses and overridden date methods
+  are rejected without calling those methods, and a validated clock value is
+  copied before it can set a candidate, issuance, or review timestamp.
   Ledger operations are resolved only from data-method descriptors (including
   ordinary class methods, but never intrinsic `Object`/`Function` prototypes);
   accessor-backed `appendIssuance`, `assertIssued`, and `appendDecision`

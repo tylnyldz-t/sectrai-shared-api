@@ -475,35 +475,60 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
 
 function isSafeIdentifier(value: unknown): value is string { return typeof value === 'string' && OWNER_ACTOR_PATTERN.test(value) }
 
-/** Copy a closed ConnectorRunContext before direct adapter use reads its data. */
-function imageRunContext(value: unknown): ConnectorRunContext {
+/**
+ * Validate the complete shared run envelope before a direct path consumes it.
+ * A runner has already enforced these fields, but exported direct entry points
+ * must not turn a partial or owner-unapproved context into a bypass.
+ */
+function completeImageRunContext(value: unknown, error: string): ConnectorRunContext {
   const context = plainRecord(value)
   const scopes = context ? plainArray(context.scopes) : null
-  if (!context || !hasExactKeys(context, IMAGE_RUN_CONTEXT_KEYS) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.ownerApproved !== 'boolean' || !scopes || scopes.length < 1 || scopes.some((scope) => !isSafeIdentifier(scope)) || typeof context.costCapCents !== 'number' || typeof context.requestedItems !== 'number' || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_TTI_CONTEXT')
+  const costCapCents = context ? positiveInteger(context.costCapCents) : null
+  const requestedItems = context ? positiveInteger(context.requestedItems) : null
+  if (!context || !hasExactKeys(context, IMAGE_RUN_CONTEXT_KEYS) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || context.ownerApproved !== true || !scopes || scopes.length !== 1 || scopes[0] !== IMAGE_SCOPE || !costCapCents || !requestedItems || typeof context.now !== 'function') throw new ConnectorInputError(error)
   return {
     product: context.product,
     workspaceId: context.workspaceId,
     actor: context.actor,
     correlationId: context.correlationId,
-    ownerApproved: context.ownerApproved,
-    scopes: [...scopes] as string[],
-    costCapCents: context.costCapCents,
-    requestedItems: context.requestedItems,
+    ownerApproved: true,
+    scopes: [IMAGE_SCOPE],
+    costCapCents,
+    requestedItems,
     now: context.now as () => Date,
   }
+}
+
+/** Copy a closed ConnectorRunContext before direct adapter use reads its data. */
+function imageRunContext(value: unknown): ConnectorRunContext {
+  return completeImageRunContext(value, 'INVALID_IMAGE_TTI_CONTEXT')
 }
 
 /** Copy the small issuance context before its identity or clock is used. */
 function imageIssuanceContext(value: unknown): ImageCandidateIssuanceContext {
   const context = plainRecord(value)
-  if (!context || (!hasExactKeys(context, IMAGE_ISSUANCE_CONTEXT_KEYS) && !hasExactKeys(context, IMAGE_RUN_CONTEXT_KEYS)) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+  if (!context) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+  if (hasExactKeys(context, IMAGE_RUN_CONTEXT_KEYS)) {
+    const runContext = completeImageRunContext(context, 'INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+    return { product: runContext.product, workspaceId: runContext.workspaceId, actor: runContext.actor, correlationId: runContext.correlationId, now: runContext.now }
+  }
+  if (!hasExactKeys(context, IMAGE_ISSUANCE_CONTEXT_KEYS) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
   return { product: context.product, workspaceId: context.workspaceId, actor: context.actor, correlationId: context.correlationId, now: context.now as () => Date }
 }
 
 /** Copy the small review context before scope or clock checks run. */
 function imageReviewContext(value: unknown): ImageOwnerReviewContext {
   const context = plainRecord(value)
-  if (!context || (!hasExactKeys(context, IMAGE_REVIEW_CONTEXT_KEYS) && !hasExactKeys(context, IMAGE_ISSUANCE_CONTEXT_KEYS) && !hasExactKeys(context, IMAGE_RUN_CONTEXT_KEYS)) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+  if (!context) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+  if (hasExactKeys(context, IMAGE_RUN_CONTEXT_KEYS)) {
+    const runContext = completeImageRunContext(context, 'INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+    return { product: runContext.product, workspaceId: runContext.workspaceId, correlationId: runContext.correlationId, now: runContext.now }
+  }
+  if (hasExactKeys(context, IMAGE_ISSUANCE_CONTEXT_KEYS)) {
+    if (!isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+    return { product: context.product, workspaceId: context.workspaceId, correlationId: context.correlationId, now: context.now as () => Date }
+  }
+  if (!hasExactKeys(context, IMAGE_REVIEW_CONTEXT_KEYS) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
   return { product: context.product, workspaceId: context.workspaceId, correlationId: context.correlationId, now: context.now as () => Date }
 }
 
@@ -615,7 +640,7 @@ function assertOwnerReviewContext(candidate: SyntheticImageCandidate, context: u
 }
 
 function assertOwnerReviewRequest(candidate: unknown, ownerApproved: boolean, actor: unknown, reviewLedger: unknown, context: ImageOwnerReviewContext): { candidate: SyntheticImageCandidate; actor: string; context: ImageOwnerReviewContext; occurredAt: Date; appendDecision: (...args: unknown[]) => unknown; assertRecorded: (...args: unknown[]) => unknown } {
-  if (!ownerApproved) throw new OwnerGateError()
+  if (ownerApproved !== true) throw new OwnerGateError()
   if (!isSafeIdentifier(actor)) throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
   assertSyntheticCandidate(candidate)
   if (actor === candidate.requestedBy) throw new OwnerGateError('MAKER_CHECKER_SEPARATION_REQUIRED')
