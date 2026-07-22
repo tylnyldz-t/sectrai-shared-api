@@ -46,3 +46,8 @@ export class ConnectorResultError extends GclError {
 export class AuditReceiptError extends GclError {
   constructor(message = 'INVALID_AUDIT_APPEND_RECEIPT') { super(message, 503, 'audit_log_unavailable') }
 }
+
+/** An audit event was shaped or mutable before it could cross into the log. */
+export class AuditEventError extends GclError {
+  constructor(message = 'INVALID_AUDIT_APPEND_EVENT') { super(message, 503, 'audit_log_unavailable') }
+}

@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { InMemoryHashChainAuditLog, hashAuditEvent } from '../src/gcl/audit.js'
-import { AuditReceiptError, CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
+import { InMemoryHashChainAuditLog, appendVerifiedAuditEvent, hashAuditEvent } from '../src/gcl/audit.js'
+import { AuditEventError, AuditReceiptError, CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
 import { ownerTokenMatches } from '../src/gcl/owner.js'
 import { cameraDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
@@ -38,6 +38,33 @@ class ReceiptAuditLog implements AuditLog {
   append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
     this.events.push(event)
     return Promise.resolve(this.receipts[this.events.length - 1] as { hash: string })
+  }
+}
+
+class MutationAttemptAuditLog implements AuditLog {
+  readonly entries: Array<{ event: ConnectorAuditEvent; previousHash: string | null; hash: string }> = []
+  mutationRejections = 0
+
+  async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
+    try { (event.scopes as string[])[0] = 'camera:mutate' } catch { this.mutationRejections += 1 }
+    try { event.detail.snapshot = 'data:image/png;base64,not-accepted' } catch { this.mutationRejections += 1 }
+    try { Object.defineProperty(event, 'connectorId', { value: 'another-connector' }) } catch { this.mutationRejections += 1 }
+    this.entries.push({ event, previousHash: this.entries.at(-1)?.hash ?? null, hash: '' })
+    const entry = this.entries.at(-1)
+    assert.ok(entry)
+    entry.hash = hashAuditEvent(event, entry.previousHash)
+    return { hash: entry.hash }
+  }
+}
+
+function d15AuditEvent(): ConnectorAuditEvent {
+  return {
+    type: 'connector.run.requested', connectorId: CAMERA_CONNECTOR_ID,
+    product: runContext.product, workspaceId: runContext.workspaceId,
+    requestedBy: runContext.requestedBy, checkedBy: runContext.checkedBy,
+    correlationId: runContext.correlationId, scopes: ['camera:observe'],
+    costCapCents: runContext.costCapCents, requestedItems: runContext.requestedItems,
+    occurredAt: '2026-07-22T12:00:00.000Z', detail: { stage: 'admission', errorCode: 'connector_unavailable' },
   }
 }
 
@@ -1009,6 +1036,61 @@ test('D13 governed runner rejects shaped, stale, injected, mismatched, non-synth
   assert.equal(provenanceAccessorRead, false)
 })
 
+test('D15 seals audit events before append: shaped or cyclic events never reach the audit collaborator', async () => {
+  const received: ConnectorAuditEvent[] = []
+  const audit: AuditLog = {
+    async append(event) {
+      received.push(event)
+      return { hash: 'd'.repeat(64) }
+    },
+  }
+
+  const hiddenDetail = d15AuditEvent()
+  Object.defineProperty(hiddenDetail.detail, 'snapshot', { value: 'data:image/png;base64,not-accepted', enumerable: false })
+
+  const accessorEvent = d15AuditEvent()
+  let accessorRead = false
+  Object.defineProperty(accessorEvent, 'detail', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('AUDIT_EVENT_ACCESSOR_MUST_NOT_RUN') },
+  })
+
+  let proxyTrapRead = false
+  const proxyEvent = new Proxy(d15AuditEvent(), {
+    get() { proxyTrapRead = true; throw new Error('AUDIT_EVENT_PROXY_MUST_NOT_RUN') },
+  })
+
+  const cyclicDetail = d15AuditEvent()
+  cyclicDetail.detail.self = cyclicDetail.detail
+
+  for (const malformed of [hiddenDetail, accessorEvent, proxyEvent, cyclicDetail]) {
+    await assert.rejects(
+      () => appendVerifiedAuditEvent(audit, malformed),
+      (error: unknown) => error instanceof AuditEventError && error.message === 'INVALID_AUDIT_APPEND_EVENT',
+    )
+  }
+  assert.equal(received.length, 0)
+  assert.equal(accessorRead, false)
+  assert.equal(proxyTrapRead, false)
+})
+
+test('D15 gives audit collaborators an immutable event snapshot that cannot gain media fields or alter the chain', async () => {
+  const audit = new MutationAttemptAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), audit, quota, now)
+  const result = await runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
+
+  assert.equal(audit.entries.length, 2)
+  assert.equal(audit.mutationRejections, 6)
+  assert.equal(audit.entries[0]?.event.type, 'connector.run.requested')
+  assert.equal(audit.entries[1]?.event.type, 'connector.run.succeeded')
+  assert.equal(audit.entries[1]?.previousHash, audit.entries[0]?.hash)
+  assert.equal(result.provenance.auditHash, audit.entries[1]?.hash)
+  assert.equal(audit.entries.every((entry) => Object.isFrozen(entry.event) && Object.isFrozen(entry.event.scopes) && Object.isFrozen(entry.event.detail)), true)
+  assert.equal(JSON.stringify(audit.entries).includes('not-accepted'), false)
+  assert.equal(quota.requests.length, 1)
+})
+
 test('D14 rejects malformed requested audit receipts before quota or adapter execution without reading shaped fields', async () => {
   const validHash = 'a'.repeat(64)
   let proxyTrapRead = false
@@ -1160,8 +1242,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, and D14 audit append receipts/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14 audit append receipts, and D15 audit events/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14.*D15/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 
