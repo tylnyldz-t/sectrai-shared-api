@@ -337,6 +337,7 @@ test('synthetic text rejects invisible or directional formatting before audit or
   const blockedInputs = [
     { ...speechInput(), sourceTranscript: 'safe\u202Evisible' },
     { ...speechInput(), translatedText: 'safe\u2066visible\u2069' },
+    { ...speechInput(), sourceTranscript: 'safe\u061Cvisible' },
     { ...speechInput(), sourceTranscript: 'safe\u00advisible' },
     { ...speechInput(), translatedText: 'safe\u0007visible' },
     { ...speechInput(), sourceTranscript: 'safe\ud800visible' },
@@ -347,6 +348,17 @@ test('synthetic text rejects invisible or directional formatting before audit or
   }
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
+
+  const textAudit = new InMemoryHashChainAuditLog()
+  const textQuota = new TestQuota()
+  const textRunner = new GovernedConnectorRunner(new ConnectorRegistry([new SyntheticTextTranslationConnector(config)]), textAudit, textQuota, now)
+  await assert.rejects(() => textRunner.run({
+    connectorId: TEXT_TRANSLATION_CONNECTOR_ID,
+    input: { ...textInput(), sourceText: 'safe\u202Evisible' },
+    ...context,
+  }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'TRANSLATION_UNSAFE_TEXT_FORMATTING')
+  assert.equal(textAudit.entries.length, 0)
+  assert.equal(textQuota.requests.length, 0)
 
   const arabicJoinerInput = {
     ...speechInput(),
