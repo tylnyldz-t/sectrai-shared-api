@@ -786,6 +786,113 @@ test('D9 review clock accepts only a finite native Date and fails closed before 
   assert.equal(setup.audit.entries.length, 2)
 })
 
+test('D10 execution context and provenance clock fail closed before fixture result or quota use', async () => {
+  const connector = enabledConnector()
+  const accessorInput = structuredClone(loadingDockInput)
+  let inputAccessorRead = false
+  Object.defineProperty(accessorInput, 'cameraFixtureId', {
+    enumerable: true,
+    get() { inputAccessorRead = true; throw new Error('FIXTURE_ACCESSOR_MUST_NOT_RUN') },
+  })
+
+  await assert.rejects(
+    () => connector.run(accessorInput, { ...context, snapshot: 'data:image/png;base64,not-accepted' } as ConnectorRunContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_EXECUTION_CONTEXT_FIELD',
+  )
+  assert.equal(inputAccessorRead, false)
+
+  const hiddenContext = { ...context }
+  Object.defineProperty(hiddenContext, 'deviceAddress', { value: 'rtsp://not-accepted.example.test/stream', enumerable: false })
+  await assert.rejects(
+    () => connector.run(loadingDockInput, hiddenContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_EXECUTION_CONTEXT_FIELD',
+  )
+
+  const symbolContext = { ...context }
+  Object.defineProperty(symbolContext, Symbol('raw-media'), { value: 'not-accepted', enumerable: true })
+  await assert.rejects(
+    () => connector.run(loadingDockInput, symbolContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_EXECUTION_CONTEXT_FIELD',
+  )
+
+  const accessorContext = { ...context }
+  let nowAccessorRead = false
+  Object.defineProperty(accessorContext, 'now', {
+    enumerable: true,
+    get() { nowAccessorRead = true; throw new Error('NOW_ACCESSOR_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => connector.run(loadingDockInput, accessorContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_EXECUTION_CONTEXT_FIELD',
+  )
+  assert.equal(nowAccessorRead, false)
+
+  let contextProxyTrapRead = false
+  const proxyContext = new Proxy({ ...context }, {
+    get() { contextProxyTrapRead = true; throw new Error('CONTEXT_PROXY_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => connector.run(loadingDockInput, proxyContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_CAMERA_EXECUTION_CONTEXT_FIELD',
+  )
+  assert.equal(contextProxyTrapRead, false)
+
+  let clockFunctionApplied = false
+  const proxyNow = new Proxy(now, {
+    apply() { clockFunctionApplied = true; throw new Error('CLOCK_FUNCTION_PROXY_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => connector.run(loadingDockInput, { ...context, now: proxyNow }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_EXECUTION_CONTEXT',
+  )
+  assert.equal(clockFunctionApplied, false)
+
+  for (const clock of [
+    () => { throw new Error('CLOCK_MUST_FAIL_CLOSED') },
+    () => new Date('not-a-date'),
+  ]) {
+    await assert.rejects(
+      () => connector.run(loadingDockInput, { ...context, now: clock }),
+      (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_PROVENANCE_CLOCK',
+    )
+  }
+
+  let returnedClockTrapRead = false
+  const proxyClock = new Proxy(new Date('2026-07-22T12:00:00.000Z'), {
+    get() { returnedClockTrapRead = true; throw new Error('CLOCK_PROXY_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => connector.run(loadingDockInput, { ...context, now: () => proxyClock }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_PROVENANCE_CLOCK',
+  )
+  assert.equal(returnedClockTrapRead, false)
+
+  let forgedToISOStringRead = false
+  const nativeClock = new Date('2026-07-22T12:00:00.000Z')
+  Object.defineProperty(nativeClock, 'toISOString', {
+    value() { forgedToISOStringRead = true; throw new Error('FORGED_CLOCK_MUST_NOT_RUN') },
+  })
+  const accepted = await connector.run(loadingDockInput, { ...context, now: () => nativeClock })
+  assert.equal(accepted.provenance.retrievedAt, '2026-07-22T12:00:00.000Z')
+  assert.equal(forgedToISOStringRead, false)
+
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  let calls = 0
+  const firstValidThenInvalid = () => {
+    calls += 1
+    return calls === 1 ? new Date('2026-07-22T12:00:00.000Z') : new Date('not-a-date')
+  }
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), audit, quota, firstValidThenInvalid)
+  await assert.rejects(
+    () => runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_PROVENANCE_CLOCK',
+  )
+  assert.equal(quota.requests.length, 0)
+  assert.equal(audit.entries.length, 1)
+  assert.equal(audit.entries[0]?.event.type, 'connector.run.denied')
+})
+
 test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
   const setup = runnerFor()
   const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
@@ -848,8 +955,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields—including D9 clock values/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, and D10 execution-context\/provenance-clock values/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 
