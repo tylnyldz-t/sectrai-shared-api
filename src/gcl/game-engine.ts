@@ -206,7 +206,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
       connectorId: this.id,
       scope: { product: validatedContext.product, workspaceId: validatedContext.workspaceId },
       governance: {
-        scopes: [...validatedContext.scopes],
+        scopes: [...validatedContext.scopes].sort(),
         costCapCents: validatedContext.costCapCents,
         requestedItems: validatedContext.requestedItems,
       },

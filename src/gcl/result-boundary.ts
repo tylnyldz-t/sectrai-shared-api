@@ -84,7 +84,7 @@ export function syntheticResultReviewBinding(context: Pick<ConnectorRunContext, 
   return deepFreeze({
     scope: { product: context.product, workspaceId: context.workspaceId },
     governance: {
-      scopes: [...context.scopes],
+      scopes: [...context.scopes].sort(),
       costCapCents: context.costCapCents,
       requestedItems: context.requestedItems,
     },

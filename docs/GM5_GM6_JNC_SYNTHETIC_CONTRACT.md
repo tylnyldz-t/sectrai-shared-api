@@ -266,6 +266,22 @@ caller retains an object reference. These are local object-boundary controls
 only. They add no network client, provider, filesystem write, process launcher,
 JNC dispatch, credential read, live mode, or publication path.
 
+### D1 review scope and reservation binding
+
+The review payload also records the exact governed `scope` and `governance`
+data that produced it: product, workspace, sorted approved scopes, cost-cap
+cents, and requested-item reservation units. At final egress, these data-only
+values must exactly equal the current governed request. GM6 additionally
+recomputes its synthetic build ID from that input, scope, and governance
+binding. Thus a well-formed frozen plan from another workspace or from a
+different cost/item reservation cannot be replayed under a new request; it
+fails closed as `503 synthetic_result_integrity_invalid` after the normal
+requested audit and quota reservation accounting.
+
+This is a local review-correlation and accounting-consistency check. It does
+not grant a GPU lease, contact JNC, run Blender/Unreal/Godot, resolve a path,
+read a credential, write an artifact, send a message, or publish an output.
+
 ## Non-secret configuration
 
 `.env.example` shows only placeholders and governance limits. The owner-gate

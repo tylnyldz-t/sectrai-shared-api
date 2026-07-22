@@ -67,3 +67,6 @@ fails closed and is never serialized.
 The runner separately snapshots each submitted connector input as frozen
 canonical JSON and binds that submission digest to the review snapshot, so a
 different valid synthetic plan cannot be substituted after preflight.
+Its final boundary also binds the snapshot's product/workspace and
+cost/item reservation data to the governed request, rejecting replay from a
+different synthetic scope or quota context.
