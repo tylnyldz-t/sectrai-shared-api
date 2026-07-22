@@ -1,5 +1,6 @@
 import { appendAuditEvent, GCL_AUDIT_MODULE_ID, verifyAuditChain } from './audit.js'
 import { ConnectorInputError, ConnectorUnavailableError } from './errors.js'
+import { imageCandidateFingerprint } from './image.js'
 import type { GclPersistence } from './persistence.js'
 import type { AuditLog, ConnectorAuditEvent } from './types.js'
 
@@ -24,6 +25,10 @@ export type ImageOwnerReviewDecisionProof = {
   auditHash: string
   issuanceAuditHash: string
   runAuditHash: string
+  /** The immutable issuance deadline re-read with the terminal receipt. */
+  reviewExpiresAt: string
+  /** The exact redacted candidate shape accepted for the terminal receipt. */
+  candidateFingerprint: string
 }
 
 export interface ImageOwnerReviewLedger {
@@ -42,6 +47,8 @@ type StoredReviewReceipt = {
   issuanceAuditHash: string
   runAuditHash: string
   auditHash: string
+  reviewExpiresAt: string
+  candidateFingerprint: string
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -123,8 +130,8 @@ function imageScope(value: unknown): boolean {
 
 function storedReceipt(value: unknown): StoredReviewReceipt | null {
   const receipt = plainRecord(value)
-  if (!receipt || !exactKeys(receipt, ['schema', 'candidateId', 'correlationId', 'decision', 'publication', 'issuanceAuditHash', 'runAuditHash', 'auditHash'])) return null
-  if (receipt.schema !== 'gcl-image-owner-review-v1' || typeof receipt.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(receipt.candidateId) || !safeIdentifier(receipt.correlationId) || (receipt.decision !== 'liked' && receipt.decision !== 'rejected') || receipt.publication !== 'blocked' || typeof receipt.issuanceAuditHash !== 'string' || !HASH_PATTERN.test(receipt.issuanceAuditHash) || typeof receipt.runAuditHash !== 'string' || !HASH_PATTERN.test(receipt.runAuditHash) || typeof receipt.auditHash !== 'string' || !HASH_PATTERN.test(receipt.auditHash)) return null
+  if (!receipt || !exactKeys(receipt, ['schema', 'candidateId', 'correlationId', 'decision', 'publication', 'issuanceAuditHash', 'runAuditHash', 'auditHash', 'reviewExpiresAt', 'candidateFingerprint'])) return null
+  if (receipt.schema !== 'gcl-image-owner-review-v1' || typeof receipt.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(receipt.candidateId) || !safeIdentifier(receipt.correlationId) || (receipt.decision !== 'liked' && receipt.decision !== 'rejected') || receipt.publication !== 'blocked' || typeof receipt.issuanceAuditHash !== 'string' || !HASH_PATTERN.test(receipt.issuanceAuditHash) || typeof receipt.runAuditHash !== 'string' || !HASH_PATTERN.test(receipt.runAuditHash) || typeof receipt.auditHash !== 'string' || !HASH_PATTERN.test(receipt.auditHash) || !canonicalTimestamp(receipt.reviewExpiresAt) || typeof receipt.candidateFingerprint !== 'string' || !HASH_PATTERN.test(receipt.candidateFingerprint)) return null
   return receipt as StoredReviewReceipt
 }
 
@@ -140,9 +147,9 @@ function assertImageOwnerReviewEvent(event: unknown): asserts event is ImageOwne
   const detail = plainRecord(value.detail)
   const liked = value.type === 'connector.artifact.owner_liked'
   const keys = liked
-    ? ['candidateId', 'maker', 'publication', 'issuanceAuditHash', 'runAuditHash', 'artifactId', 'ownerReview']
-    : ['candidateId', 'maker', 'publication', 'issuanceAuditHash', 'runAuditHash', 'reviewId', 'ownerReview', 'reason']
-  if (!detail || !exactKeys(detail, keys) || typeof detail.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(detail.candidateId) || !safeIdentifier(detail.maker) || detail.publication !== 'blocked' || typeof detail.issuanceAuditHash !== 'string' || !HASH_PATTERN.test(detail.issuanceAuditHash) || typeof detail.runAuditHash !== 'string' || !HASH_PATTERN.test(detail.runAuditHash) || detail.ownerReview !== (liked ? 'liked' : 'rejected')) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
+    ? ['candidateId', 'candidateFingerprint', 'reviewExpiresAt', 'maker', 'publication', 'issuanceAuditHash', 'runAuditHash', 'artifactId', 'ownerReview']
+    : ['candidateId', 'candidateFingerprint', 'reviewExpiresAt', 'maker', 'publication', 'issuanceAuditHash', 'runAuditHash', 'reviewId', 'ownerReview', 'reason']
+  if (!detail || !exactKeys(detail, keys) || typeof detail.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(detail.candidateId) || typeof detail.candidateFingerprint !== 'string' || !HASH_PATTERN.test(detail.candidateFingerprint) || !canonicalTimestamp(detail.reviewExpiresAt) || !safeIdentifier(detail.maker) || detail.publication !== 'blocked' || typeof detail.issuanceAuditHash !== 'string' || !HASH_PATTERN.test(detail.issuanceAuditHash) || typeof detail.runAuditHash !== 'string' || !HASH_PATTERN.test(detail.runAuditHash) || detail.ownerReview !== (liked ? 'liked' : 'rejected')) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
   if (liked && detail.artifactId !== `owner-liked-${detail.candidateId}`) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
   if (!liked && (detail.reviewId !== `owner-rejected-${detail.candidateId}` || (detail.reason !== 'NOT_SUITABLE' && detail.reason !== 'SAFETY_CONCERN' && detail.reason !== 'NEEDS_REVISION'))) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
 }
@@ -161,6 +168,8 @@ function receiptFor(event: ImageOwnerReviewDecisionEvent, auditHash: string): St
     issuanceAuditHash: event.detail.issuanceAuditHash as string,
     runAuditHash: event.detail.runAuditHash as string,
     auditHash,
+    reviewExpiresAt: event.detail.reviewExpiresAt as string,
+    candidateFingerprint: event.detail.candidateFingerprint as string,
   }
 }
 
@@ -169,7 +178,7 @@ type IssuanceLineage = {
   occurredAt: number
   candidateSetDigest: string
   candidateCount: number
-  candidateIds: ReadonlySet<string>
+  candidates: ReadonlyMap<string, { fingerprint: string; reviewExpiresAt: number; reviewExpiresAtValue: string }>
   runAuditHash: string
 }
 
@@ -189,19 +198,25 @@ function issuanceLineage(value: unknown, event: ImageOwnerReviewDecisionEvent): 
   const detail = plainRecord(issuance.detail)
   const entries = detail ? plainArray(detail.candidates) : null
   if (!detail || !exactKeys(detail, ['candidateSetDigest', 'candidateCount', 'candidates', 'publication', 'runAuditHash']) || !safeHash(detail.candidateSetDigest) || typeof detail.candidateCount !== 'number' || !Number.isSafeInteger(detail.candidateCount) || detail.candidateCount < 1 || detail.publication !== 'blocked' || !safeHash(detail.runAuditHash) || !entries || entries.length !== detail.candidateCount || entries.length !== issuance.requestedItems) return null
-  const candidateIds: string[] = []
+  const candidates = new Map<string, { fingerprint: string; reviewExpiresAt: number; reviewExpiresAtValue: string }>()
   for (const entry of entries) {
     const candidate = plainRecord(entry)
-    if (!candidate || !exactKeys(candidate, ['candidateId', 'fingerprint']) || typeof candidate.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(candidate.candidateId) || !safeHash(candidate.fingerprint)) return null
-    candidateIds.push(candidate.candidateId)
+    if (!candidate || !exactKeys(candidate, ['candidateId', 'fingerprint', 'reviewExpiresAt']) || typeof candidate.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(candidate.candidateId) || !safeHash(candidate.fingerprint) || !canonicalTimestamp(candidate.reviewExpiresAt)) return null
+    const reviewExpiresAt = new Date(candidate.reviewExpiresAt).getTime()
+    if (reviewExpiresAt <= new Date(issuance.occurredAt).getTime()) return null
+    candidates.set(candidate.candidateId, { fingerprint: candidate.fingerprint, reviewExpiresAt, reviewExpiresAtValue: candidate.reviewExpiresAt })
   }
-  if (new Set(candidateIds).size !== candidateIds.length) return null
+  if (candidates.size !== entries.length) return null
+  const candidateSetDigest = imageCandidateFingerprint([...candidates.entries()]
+    .map(([candidateId, candidate]) => ({ candidateId, fingerprint: candidate.fingerprint }))
+    .sort((left, right) => left.candidateId.localeCompare(right.candidateId)))
+  if (candidateSetDigest !== detail.candidateSetDigest) return null
   return {
     actor: issuance.actor,
     occurredAt: new Date(issuance.occurredAt).getTime(),
     candidateSetDigest: detail.candidateSetDigest,
     candidateCount: detail.candidateCount,
-    candidateIds: new Set(candidateIds),
+    candidates,
     runAuditHash: detail.runAuditHash,
   }
 }
@@ -220,27 +235,34 @@ function assertDecisionLineage(records: readonly unknown[], event: ImageOwnerRev
   const issuance = issuanceRecord ? issuanceLineage(issuanceRecord.event, event) : null
   const source = issuance ? auditRecords.find((record) => isBoundSourceRun(record.event, record.hash, event, issuance)) : undefined
   const decisionTime = new Date(event.occurredAt).getTime()
-  if (!issuance || !source || event.detail.runAuditHash !== issuance.runAuditHash || event.detail.maker !== issuance.actor || !issuance.candidateIds.has(event.detail.candidateId as string) || source.event.occurredAt === undefined || issuance.occurredAt > decisionTime || new Date(source.event.occurredAt).getTime() > issuance.occurredAt) throw new ConnectorInputError('IMAGE_OWNER_REVIEW_DECISION_LINEAGE_INVALID')
+  const candidate = issuance?.candidates.get(event.detail.candidateId as string)
+  if (!issuance || !source || !candidate || event.detail.runAuditHash !== issuance.runAuditHash || event.detail.maker !== issuance.actor || event.detail.candidateFingerprint !== candidate.fingerprint || event.detail.reviewExpiresAt !== candidate.reviewExpiresAtValue || decisionTime >= candidate.reviewExpiresAt || source.event.occurredAt === undefined || issuance.occurredAt > decisionTime || new Date(source.event.occurredAt).getTime() > issuance.occurredAt) throw new ConnectorInputError('IMAGE_OWNER_REVIEW_DECISION_LINEAGE_INVALID')
 }
 
 function sameDecisionEvent(left: ImageOwnerReviewDecisionEvent, right: ImageOwnerReviewDecisionEvent): boolean {
   if (left.type !== right.type || left.connectorId !== right.connectorId || left.product !== right.product || left.workspaceId !== right.workspaceId || left.actor !== right.actor || left.correlationId !== right.correlationId || left.costCapCents !== right.costCapCents || left.requestedItems !== right.requestedItems || left.occurredAt !== right.occurredAt || !imageScope(left.scopes) || !imageScope(right.scopes)) return false
   const leftDetail = left.detail
   const rightDetail = right.detail
-  if (leftDetail.candidateId !== rightDetail.candidateId || leftDetail.maker !== rightDetail.maker || leftDetail.publication !== rightDetail.publication || leftDetail.issuanceAuditHash !== rightDetail.issuanceAuditHash || leftDetail.runAuditHash !== rightDetail.runAuditHash || leftDetail.ownerReview !== rightDetail.ownerReview) return false
+  if (leftDetail.candidateId !== rightDetail.candidateId || leftDetail.candidateFingerprint !== rightDetail.candidateFingerprint || leftDetail.reviewExpiresAt !== rightDetail.reviewExpiresAt || leftDetail.maker !== rightDetail.maker || leftDetail.publication !== rightDetail.publication || leftDetail.issuanceAuditHash !== rightDetail.issuanceAuditHash || leftDetail.runAuditHash !== rightDetail.runAuditHash || leftDetail.ownerReview !== rightDetail.ownerReview) return false
   return left.type === 'connector.artifact.owner_liked'
     ? leftDetail.artifactId === rightDetail.artifactId
     : leftDetail.reviewId === rightDetail.reviewId && leftDetail.reason === rightDetail.reason
 }
 
 function proofFor(receipt: StoredReviewReceipt): ImageOwnerReviewDecisionProof {
-  return { auditHash: receipt.auditHash, issuanceAuditHash: receipt.issuanceAuditHash, runAuditHash: receipt.runAuditHash }
+  return {
+    auditHash: receipt.auditHash,
+    issuanceAuditHash: receipt.issuanceAuditHash,
+    runAuditHash: receipt.runAuditHash,
+    reviewExpiresAt: receipt.reviewExpiresAt,
+    candidateFingerprint: receipt.candidateFingerprint,
+  }
 }
 
 /** Rechecks receipt fields and the matching decision event in the full audit chain. */
 function assertDecisionReceipt(records: readonly unknown[], receipt: StoredReviewReceipt, event: ImageOwnerReviewDecisionEvent): ImageOwnerReviewDecisionProof {
   const expected = receiptFor(event, receipt.auditHash)
-  if (receipt.candidateId !== expected.candidateId || receipt.correlationId !== expected.correlationId || receipt.decision !== expected.decision || receipt.publication !== expected.publication || receipt.issuanceAuditHash !== expected.issuanceAuditHash || receipt.runAuditHash !== expected.runAuditHash) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_INVALID')
+  if (receipt.candidateId !== expected.candidateId || receipt.correlationId !== expected.correlationId || receipt.decision !== expected.decision || receipt.publication !== expected.publication || receipt.issuanceAuditHash !== expected.issuanceAuditHash || receipt.runAuditHash !== expected.runAuditHash || receipt.reviewExpiresAt !== expected.reviewExpiresAt || receipt.candidateFingerprint !== expected.candidateFingerprint) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_INVALID')
   const auditRecords = verifyAuditChain(records)
   const decision = auditRecords.find((record) => record.hash === receipt.auditHash)
   if (!decision) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_INVALID')

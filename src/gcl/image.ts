@@ -730,7 +730,11 @@ export async function issueSyntheticImageCandidates(runResult: ConnectorResult<T
     if (candidate.candidateIndex !== index || candidate.requestedBy !== issuanceContext.actor || candidate.scope.product !== issuanceContext.product || candidate.scope.workspaceId !== issuanceContext.workspaceId || candidate.scope.correlationId !== issuanceContext.correlationId) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
     candidates.push(candidate)
   }
-  const entries = candidates.map((candidate) => ({ candidateId: candidate.candidateId, fingerprint: imageCandidateFingerprint(candidate) }))
+  const entries = candidates.map((candidate) => ({
+    candidateId: candidate.candidateId,
+    fingerprint: imageCandidateFingerprint(candidate),
+    reviewExpiresAt: candidate.ownerReview.reviewExpiresAt,
+  }))
   const event: ImageCandidateIssuanceEvent = {
     type: 'connector.artifact.candidates_issued',
     connectorId: IMAGE_TTI_CONNECTOR_ID,
@@ -783,20 +787,25 @@ function candidateLedgerAssertion(candidateLedger: unknown): (...args: unknown[]
 /** Treat a malformed ledger proof as unavailable rather than trusting caller-supplied lineage. */
 function assertIssuanceProof(value: unknown): asserts value is ImageCandidateIssuanceProof {
   const proof = plainRecord(value)
-  if (!proof || !hasExactKeys(proof, ['issuanceAuditHash', 'runAuditHash', 'issuanceOccurredAt']) || typeof proof.issuanceAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.issuanceAuditHash) || typeof proof.runAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.runAuditHash) || !canonicalTimestamp(proof.issuanceOccurredAt)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
+  if (!proof || !hasExactKeys(proof, ['issuanceAuditHash', 'runAuditHash', 'issuanceOccurredAt', 'reviewExpiresAt', 'candidateFingerprint']) || typeof proof.issuanceAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.issuanceAuditHash) || typeof proof.runAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.runAuditHash) || !canonicalTimestamp(proof.issuanceOccurredAt) || !canonicalTimestamp(proof.reviewExpiresAt) || typeof proof.candidateFingerprint !== 'string' || !DIGEST_PATTERN.test(proof.candidateFingerprint)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
 }
 
 function assertReviewNotBeforeIssuance(occurredAt: Date, issuance: { issuanceOccurredAt: string }): void {
   if (occurredAt.getTime() < new Date(issuance.issuanceOccurredAt).getTime()) throw new ConnectorInputError('IMAGE_OWNER_REVIEW_BEFORE_CANDIDATE_ISSUANCE')
 }
 
+/** A terminal helper must bind the presented snapshot to the durable deadline and fingerprint. */
+function assertCandidateMatchesIssuance(candidate: SyntheticImageCandidate, issuance: ImageCandidateIssuanceProof): void {
+  if (candidate.ownerReview.reviewExpiresAt !== issuance.reviewExpiresAt || imageCandidateFingerprint(candidate) !== issuance.candidateFingerprint) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
+}
+
 /** A terminal result is usable only after the review ledger re-reads its own receipt. */
 function assertDecisionProof(value: unknown, auditHash: string, issuance: ImageCandidateIssuanceProof): asserts value is ImageOwnerReviewDecisionProof {
   const proof = plainRecord(value)
-  if (!proof || !hasExactKeys(proof, ['auditHash', 'issuanceAuditHash', 'runAuditHash']) || typeof proof.auditHash !== 'string' || !DIGEST_PATTERN.test(proof.auditHash) || typeof proof.issuanceAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.issuanceAuditHash) || typeof proof.runAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.runAuditHash) || proof.auditHash !== auditHash || proof.issuanceAuditHash !== issuance.issuanceAuditHash || proof.runAuditHash !== issuance.runAuditHash) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_INVALID')
+  if (!proof || !hasExactKeys(proof, ['auditHash', 'issuanceAuditHash', 'runAuditHash', 'reviewExpiresAt', 'candidateFingerprint']) || typeof proof.auditHash !== 'string' || !DIGEST_PATTERN.test(proof.auditHash) || typeof proof.issuanceAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.issuanceAuditHash) || typeof proof.runAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.runAuditHash) || !canonicalTimestamp(proof.reviewExpiresAt) || typeof proof.candidateFingerprint !== 'string' || !DIGEST_PATTERN.test(proof.candidateFingerprint) || proof.auditHash !== auditHash || proof.issuanceAuditHash !== issuance.issuanceAuditHash || proof.runAuditHash !== issuance.runAuditHash || proof.reviewExpiresAt !== issuance.reviewExpiresAt || proof.candidateFingerprint !== issuance.candidateFingerprint) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_INVALID')
 }
 
-function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected', candidate: SyntheticImageCandidate, actor: string, occurredAt: Date, context: ImageOwnerReviewContext, issuance: { issuanceAuditHash: string; runAuditHash: string }, detail: Record<string, unknown>): ImageOwnerReviewDecisionEvent {
+function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected', candidate: SyntheticImageCandidate, actor: string, occurredAt: Date, context: ImageOwnerReviewContext, issuance: ImageCandidateIssuanceProof, detail: Record<string, unknown>): ImageOwnerReviewDecisionEvent {
   return {
     type,
     connectorId: IMAGE_TTI_CONNECTOR_ID,
@@ -808,7 +817,16 @@ function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.ar
     costCapCents: 0,
     requestedItems: 1,
     occurredAt: occurredAt.toISOString(),
-    detail: { candidateId: candidate.candidateId, maker: candidate.requestedBy, publication: 'blocked', issuanceAuditHash: issuance.issuanceAuditHash, runAuditHash: issuance.runAuditHash, ...detail },
+    detail: {
+      candidateId: candidate.candidateId,
+      candidateFingerprint: issuance.candidateFingerprint,
+      reviewExpiresAt: issuance.reviewExpiresAt,
+      maker: candidate.requestedBy,
+      publication: 'blocked',
+      issuanceAuditHash: issuance.issuanceAuditHash,
+      runAuditHash: issuance.runAuditHash,
+      ...detail,
+    },
   } as const
 }
 
@@ -822,6 +840,7 @@ export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate
   const assertIssued = candidateLedgerAssertion(candidateLedger)
   const issuance = await assertIssued.call(candidateLedger, request.candidate)
   assertIssuanceProof(issuance)
+  assertCandidateMatchesIssuance(request.candidate, issuance)
   assertReviewNotBeforeIssuance(request.occurredAt, issuance)
   const artifactId = `owner-liked-${request.candidate.candidateId}`
   const event = reviewAuditEvent('connector.artifact.owner_liked', request.candidate, request.actor, request.occurredAt, request.context, issuance, { artifactId, ownerReview: 'liked' })
@@ -855,6 +874,7 @@ export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandida
   if (reason !== 'NOT_SUITABLE' && reason !== 'SAFETY_CONCERN' && reason !== 'NEEDS_REVISION') throw new ConnectorInputError('INVALID_IMAGE_REJECTION_REASON')
   const issuance = await assertIssued.call(candidateLedger, request.candidate)
   assertIssuanceProof(issuance)
+  assertCandidateMatchesIssuance(request.candidate, issuance)
   assertReviewNotBeforeIssuance(request.occurredAt, issuance)
   const reviewId = `owner-rejected-${request.candidate.candidateId}`
   const event = reviewAuditEvent('connector.artifact.owner_rejected', request.candidate, request.actor, request.occurredAt, request.context, issuance, { reviewId, ownerReview: 'rejected', reason })

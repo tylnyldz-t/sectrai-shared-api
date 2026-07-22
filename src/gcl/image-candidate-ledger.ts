@@ -16,6 +16,8 @@ const IMAGE_SCOPE = 'image:generate'
 export type ImageCandidateIssuanceEntry = {
   candidateId: string
   fingerprint: string
+  /** Canonical owner-review deadline; never prompt or media data. */
+  reviewExpiresAt: string
 }
 
 export type ImageCandidateIssuanceEvent = ConnectorAuditEvent & {
@@ -34,6 +36,10 @@ export type ImageCandidateIssuanceProof = {
   runAuditHash: string
   /** Canonical event time; terminal reviews cannot predate durable issuance. */
   issuanceOccurredAt: string
+  /** Re-read from the durable receipt; terminal review must remain before it. */
+  reviewExpiresAt: string
+  /** Exact redacted candidate shape bound to this issuance receipt. */
+  candidateFingerprint: string
 }
 
 /**
@@ -55,6 +61,7 @@ type StoredCandidateReceipt = {
   runAuditHash: string
   issuanceAuditHash: string
   issuanceOccurredAt: string
+  reviewExpiresAt: string
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
@@ -134,17 +141,21 @@ function canonicalEntries(entries: readonly ImageCandidateIssuanceEntry[]): Imag
 }
 
 function candidateSetDigest(entries: readonly ImageCandidateIssuanceEntry[]): string {
-  return imageCandidateFingerprint(canonicalEntries(entries))
+  // The governed success audit predates the issuance ledger and binds only
+  // candidate IDs plus their redacted fingerprints. Deadline data is carried
+  // in issuance receipts for lifecycle enforcement, but cannot change that
+  // already-bound success digest.
+  return imageCandidateFingerprint(canonicalEntries(entries).map(({ candidateId, fingerprint }) => ({ candidateId, fingerprint })))
 }
 
 function issuanceEntries(value: unknown): ImageCandidateIssuanceEntry[] | null {
   const values = plainArray(value)
   if (!values || values.length < 1 || values.length > MAX_SYNTHETIC_IMAGE_CANDIDATES || values.some((entry) => !plainRecord(entry))) return null
   const entries = values.map((entry) => entry as Record<string, unknown>)
-  if (entries.some((entry) => !exactKeys(entry, ['candidateId', 'fingerprint']) || typeof entry.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(entry.candidateId) || !safeHash(entry.fingerprint))) return null
+  if (entries.some((entry) => !exactKeys(entry, ['candidateId', 'fingerprint', 'reviewExpiresAt']) || typeof entry.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(entry.candidateId) || !safeHash(entry.fingerprint) || !canonicalTimestamp(entry.reviewExpiresAt))) return null
   const candidateIds = entries.map((entry) => entry.candidateId as string)
   if (new Set(candidateIds).size !== candidateIds.length) return null
-  return entries.map((entry) => ({ candidateId: entry.candidateId as string, fingerprint: entry.fingerprint as string }))
+  return entries.map((entry) => ({ candidateId: entry.candidateId as string, fingerprint: entry.fingerprint as string, reviewExpiresAt: entry.reviewExpiresAt as string }))
 }
 
 function imageScope(value: unknown): boolean {
@@ -162,12 +173,14 @@ function assertImageCandidateIssuanceEvent(event: unknown): asserts event is Ima
   if (!detail || !exactKeys(detail, ['candidateSetDigest', 'candidateCount', 'candidates', 'publication', 'runAuditHash']) || !safeHash(detail.candidateSetDigest) || !Number.isSafeInteger(detail.candidateCount) || detail.publication !== 'blocked' || !safeHash(detail.runAuditHash)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
   const entries = issuanceEntries(detail.candidates)
   if (!entries || detail.candidateCount !== entries.length || requestedItems !== entries.length || detail.candidateSetDigest !== candidateSetDigest(entries)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
+  const issuanceTime = new Date(value.occurredAt).getTime()
+  if (entries.some((entry) => issuanceTime >= new Date(entry.reviewExpiresAt).getTime())) throw new ConnectorInputError('IMAGE_CANDIDATE_ISSUANCE_EXPIRED')
 }
 
 function storedReceipt(value: unknown): StoredCandidateReceipt | null {
   const receipt = plainRecord(value)
-  if (!receipt || !exactKeys(receipt, ['schema', 'candidateId', 'correlationId', 'fingerprint', 'publication', 'runAuditHash', 'issuanceAuditHash', 'issuanceOccurredAt'])) return null
-  if (receipt.schema !== 'gcl-image-candidate-v1' || typeof receipt.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(receipt.candidateId) || !safeIdentifier(receipt.correlationId) || !safeHash(receipt.fingerprint) || receipt.publication !== 'blocked' || !safeHash(receipt.runAuditHash) || !safeHash(receipt.issuanceAuditHash) || !canonicalTimestamp(receipt.issuanceOccurredAt)) return null
+  if (!receipt || !exactKeys(receipt, ['schema', 'candidateId', 'correlationId', 'fingerprint', 'publication', 'runAuditHash', 'issuanceAuditHash', 'issuanceOccurredAt', 'reviewExpiresAt'])) return null
+  if (receipt.schema !== 'gcl-image-candidate-v1' || typeof receipt.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(receipt.candidateId) || !safeIdentifier(receipt.correlationId) || !safeHash(receipt.fingerprint) || receipt.publication !== 'blocked' || !safeHash(receipt.runAuditHash) || !safeHash(receipt.issuanceAuditHash) || !canonicalTimestamp(receipt.issuanceOccurredAt) || !canonicalTimestamp(receipt.reviewExpiresAt)) return null
   return receipt as StoredCandidateReceipt
 }
 
@@ -181,15 +194,22 @@ function receiptFor(event: ImageCandidateIssuanceEvent, entry: ImageCandidateIss
     runAuditHash: event.detail.runAuditHash,
     issuanceAuditHash,
     issuanceOccurredAt: event.occurredAt,
+    reviewExpiresAt: entry.reviewExpiresAt,
   }
 }
 
-function receiptForCandidate(candidate: SyntheticImageCandidate): Pick<StoredCandidateReceipt, 'candidateId' | 'correlationId' | 'fingerprint'> {
-  return { candidateId: candidate.candidateId, correlationId: candidate.scope.correlationId, fingerprint: imageCandidateFingerprint(candidate) }
+function receiptForCandidate(candidate: SyntheticImageCandidate): Pick<StoredCandidateReceipt, 'candidateId' | 'correlationId' | 'fingerprint' | 'reviewExpiresAt'> {
+  return { candidateId: candidate.candidateId, correlationId: candidate.scope.correlationId, fingerprint: imageCandidateFingerprint(candidate), reviewExpiresAt: candidate.ownerReview.reviewExpiresAt }
 }
 
 function proofFor(receipt: StoredCandidateReceipt): ImageCandidateIssuanceProof {
-  return { issuanceAuditHash: receipt.issuanceAuditHash, runAuditHash: receipt.runAuditHash, issuanceOccurredAt: receipt.issuanceOccurredAt }
+  return {
+    issuanceAuditHash: receipt.issuanceAuditHash,
+    runAuditHash: receipt.runAuditHash,
+    issuanceOccurredAt: receipt.issuanceOccurredAt,
+    reviewExpiresAt: receipt.reviewExpiresAt,
+    candidateFingerprint: receipt.fingerprint,
+  }
 }
 
 function isSourceRunSuccess(record: { event: ConnectorAuditEvent; hash: string }, event: ImageCandidateIssuanceEvent): boolean {
@@ -224,9 +244,9 @@ function assertReceiptAudit(records: readonly unknown[], receipt: StoredCandidat
   if (!issuance) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
   try { assertImageCandidateIssuanceEvent(issuance.event) } catch { throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID') }
   const event = issuance.event as ImageCandidateIssuanceEvent
-  const entry = event.detail.candidates.find((item) => item.candidateId === receipt.candidateId && item.fingerprint === receipt.fingerprint)
+  const entry = event.detail.candidates.find((item) => item.candidateId === receipt.candidateId && item.fingerprint === receipt.fingerprint && item.reviewExpiresAt === receipt.reviewExpiresAt)
   const source = auditRecords.find((record) => isSourceRunSuccess(record, event))
-  if (!entry || event.correlationId !== receipt.correlationId || event.detail.runAuditHash !== receipt.runAuditHash || receipt.issuanceOccurredAt !== event.occurredAt || !source || new Date(receipt.issuanceOccurredAt).getTime() < new Date(source.event.occurredAt).getTime()) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
+  if (!entry || event.correlationId !== receipt.correlationId || event.detail.runAuditHash !== receipt.runAuditHash || receipt.issuanceOccurredAt !== event.occurredAt || new Date(receipt.issuanceOccurredAt).getTime() >= new Date(receipt.reviewExpiresAt).getTime() || !source || new Date(receipt.issuanceOccurredAt).getTime() < new Date(source.event.occurredAt).getTime()) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
 }
 
 /** Durable, redacted candidate-issuance store. It is always publication-blocked. */
@@ -284,7 +304,7 @@ export class PrismaImageCandidateLedger implements ImageCandidateLedger {
     const receipts = records.map((record) => storedReceipt(record.values))
     if (receipts.some((receipt) => !receipt)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
     const receipt = receipts.find((item) => item && item.candidateId === expected.candidateId && item.correlationId === expected.correlationId)
-    if (!receipt || receipt.fingerprint !== expected.fingerprint || receipt.publication !== 'blocked') throw new ConnectorInputError('IMAGE_CANDIDATE_NOT_ISSUED')
+    if (!receipt || receipt.fingerprint !== expected.fingerprint || receipt.reviewExpiresAt !== expected.reviewExpiresAt || receipt.publication !== 'blocked') throw new ConnectorInputError('IMAGE_CANDIDATE_NOT_ISSUED')
     assertReceiptAudit(auditRecords.map((record) => record.values), receipt)
     return proofFor(receipt)
   }
@@ -328,7 +348,7 @@ export class InMemoryImageCandidateLedger implements ImageCandidateLedger {
     const expected = receiptForCandidate(candidate)
     const key = JSON.stringify([candidate.scope.product, candidate.scope.workspaceId, expected.correlationId, expected.candidateId])
     const receipt = this.receipts.get(key)
-    if (!receipt || receipt.fingerprint !== expected.fingerprint || receipt.publication !== 'blocked') throw new ConnectorInputError('IMAGE_CANDIDATE_NOT_ISSUED')
+    if (!receipt || receipt.fingerprint !== expected.fingerprint || receipt.reviewExpiresAt !== expected.reviewExpiresAt || receipt.publication !== 'blocked') throw new ConnectorInputError('IMAGE_CANDIDATE_NOT_ISSUED')
     const entries = auditEntries(this.auditLog)
     if (!entries) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
     assertReceiptAudit(entries, receipt)
