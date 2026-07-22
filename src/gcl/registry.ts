@@ -200,7 +200,7 @@ function connectorResultSnapshot(value: unknown, connectorId: string): Connector
   if (typeof result.confidence !== 'number' || !Number.isFinite(result.confidence) || result.confidence < 0 || result.confidence > 1) {
     throw new ConnectorUnavailableError('CONNECTOR_RESULT_INVALID')
   }
-  const provenanceFields = [...CONNECTOR_PROVENANCE_REQUIRED_FIELDS, ...CONNECTOR_PROVENANCE_OPTIONAL_FIELDS]
+  const provenanceFields: readonly string[] = [...CONNECTOR_PROVENANCE_REQUIRED_FIELDS, ...CONNECTOR_PROVENANCE_OPTIONAL_FIELDS]
   let provenance: Record<string, unknown>
   try {
     if (

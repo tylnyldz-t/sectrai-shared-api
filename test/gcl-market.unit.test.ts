@@ -6,7 +6,7 @@ import { ADOS_10_MARKET_CONTROLS, MARKET_CONNECTOR_ID, MARKET_LIVE_STATUS, MARKE
 import { InMemorySyntheticMarketReviewLedger } from '../src/gcl/market-review-ledger.js'
 import { dailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
-import type { ConnectorQuota, ConnectorRunContext } from '../src/gcl/types.js'
+import type { Connector, ConnectorQuota, ConnectorRunContext, ConnectorResult } from '../src/gcl/types.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
 const limits: SyntheticMarketConnectorConfig = {
@@ -1286,6 +1286,104 @@ test('D20 freezes direct preflight and result/provenance egress, while changed c
   assert.equal(governedPlan.sideEffects.booking, false)
   assert.equal(setup.audit.entries.length, 2)
   assert.equal(setup.quota.requests.length, 1)
+})
+
+test('D21 rejects shaped connector-result ingress before a succeeded audit and never evaluates result traps', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  let proxyTrapRead = false
+  const validProvenance = {
+    connectorId: 'market-result-ingress-test',
+    source: 'synthetic-result-test',
+    retrievedAt: now().toISOString(),
+    untrustedContent: {
+      source: 'synthetic-result-input',
+      value: { request: 'data-only' },
+      handling: 'data-only' as const,
+      instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS' as const,
+    },
+  }
+  const proxyResult = new Proxy({ data: {}, provenance: validProvenance, confidence: 0 }, {
+    get() { proxyTrapRead = true; throw new Error('RESULT_TRAP_MUST_NOT_RUN') },
+  })
+  const connector: Connector = {
+    id: 'market-result-ingress-test',
+    kind: 'market',
+    authKind: 'owner-token',
+    scopes: ['market:capacity:quote'],
+    async run(): Promise<ConnectorResult> { return proxyResult as never },
+  }
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+
+  await assert.rejects(
+    () => runner.run({ connectorId: connector.id, input: capacityQuote, ...runContext }),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_RESULT_INVALID',
+  )
+  assert.equal(proxyTrapRead, false)
+  assert.equal(quota.requests.length, 1)
+  assert.deepEqual(audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.failed'])
+  assert.equal(audit.entries[1]?.event.detail.error, 'CONNECTOR_RESULT_INVALID')
+
+  const hiddenProviderResult = { data: {}, provenance: structuredClone(validProvenance), confidence: 0 }
+  Object.defineProperty(hiddenProviderResult, 'providerCredential', { value: 'synthetic-not-accepted' })
+  connector.run = async () => hiddenProviderResult as never
+  await assert.rejects(
+    () => runner.run({ connectorId: connector.id, input: capacityQuote, ...runContext }),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_RESULT_INVALID',
+  )
+  assert.equal(quota.requests.length, 2)
+  assert.deepEqual(audit.entries.map((entry) => entry.event.type), [
+    'connector.run.requested', 'connector.run.failed', 'connector.run.requested', 'connector.run.failed',
+  ])
+})
+
+test('D21 copies governance-visible result data before the succeeded-audit await and seals that copied egress', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const rawResult = {
+    data: Object.freeze({ state: 'SYNTHETIC_NO_ACTION' }),
+    provenance: {
+      connectorId: 'market-result-snapshot-test',
+      source: 'synthetic-result-test',
+      retrievedAt: now().toISOString(),
+      untrustedContent: {
+        source: 'synthetic-result-input',
+        value: Object.freeze({ request: 'data-only' }),
+        handling: 'data-only' as const,
+        instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS' as const,
+      },
+    },
+    confidence: 0,
+  }
+  const auditWithMutation = {
+    async append(event: Parameters<InMemoryHashChainAuditLog['append']>[0]) {
+      if (event.type === 'connector.run.succeeded') {
+        rawResult.confidence = 1
+        rawResult.provenance.source = 'mutated-provider-source'
+        rawResult.provenance.untrustedContent.handling = 'instructions' as never
+      }
+      return audit.append(event)
+    },
+  }
+  const connector: Connector = {
+    id: 'market-result-snapshot-test',
+    kind: 'market',
+    authKind: 'owner-token',
+    scopes: ['market:capacity:quote'],
+    async run(): Promise<ConnectorResult> { return rawResult },
+  }
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), auditWithMutation, quota, now)
+  const result = await runner.run({ connectorId: connector.id, input: capacityQuote, ...runContext })
+
+  assert.equal(result.confidence, 0)
+  assert.equal(result.provenance.source, 'synthetic-result-test')
+  assert.equal(result.provenance.untrustedContent.handling, 'data-only')
+  assert.match(result.provenance.auditHash ?? '', /^[a-f0-9]{64}$/)
+  for (const value of [result, result.provenance, result.provenance.untrustedContent]) assert.equal(Object.isFrozen(value), true)
+  assert.throws(() => { result.provenance.source = 'provider-shaped-mutation' })
+  assert.throws(() => { result.provenance.untrustedContent.handling = 'instructions' as never })
+  assert.deepEqual(audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.succeeded'])
+  assert.equal(quota.requests.length, 1)
 })
 
 test('D1 review packet reconstruction rejects injection, source/quote/action drift, scope drift, and whitespace identity bypasses before audit append', async () => {

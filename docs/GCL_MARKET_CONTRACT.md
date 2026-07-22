@@ -597,6 +597,37 @@ D20 adds no provider code, credential handling, network call, route, storage,
 migration, queue, worker, quote, reservation, booking, publication, handoff,
 send, durable approval, signature, authorization, or execution capability.
 
+## D21 — strict connector-result ingress before success audit
+
+The governed runner validates and copies the governance-visible result wrapper
+**before** it appends `connector.run.succeeded`. It accepts only an exact
+own-data `{ data, provenance, confidence }` object. Provenance must carry the
+selected connector ID, a canonical retrieval time, bounded source identifiers,
+exact data-only untrusted-content labels, a finite confidence in `[0, 1]`, and
+no connector-supplied audit hash. The runner alone attaches its final local
+SHA-256 audit hash after the succeeded append.
+
+Accessor, Proxy, inherited, hidden, symbol, extra (including
+credential/provider-shaped), malformed-time, cross-connector, forged-audit,
+instruction-labelled, and invalid-confidence result forms fail closed as
+`CONNECTOR_RESULT_INVALID`. They receive a requested/failed audit pair, never
+a succeeded audit or returned result. The already reserved quota is not
+refunded; it remains a conservative governance record, never a retry or
+action capability.
+
+`data` and `untrustedContent.value` remain opaque to the generic runner; their
+selected connector owns parsing. For `market`, D18/D20 already seal the
+canonical plan and request. D21 additionally copies the outer result,
+provenance, and untrusted-content metadata before asynchronous success audit,
+then freezes those copied egress branches after the local hash is attached. A
+connector retaining its original result wrapper cannot relabel returned market
+data as provider data or instructions while the audit is pending.
+
+D21 is result-boundary hardening only. It adds no provider code, credential
+handling, network call, route, storage, migration, queue, worker, quote,
+reservation, booking, publication, handoff, send, durable approval, signature,
+authorization, or execution capability.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -661,7 +692,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -690,7 +721,9 @@ it. D19 freezes the canonical review result and its D3–D7 receipt, audit,
 trail, and manifest evidence branches before any caller can retain them. D20
 freezes direct preflight output and direct/governed result and provenance
 egress, including data-only untrusted-content metadata after the governed
-audit summary is attached.
+audit summary is attached. D21 rejects shaped or forged connector-result
+wrappers before a succeeded audit, copies result/provenance metadata before
+that asynchronous append, and freezes the copied final egress.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -755,6 +788,11 @@ direct/governed result and provenance branch are frozen. In-place provider,
 instruction-handling, confidence, root-result, or action mutation fails; a
 provider-shaped request copy is rejected before a direct plan and an
 action-shaped plan copy fails canonical review without adding audit or quota.
+D21 additionally rejects a Proxy or hidden-field connector result without
+evaluating its trap and without a succeeded audit. It proves a retained,
+mutable connector result cannot change the copied confidence, provenance
+source, or data-only instruction label while the succeeded-audit append is
+pending.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -785,7 +823,8 @@ action-shaped plan copy fails canonical review without adding audit or quota.
    emitted synthetic plan branch before it reaches a caller; D19 freezes every
    canonical review result and D3–D7 evidence branch before it reaches a
    caller; D20 freezes direct preflight output and direct/governed
-   result/provenance output after audit enrichment.
+   result/provenance output after audit enrichment; D21 validates and copies
+   strict connector-result ingress before the succeeded-audit seam.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.
@@ -803,8 +842,9 @@ action-shaped plan copy fails canonical review without adding audit or quota.
    connector binding before the runner's asynchronous seams; D18 freezes the
    emitted no-action plan before it reaches a caller; D19 freezes the review
    result and its derived no-action evidence before they reach a caller; D20
-   freezes the direct/governed no-action preflight/result/provenance boundary.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20 evidence cannot quote, reserve, book,
+   freezes the direct/governed no-action preflight/result/provenance boundary;
+   D21 copies exact result/provenance metadata before the succeeded audit.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -814,4 +854,4 @@ action-shaped plan copy fails canonical review without adding audit or quota.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21.

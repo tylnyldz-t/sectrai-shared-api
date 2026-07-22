@@ -128,4 +128,9 @@ D20 seals the direct preflight output and direct/governed connector result and
 provenance branches after audit enrichment, so in-place provider, instruction,
 confidence, or result replacement cannot change their data-only, no-action
 meaning. A changed copy still must pass the bounded parser and canonical
-review, and cannot authorize an action.
+review, and cannot authorize an action. D21 rejects a shaped, forged, or
+credential/provider-shaped connector result before its succeeded audit,
+snapshots exact result/provenance metadata before that asynchronous seam, and
+freezes the copied final egress. The connector cannot supply the audit hash or
+relabel the returned market result while the local success audit is pending;
+data and request values remain synthetic, data-only, and `LIVE_DISABLED`.
