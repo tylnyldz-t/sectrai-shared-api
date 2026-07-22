@@ -13,6 +13,7 @@
     "db:migrate": "prisma migrate deploy",
     "test": "node --import tsx --test test/**/*.test.ts",
     "test:synthetic": "node --import tsx --test test/gcl.jnc-contract.unit.test.ts",
+    "test:conformance": "node --import tsx --test test/iv-gcl-conformance.snapshot.test.ts",
     "verify": "npm run typecheck && npm run lint && npm run build"
   },
   "dependencies": {
