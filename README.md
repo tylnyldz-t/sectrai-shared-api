@@ -138,4 +138,9 @@ freezes the bounded registry-visible connector control plane (ID, auth/quota
 metadata, scopes, and preflight/run references) at construction. Shaped or
 credential/provider-shaped registration fails before any audit, quota, or
 connector seam; later mutation cannot retarget a synthetic, `LIVE_DISABLED`
-run or authorize an action.
+run or authorize an action. D23 captures the runner's registry resolver,
+audit/quota callbacks, and local clock behind a native private field. Proxy,
+accessor, missing-method, and Proxy-clock collaborators fail closed before any
+clock call, audit append, quota reservation, or connector run; later public
+collaborator or legacy-runner-field replacement cannot retarget the synthetic,
+no-action path.
