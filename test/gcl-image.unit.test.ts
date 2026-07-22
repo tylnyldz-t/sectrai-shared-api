@@ -760,6 +760,47 @@ test('D7 seals issuance proofs and terminal events across an owner-review ledger
   assert.equal(audit.entries[3]?.event.detail.publication, 'blocked')
 })
 
+test('D8 seals candidate-issuance events across a custom ledger await', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
+  const governed = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
+  const mutableResult = structuredClone(governed)
+  const original = governed.data.candidates[0]
+  assert.ok(original)
+  const candidates = new InMemoryImageCandidateLedger(audit)
+  let releaseAppend: (() => void) | undefined
+  const appendGate = new Promise<void>((resolve) => { releaseAppend = resolve })
+  const ledger = {
+    appendIssuance: async (event: Parameters<InMemoryImageCandidateLedger['appendIssuance']>[0]) => {
+      assert.equal(Object.isFrozen(event), true)
+      assert.equal(Object.isFrozen(event.scopes), true)
+      assert.equal(Object.isFrozen(event.detail), true)
+      assert.equal(Object.isFrozen(event.detail.candidates), true)
+      assert.equal(Object.isFrozen(event.detail.candidates[0]), true)
+      assert.throws(() => { ;(event.detail as { publication: string }).publication = 'unblocked' }, TypeError)
+      assert.throws(() => { ;(event.detail.candidates[0] as { candidateId: string }).candidateId = 'synthetic-image-00000000000000000000' }, TypeError)
+      await appendGate
+      return candidates.appendIssuance(event)
+    },
+  }
+  const pendingIssuance = issueSyntheticImageCandidates(mutableResult, ledger, context)
+  await Promise.resolve()
+  await Promise.resolve()
+
+  const mutableCandidate = mutableResult.data.candidates[0]
+  assert.ok(mutableCandidate)
+  mutableCandidate.previewDataUri = 'data:image/svg+xml;base64,FORGED'
+  mutableCandidate.syntheticUri = 'https://provider.example/forged.png'
+  if (!releaseAppend) throw new Error('D8_TEST_ISSUANCE_GATE_MISSING')
+  releaseAppend()
+  const issuance = await pendingIssuance
+  assert.match(issuance.issuanceAuditHash, /^[a-f0-9]{64}$/)
+  const event = audit.entries[2]?.event
+  assert.equal(event?.type, 'connector.artifact.candidates_issued')
+  assert.equal((event?.detail as { publication?: string }).publication, 'blocked')
+  assert.equal(((event?.detail as { candidates?: Array<{ candidateId: string }> }).candidates ?? [])[0]?.candidateId, original.candidateId)
+})
+
 test('candidate issuance and terminal review cannot be backdated across the governed lineage', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)

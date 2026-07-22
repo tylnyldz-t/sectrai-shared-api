@@ -284,6 +284,22 @@ hardening: proofs and events remain redacted, terminal output remains
 owner-only and publication-blocked, and no provider, network, GPU, dispatch,
 credential, migration, send, or publication capability is introduced.
 
+## D8 — sealed candidate-issuance event
+
+`issueSyntheticImageCandidates` now freezes the complete redacted issuance
+event before it crosses the public candidate-ledger boundary. Its scopes,
+candidate entries, candidate-set digest, source-run hash, canonical timestamp,
+and `publication: blocked` state are all independent derived data; none retain
+a reference to the governed result or caller-owned candidate copy.
+
+Consequently, a custom candidate-ledger seam that pauses before persistence
+cannot rewrite the event while it is retained, and a caller that changes a
+copied result during that pause cannot switch the issued candidate or replace
+the local preview with a provider URI. The durable ledger still independently
+validates the event and its bound source audit. This remains local synthetic
+integrity hardening only: no provider, network, GPU, dispatch, credential,
+migration, send, or publication capability is introduced.
+
 ## Negative and edge-case guarantees
 
 - Prompt fields accept only the documented four keys. Empty text, a value over
@@ -406,6 +422,11 @@ credential, migration, send, or publication capability is introduced.
   mutable proof cannot swap lineage hashes or deadlines after a decision is
   composed, and a review-ledger seam cannot rewrite the event's blocked
   publication state before its append or receipt re-read.
+- Candidate issuance also seals its generated redacted event before a
+  candidate-ledger await. A custom ledger cannot rewrite its source-run hash,
+  candidate-set digest, candidate fingerprint/deadline entries, timestamp, or
+  blocked publication state, while a caller-owned copied result cannot alter
+  the already-composed issuance event during that wait.
 - `creativeWorkerPlan.dispatch` remains exactly
   `{ performed: false, gate: "LIVE_DISABLED", network: "not-attempted" }`.
   This package does not invoke Creative Worker, ComfyUI, Docker, loopback, a
@@ -431,7 +452,7 @@ credential, migration, send, or publication capability is introduced.
    endpoint, or credentials.
 7. Candidate-set and candidate fingerprints are recomputed from the exact
    redacted shape before issuance or terminal review; terminal helpers seal
-   the candidate, issuance proof, terminal event, and frozen output, while
+   candidate, issuance event/proof, terminal event, and frozen output, while
    canonical review deadlines are re-read from durable issuance and bound into
    terminal proofs.
 8. A governed run has one bound issuance set, and each candidate has one

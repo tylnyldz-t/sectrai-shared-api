@@ -68,6 +68,12 @@ re-read. This remains local synthetic integrity hardening only: no provider,
 network, dispatch, credential, migration, send, or publication capability is
 added.
 
+D8 likewise freezes the complete redacted candidate-issuance event before it
+reaches a candidate ledger. A caller-owned result or custom ledger cannot
+rewrite its source-run binding, candidate set, deadline, or blocked publication
+state across an awaited append. It remains local SVG-only,
+`LIVE_DISABLED`, owner-only, and publication-blocked.
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:

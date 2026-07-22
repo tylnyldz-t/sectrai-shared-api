@@ -764,7 +764,10 @@ export async function issueSyntheticImageCandidates(runResult: ConnectorResult<T
     fingerprint: imageCandidateFingerprint(candidate),
     reviewExpiresAt: candidate.ownerReview.reviewExpiresAt,
   }))
-  const event: ImageCandidateIssuanceEvent = {
+  // This public helper is itself an async host boundary. The event is made
+  // only from copied/derived redacted values, then frozen before a custom
+  // candidate ledger can retain it across its awaited persistence work.
+  const event: ImageCandidateIssuanceEvent = freezeData({
     type: 'connector.artifact.candidates_issued',
     connectorId: IMAGE_TTI_CONNECTOR_ID,
     product: issuanceContext.product,
@@ -782,7 +785,7 @@ export async function issueSyntheticImageCandidates(runResult: ConnectorResult<T
       publication: 'blocked',
       runAuditHash: provenance.auditHash,
     },
-  }
+  })
   const audit = await appendIssuance.call(candidateLedger, event)
   return { issuanceAuditHash: returnedAuditHash(audit, 'IMAGE_CANDIDATE_LEDGER_UNAVAILABLE') }
 }
