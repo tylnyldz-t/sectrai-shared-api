@@ -32,6 +32,8 @@ const COMFY_SDXL_GRAPH_SHAPE = [
 const IMAGE_RUN_CONTEXT_KEYS = ['product', 'workspaceId', 'actor', 'correlationId', 'ownerApproved', 'scopes', 'costCapCents', 'requestedItems', 'now'] as const
 const IMAGE_ISSUANCE_CONTEXT_KEYS = ['product', 'workspaceId', 'actor', 'correlationId', 'now'] as const
 const IMAGE_REVIEW_CONTEXT_KEYS = ['product', 'workspaceId', 'correlationId', 'now'] as const
+const IMAGE_TTI_CONFIG_KEYS = ['liveMode', 'maxCostCapCents', 'maxItems', 'ownerReviewTtlSeconds', 'familySafetyFilter'] as const
+const IMAGE_TTI_ENVIRONMENT_OVERRIDE_KEYS = ['familySafetyFilter'] as const
 
 export type ImageSize = 512 | 1024
 
@@ -159,6 +161,25 @@ export type SyntheticImageTtiConnectorConfig = {
   familySafetyFilter?: FamilySafetyFilter
 }
 
+/**
+ * The public config is a host boundary, not a capability bag. This copied
+ * form prevents a caller from retaining a mutable reference to live-mode or
+ * governance limits after construction.
+ */
+type ClosedSyntheticImageTtiConnectorConfig = {
+  liveMode?: string
+  maxCostCapCents?: number
+  maxItems?: number
+  ownerReviewTtlSeconds?: number
+  familySafetyFilter?: ClosedFamilySafetyFilter
+}
+
+type ClosedFamilySafetyFilter = {
+  id: string
+  target: object
+  assess: (...args: unknown[]) => unknown
+}
+
 function positiveInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
 }
@@ -249,6 +270,64 @@ function ownDataRecord(value: unknown): Record<string, unknown> | null {
   } catch { return null }
 }
 
+/** Return an own data value without falling through to a prototype accessor. */
+function ownDataValue(value: Record<string, unknown>, name: string): { present: boolean; value: unknown } {
+  try {
+    const descriptor = Object.getOwnPropertyDescriptor(value, name)
+    return descriptor && !descriptor.get && !descriptor.set
+      ? { present: true, value: descriptor.value }
+      : { present: false, value: undefined }
+  } catch { return { present: false, value: undefined } }
+}
+
+function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
+  try { return Object.getOwnPropertyNames(value).every((key) => keys.includes(key)) } catch { return false }
+}
+
+/**
+ * A custom policy remains a local, synchronous host seam, but its identity
+ * and callable must both be own data properties. Inherited getters are never
+ * consulted as policy configuration.
+ */
+function closedFamilySafetyFilter(value: unknown): ClosedFamilySafetyFilter | null {
+  const candidate = ownDataRecord(value)
+  if (!candidate) return null
+  const id = ownDataValue(candidate, 'id')
+  const assess = ownDataValue(candidate, 'assess')
+  if (!id.present || !assess.present || typeof id.value !== 'string' || typeof assess.value !== 'function') return null
+  return Object.freeze({ id: id.value, target: candidate, assess: assess.value as (...args: unknown[]) => unknown })
+}
+
+/**
+ * Copy a closed config before it can affect a run. Unknown, hidden, symbol,
+ * accessor, inherited-policy, or non-data configuration fails closed rather
+ * than becoming an accidental credential/endpoint carrier.
+ */
+function closedImageTtiConfig(value: unknown): Readonly<ClosedSyntheticImageTtiConnectorConfig> | null {
+  const config = plainRecord(value)
+  if (!config || !hasOnlyKeys(config, IMAGE_TTI_CONFIG_KEYS)) return null
+  const liveMode = ownDataValue(config, 'liveMode')
+  const maxCostCapCents = ownDataValue(config, 'maxCostCapCents')
+  const maxItems = ownDataValue(config, 'maxItems')
+  const ownerReviewTtlSeconds = ownDataValue(config, 'ownerReviewTtlSeconds')
+  const familySafetyFilter = ownDataValue(config, 'familySafetyFilter')
+  const sealedFilter = familySafetyFilter.present && familySafetyFilter.value !== undefined
+    ? closedFamilySafetyFilter(familySafetyFilter.value)
+    : undefined
+  if ((liveMode.present && liveMode.value !== undefined && typeof liveMode.value !== 'string')
+    || (maxCostCapCents.present && maxCostCapCents.value !== undefined && typeof maxCostCapCents.value !== 'number')
+    || (maxItems.present && maxItems.value !== undefined && typeof maxItems.value !== 'number')
+    || (ownerReviewTtlSeconds.present && ownerReviewTtlSeconds.value !== undefined && typeof ownerReviewTtlSeconds.value !== 'number')
+    || (familySafetyFilter.present && familySafetyFilter.value !== undefined && !sealedFilter)) return null
+  return Object.freeze({
+    ...(liveMode.present ? { liveMode: liveMode.value as string | undefined } : {}),
+    ...(maxCostCapCents.present ? { maxCostCapCents: maxCostCapCents.value as number | undefined } : {}),
+    ...(maxItems.present ? { maxItems: maxItems.value as number | undefined } : {}),
+    ...(ownerReviewTtlSeconds.present ? { ownerReviewTtlSeconds: ownerReviewTtlSeconds.value as number | undefined } : {}),
+    ...(sealedFilter ? { familySafetyFilter: sealedFilter } : {}),
+  })
+}
+
 /**
  * Resolves a callable capability without evaluating an own or prototype
  * accessor. Ledger implementations may use class methods, so own-data-only
@@ -335,14 +414,16 @@ function policyRejectionReason(value: unknown): string {
   return typeof value === 'string' && /^[A-Z][A-Z0-9_]{2,79}$/.test(value) ? value : 'FAMILY_SAFETY_FILTER_REJECTED'
 }
 
-function safetyAssessment(filter: FamilySafetyFilter, input: Readonly<TextToImageInput>): void {
-  const candidate = ownDataRecord(filter)
-  if (!candidate || typeof candidate.id !== 'string' || !FILTER_ID_PATTERN.test(candidate.id) || typeof candidate.assess !== 'function') throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
+function safetyAssessment(filter: ClosedFamilySafetyFilter, input: Readonly<TextToImageInput>): void {
+  if (!FILTER_ID_PATTERN.test(filter.id)) throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
   let assessment: FamilySafetyAssessment
-  try { assessment = candidate.assess(input) as FamilySafetyAssessment } catch { throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_UNAVAILABLE') }
+  try { assessment = filter.assess.call(filter.target, input) as FamilySafetyAssessment } catch { throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_UNAVAILABLE') }
   const result = plainRecord(assessment)
-  if (!result || typeof result.allowed !== 'boolean' || (result.reason !== undefined && typeof result.reason !== 'string')) throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
-  if (!result.allowed) throw new FamilySafetyError(policyRejectionReason(result.reason))
+  if (!result || !hasOnlyKeys(result, ['allowed', 'reason'])) throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
+  const allowed = ownDataValue(result, 'allowed')
+  const reason = ownDataValue(result, 'reason')
+  if (!allowed.present || typeof allowed.value !== 'boolean' || (reason.present && reason.value !== undefined && typeof reason.value !== 'string')) throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
+  if (!allowed.value) throw new FamilySafetyError(policyRejectionReason(reason.value))
 }
 
 /**
@@ -363,6 +444,11 @@ export class BaselineFamilySafetyFilter implements FamilySafetyFilter {
 }
 
 const defaultFamilySafetyFilter = new BaselineFamilySafetyFilter()
+const closedDefaultFamilySafetyFilter = (() => {
+  const filter = closedFamilySafetyFilter(defaultFamilySafetyFilter)
+  if (!filter) throw new Error('IMAGE_DEFAULT_FAMILY_SAFETY_FILTER_INVALID')
+  return filter
+})()
 
 function creativeWorkerPlan(input: Required<TextToImageInput>, promptDigest: string): SyntheticComfySdxlPlan {
   return {
@@ -394,19 +480,25 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
   readonly authKind = 'owner-token' as const
   readonly scopes = [IMAGE_SCOPE] as const
 
-  constructor(private readonly config: SyntheticImageTtiConnectorConfig = {}) {}
+  readonly #config: Readonly<ClosedSyntheticImageTtiConnectorConfig> | null
 
-  private configured(ctx: ConnectorRunContext): { filter: FamilySafetyFilter; ownerReviewTtlSeconds: number } {
-    if ((this.config.liveMode ?? LIVE_DISABLED) !== LIVE_DISABLED) throw new ConnectorUnavailableError('IMAGE_TTI_LIVE_DISABLED')
-    const maxCostCapCents = positiveInteger(this.config.maxCostCapCents)
-    const maxItems = positiveInteger(this.config.maxItems)
-    const reviewTtl = ownerReviewTtlSeconds(this.config.ownerReviewTtlSeconds)
+  constructor(config: SyntheticImageTtiConnectorConfig = {}) {
+    this.#config = closedImageTtiConfig(config)
+  }
+
+  private configured(ctx: ConnectorRunContext): { filter: ClosedFamilySafetyFilter; ownerReviewTtlSeconds: number } {
+    const config = this.#config
+    if (!config) throw new ConnectorUnavailableError('IMAGE_TTI_CONFIGURATION_INVALID')
+    if ((config.liveMode ?? LIVE_DISABLED) !== LIVE_DISABLED) throw new ConnectorUnavailableError('IMAGE_TTI_LIVE_DISABLED')
+    const maxCostCapCents = positiveInteger(config.maxCostCapCents)
+    const maxItems = positiveInteger(config.maxItems)
+    const reviewTtl = ownerReviewTtlSeconds(config.ownerReviewTtlSeconds)
     if (!maxCostCapCents || !maxItems || maxItems > MAX_SYNTHETIC_IMAGE_CANDIDATES) throw new ConnectorUnavailableError('IMAGE_TTI_GOVERNANCE_LIMITS_NOT_CONFIGURED')
     if (!reviewTtl) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_TTL_NOT_CONFIGURED')
     if (!positiveInteger(ctx.costCapCents) || !positiveInteger(ctx.requestedItems)) throw new CostCapError('INVALID_IMAGE_TTI_GOVERNANCE_REQUEST')
     if (ctx.costCapCents > maxCostCapCents) throw new CostCapError()
     if (ctx.requestedItems > maxItems) throw new CostCapError('CONNECTOR_ITEM_CAP_EXCEEDED')
-    return { filter: this.config.familySafetyFilter ?? defaultFamilySafetyFilter, ownerReviewTtlSeconds: reviewTtl }
+    return { filter: config.familySafetyFilter ?? closedDefaultFamilySafetyFilter, ownerReviewTtlSeconds: reviewTtl }
   }
 
   preflight(input: TextToImageInput, ctx: ConnectorRunContext): void {
@@ -750,12 +842,23 @@ export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandida
   }
 }
 
+function imageTtiEnvironmentOverrides(value: unknown): { familySafetyFilter?: FamilySafetyFilter } | null {
+  const overrides = plainRecord(value)
+  if (!overrides || !hasOnlyKeys(overrides, IMAGE_TTI_ENVIRONMENT_OVERRIDE_KEYS)) return null
+  const familySafetyFilter = ownDataValue(overrides, 'familySafetyFilter')
+  return familySafetyFilter.present ? { familySafetyFilter: familySafetyFilter.value as FamilySafetyFilter } : {}
+}
+
 export function syntheticImageTtiConnectorFromEnvironment(environment: NodeJS.ProcessEnv = process.env, overrides: Pick<SyntheticImageTtiConnectorConfig, 'familySafetyFilter'> = {}): SyntheticImageTtiConnector {
+  const safeOverrides = imageTtiEnvironmentOverrides(overrides)
+  // Do not spread a caller-owned override: a hidden credential field or an
+  // accessor must not be read while composing the synthetic configuration.
+  if (!safeOverrides) return new SyntheticImageTtiConnector(null as never)
   return new SyntheticImageTtiConnector({
     liveMode: environment.GCL_IMAGE_LIVE_MODE,
     maxCostCapCents: environmentPositiveInteger(environment.GCL_IMAGE_MAX_COST_CENTS),
     maxItems: environmentPositiveInteger(environment.GCL_IMAGE_MAX_ITEMS),
     ownerReviewTtlSeconds: environmentPositiveInteger(environment.GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS),
-    ...overrides,
+    ...(Object.hasOwn(safeOverrides, 'familySafetyFilter') ? { familySafetyFilter: safeOverrides.familySafetyFilter } : {}),
   })
 }
