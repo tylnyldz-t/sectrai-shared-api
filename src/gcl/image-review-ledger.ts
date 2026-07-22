@@ -123,6 +123,13 @@ function canonicalTimestamp(value: unknown): value is string {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value
 }
 
+/** The clone contains only validated plain data, so it can be frozen safely. */
+function freezeData<T>(value: T): T {
+  if (!value || typeof value !== 'object') return value
+  for (const child of Object.values(value)) freezeData(child)
+  return Object.freeze(value)
+}
+
 /**
  * Keep an accepted terminal decision private to the ledger before an async
  * transaction or audit seam yields. This closes the mutable-object gap between
@@ -133,7 +140,7 @@ function sealedDecisionEvent(value: unknown): ImageOwnerReviewDecisionEvent {
   try {
     const event = structuredClone(value)
     assertImageOwnerReviewEvent(event)
-    return event
+    return freezeData(event)
   } catch (error) {
     if (error instanceof ConnectorInputError) throw error
     throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')

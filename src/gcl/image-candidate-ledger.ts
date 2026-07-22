@@ -136,6 +136,13 @@ function canonicalTimestamp(value: unknown): value is string {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value
 }
 
+/** The clone contains only validated plain data, so it can be frozen safely. */
+function freezeData<T>(value: T): T {
+  if (!value || typeof value !== 'object') return value
+  for (const child of Object.values(value)) freezeData(child)
+  return Object.freeze(value)
+}
+
 /**
  * Seal an accepted write envelope before an async transaction or test seam
  * can yield. The original caller object remains mutable, so retaining it
@@ -147,7 +154,7 @@ function sealedIssuanceEvent(value: unknown): ImageCandidateIssuanceEvent {
   try {
     const event = structuredClone(value)
     assertImageCandidateIssuanceEvent(event)
-    return event
+    return freezeData(event)
   } catch (error) {
     if (error instanceof ConnectorInputError) throw error
     throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
@@ -164,7 +171,7 @@ function sealedCandidate(value: unknown): SyntheticImageCandidate {
     assertSyntheticImageCandidate(value)
     const candidate = structuredClone(value)
     assertSyntheticImageCandidate(candidate)
-    return candidate
+    return freezeData(candidate)
   } catch (error) {
     if (error instanceof ConnectorInputError) throw error
     throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')

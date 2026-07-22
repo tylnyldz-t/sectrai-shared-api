@@ -621,6 +621,8 @@ test('D5 seals direct ledger snapshots across async seams and rejects accessor c
   const delayedIssuanceAudit = {
     entries: audit.entries,
     append: async (event: Parameters<InMemoryHashChainAuditLog['append']>[0]) => {
+      assert.equal(Object.isFrozen(event), true)
+      assert.equal(Object.isFrozen(event.detail), true)
       await issuanceGate
       return audit.append(event)
     },
@@ -658,6 +660,8 @@ test('D5 seals direct ledger snapshots across async seams and rejects accessor c
   const delayedDecisionAudit = {
     entries: audit.entries,
     append: async (event: Parameters<InMemoryHashChainAuditLog['append']>[0]) => {
+      assert.equal(Object.isFrozen(event), true)
+      assert.equal(Object.isFrozen(event.detail), true)
       await decisionGate
       return audit.append(event)
     },

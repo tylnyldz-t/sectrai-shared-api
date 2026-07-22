@@ -231,8 +231,8 @@ capability is added.
 
 ## D5 — sealed ledger write and lookup snapshots
 
-Candidate issuance and terminal-review events are copied into private,
-data-only snapshots immediately after their strict validation. Both durable
+Candidate issuance and terminal-review events are copied and deep-frozen into
+private, data-only snapshots immediately after their strict validation. Both durable
 and test-only ledger implementations use only that copy through their later
 async transaction/audit append and receipt write. Therefore, changing the
 caller-owned event object while an audit append or database transaction is
