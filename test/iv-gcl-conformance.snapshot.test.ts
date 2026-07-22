@@ -234,8 +234,7 @@ function assertNoProcessEnvironmentEscape(code: string, name: string): void {
  * fail-closed rule for every value reference while avoiding a false runtime
  * capability finding for a parsed type annotation.
  */
-function typeOnlyFunctionReferencePositions(code: string): ReadonlySet<number> {
-  const sourceFile = ts.createSourceFile('gcl-audit.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+function typeOnlyFunctionReferencePositions(sourceFile: ts.SourceFile): ReadonlySet<number> {
   const positions = new Set<number>()
   const visit = (node: ts.Node): void => {
     if (ts.isTypeReferenceNode(node) && ts.isIdentifier(node.typeName) && node.typeName.text === 'Function') {
@@ -253,12 +252,7 @@ function typeOnlyFunctionReferencePositions(code: string): ReadonlySet<number> {
  * obtains the Function constructor nor invokes a function. Every other
  * value-position reference remains a prohibited evaluation capability.
  */
-function safeFunctionPrototypeComparisonPositions(code: string): ReadonlySet<number> {
-  // `assertNoRuntimeEscape` first removes comments so prohibited capability
-  // words in comments cannot trigger a finding. That lexical transform can
-  // intentionally leave a URL-shaped string fragment incomplete, so this
-  // local structural classifier must be tolerant of parser diagnostics.
-  const sourceFile = ts.createSourceFile('gcl-audit.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+function safeFunctionPrototypeComparisonPositions(sourceFile: ts.SourceFile): ReadonlySet<number> {
   const positions = new Set<number>()
   const visit = (node: ts.Node): void => {
     if (
@@ -277,20 +271,24 @@ function safeFunctionPrototypeComparisonPositions(code: string): ReadonlySet<num
   return positions
 }
 
-function assertNoFunctionCapability(code: string, name: string): void {
-  const typeOnlyPositions = typeOnlyFunctionReferencePositions(code)
-  const safePrototypeComparisonPositions = safeFunctionPrototypeComparisonPositions(code)
-  for (const match of code.matchAll(/\bFunction\b/g)) {
-    const index = match.index
-    if (index === undefined || typeOnlyPositions.has(index) || safePrototypeComparisonPositions.has(index)) continue
-    assert.fail(`${name} must not retain a Function runtime capability`)
+function assertNoFunctionCapability(source: string, name: string): void {
+  const sourceFile = parsedTypeScriptSource(source)
+  const typeOnlyPositions = typeOnlyFunctionReferencePositions(sourceFile)
+  const safePrototypeComparisonPositions = safeFunctionPrototypeComparisonPositions(sourceFile)
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && node.text === 'Function') {
+      const position = node.getStart(sourceFile)
+      if (!typeOnlyPositions.has(position) && !safePrototypeComparisonPositions.has(position)) assert.fail(`${name} must not retain a Function runtime capability`)
+    }
+    ts.forEachChild(node, visit)
   }
+  visit(sourceFile)
 }
 
 function assertNoRuntimeEscape(source: string, name: string): void {
   const code = sourceCode(source)
   assertNoProcessEnvironmentEscape(code, name)
-  assertNoFunctionCapability(code, name)
+  assertNoFunctionCapability(source, name)
   assert.doesNotMatch(code, /\b(?:require|createRequire|eval)\b|\bimport\s*(?:\?\.)?\s*\(|\bimport\s*\.\s*meta\b|\bmodule\s*(?:\.|\?\.)\s*(?:require|constructor\s*(?:\.|\?\.)\s*_load)\b|\b(?:process|module)\s*(?:\.|\?\.)\s*(?:getBuiltinModule|binding|dlopen|mainModule|constructor)\b/, `${name} must not dynamically load or evaluate a runtime module`)
   assert.doesNotMatch(code, /\b(?:globalThis|global|window|Bun|Deno)\b|\bself\s*(?:\?\.|\.)|\bself\s*\[/, `${name} must not access a global runtime capability`)
   assert.doesNotMatch(code, /\b(?:fetch|XMLHttpRequest|WebSocket|EventSource|WebTransport|navigator|sendBeacon|axios|undici|node-fetch)\b/, `${name} must not retain an egress capability by direct or aliased access`)
