@@ -423,6 +423,7 @@ export async function requireTranslationArtifactLifecycleAudit(transaction: Pris
     || created.index <= succeededIndex
     || created.entry.event.type !== 'translation.artifact.created'
     || created.entry.event.actor !== artifact.createdBy
+    || artifact.createdAt !== created.entry.event.occurredAt
     || !sameScopes(created.entry.event.scopes, succeeded.event.scopes)
     || created.entry.event.costCapCents !== succeeded.event.costCapCents
     || created.entry.event.requestedItems !== succeeded.event.requestedItems

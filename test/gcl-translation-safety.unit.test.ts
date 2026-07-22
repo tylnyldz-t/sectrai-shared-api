@@ -323,6 +323,7 @@ test('durable audit refuses an orphan successful run before metadata storage', a
     connectorId: 'translation-text-synthetic',
     proposal: runResult().artifact!,
     runAuditHash: succeededHash,
+    now: now(),
     audit: { scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString() },
   }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
   assert.equal(artifactCreates, 0)
@@ -414,6 +415,7 @@ test('audit rejects invented checker bindings and rolls back a second artifact b
     connectorId: 'translation-text-synthetic',
     proposal,
     runAuditHash: succeededAudit.hash,
+    now: now(),
     audit: { scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString() },
   }
   await artifacts.proposeAndAudit(input)
@@ -526,6 +528,7 @@ test('durable proposals bind the maker, request limits, metadata envelope, and u
     connectorId: 'translation-text-synthetic',
     proposal,
     runAuditHash: succeededHash,
+    now: now(),
     audit: { scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString() },
   }
 

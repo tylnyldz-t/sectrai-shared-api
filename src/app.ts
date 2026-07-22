@@ -15,7 +15,7 @@ type ConnectorRunner = { run(request: RunConnectorRequest): Promise<ConnectorRes
 type ArtifactAuditContext = Pick<ConnectorAuditEvent, 'scopes' | 'costCapCents' | 'requestedItems' | 'occurredAt'>
 type TranslationArtifactStore = {
   get(product: string, workspaceId: string, id: string): Promise<TranslationArtifactRecord | null>
-  proposeAndAudit(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: NonNullable<ConnectorResult['artifact']>; runAuditHash: string; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord; auditHash: string }>
+  proposeAndAudit(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: NonNullable<ConnectorResult['artifact']>; runAuditHash: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord; auditHash: string }>
   decideAndAudit(input: { product: string; workspaceId: string; id: string; actor: string; decision: 'approved' | 'rejected'; reviewDigest: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord | null; auditHash?: string }>
 }
 type AppOptions = { prisma?: PrismaClient; now?: () => Date; gclRunner?: ConnectorRunner; gclOwnerToken?: string; gclAuditLog?: AuditLog; translationArtifactStore?: TranslationArtifactStore }
@@ -150,10 +150,11 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
       requestedItems: input.requestedItems,
     })
     if (!result.artifact || !result.provenance.auditHash) return response.json({ result })
+    const creationNow = now()
     const artifactAuditContext: ArtifactAuditContext = {
-      scopes: [...input.scopes].sort(), costCapCents: input.costCapCents, requestedItems: input.requestedItems, occurredAt: now().toISOString(),
+      scopes: [...input.scopes].sort(), costCapCents: input.costCapCents, requestedItems: input.requestedItems, occurredAt: creationNow.toISOString(),
     }
-    const persisted = await artifacts.proposeAndAudit({ product: scope.product, workspaceId: scope.workspaceId, actor, connectorId, proposal: result.artifact, runAuditHash: result.provenance.auditHash, audit: artifactAuditContext })
+    const persisted = await artifacts.proposeAndAudit({ product: scope.product, workspaceId: scope.workspaceId, actor, connectorId, proposal: result.artifact, runAuditHash: result.provenance.auditHash, now: creationNow, audit: artifactAuditContext })
     return response.json({ result, artifact: { ...persisted.artifact, auditHash: persisted.auditHash } })
   }))
 
