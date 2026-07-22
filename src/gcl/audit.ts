@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto'
+import { createHash, Hash } from 'node:crypto'
 import { types as nodeTypes } from 'node:util'
 import { AuditChainError, AuditEventError, AuditReceiptError } from './errors.js'
 import { type Prisma, type PrismaClient } from '@prisma/client'
@@ -24,6 +24,16 @@ const MAX_AUDIT_JSON_KEYS = 48
 const MAX_AUDIT_JSON_ARRAY_ITEMS = 48
 const MAX_AUDIT_JSON_STRING_LENGTH = 4096
 
+/**
+ * D18 captures Node's hash operations while this trusted module initializes.
+ * A later mutation of the public Hash prototype must not alter audit-chain
+ * derivation or turn an integrity check into a collaborator-controlled hook.
+ */
+const intrinsicCreateHash = createHash
+const intrinsicHashUpdate = Hash.prototype.update
+const intrinsicHashDigest = Hash.prototype.digest
+const intrinsicReflectApply = Reflect.apply
+
 type AuditRecordValue = {
   event: ConnectorAuditEvent
   previousHash: string | null
@@ -38,8 +48,14 @@ function normalize(value: unknown): unknown {
   return value
 }
 
+function sha256(value: string): string {
+  const hash = intrinsicCreateHash('sha256')
+  const updated = intrinsicReflectApply(intrinsicHashUpdate, hash, [value, 'utf8'])
+  return intrinsicReflectApply(intrinsicHashDigest, updated, ['hex']) as string
+}
+
 export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string | null): string {
-  return createHash('sha256').update(JSON.stringify(normalize({ event, previousHash }))).digest('hex')
+  return sha256(JSON.stringify(normalize({ event, previousHash })))
 }
 
 /**

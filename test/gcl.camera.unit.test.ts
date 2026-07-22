@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { Hash } from 'node:crypto'
 import test from 'node:test'
 import { InMemoryHashChainAuditLog, PrismaHashChainAuditLog, appendVerifiedAuditEvent, hashAuditEvent, validateAuditChainHead } from '../src/gcl/audit.js'
 import { AuditChainError, AuditEventError, AuditReceiptError, CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
@@ -1309,6 +1310,36 @@ test('D17 binds an audit receipt to its sealed event and pins the governed reque
   assert.equal(reviewSetup.audit.entries.length, 2)
 })
 
+test('D18 captures Node SHA-256 operations before late Hash prototype hooks can affect fixture, review, or audit integrity', async () => {
+  const originalHashUpdate = Hash.prototype.update
+  const originalHashDigest = Hash.prototype.digest
+  let hookCalls = 0
+  const hostileHashHook = () => { hookCalls += 1; throw new Error('LATE_HASH_HOOK_MUST_NOT_RUN') }
+  let result: ConnectorResult<CameraObservationResult> | undefined
+  let reviewed: Awaited<ReturnType<typeof independentlyReviewCameraObservation>> | undefined
+
+  try {
+    Hash.prototype.update = hostileHashHook as typeof Hash.prototype.update
+    Hash.prototype.digest = hostileHashHook as typeof Hash.prototype.digest
+
+    const setup = runnerFor()
+    result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
+    reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
+    assert.equal((setup.quota as TestQuota).requests.length, 1)
+    assert.deepEqual(setup.audit.entries.map((entry) => entry.event.type), [
+      'connector.run.requested', 'connector.run.succeeded', 'connector.camera.owner_reviewed',
+    ])
+  } finally {
+    Hash.prototype.update = originalHashUpdate
+    Hash.prototype.digest = originalHashDigest
+  }
+
+  assert.equal(hookCalls, 0)
+  assert.equal(result?.data.reviewPacket.integrityDigest.length, 64)
+  assert.equal(reviewed?.decision, 'approved')
+  assert.equal(reviewed?.handoff.sent, false)
+})
+
 test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
   const setup = runnerFor()
   const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
@@ -1371,8 +1402,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14\/D17 audit append receipts and link witnesses, D15 audit events, and D16 durable audit heads/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14\/D17.*D15.*D16/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14\/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, and D18 SHA-256 operations/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14\/D17.*D15.*D16.*D18/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 
