@@ -1,4 +1,6 @@
+import { types as nodeTypes } from 'node:util'
 import { CostCapError, GclError, MakerCheckerError, OwnerGateError, ScopeError, ConnectorUnavailableError } from './errors.js'
+import { ConnectorInputError } from './errors.js'
 import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export type RunConnectorRequest = {
@@ -16,6 +18,35 @@ export type RunConnectorRequest = {
 }
 
 function isSafePositiveInteger(value: number): boolean { return Number.isSafeInteger(value) && value > 0 }
+
+/**
+ * D11 freezes one trusted local timestamp for an entire governed run. The
+ * runner's clock is internal infrastructure, never a provider or network time
+ * source, but it still must not be a Proxy, a forged date, or a mutable
+ * multi-call input that can change between preflight, quota, and audit steps.
+ */
+function governedRunTimeSnapshot(clock: unknown): Date {
+  if (typeof clock !== 'function' || nodeTypes.isProxy(clock)) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
+  let candidate: unknown
+  try {
+    candidate = clock()
+  } catch {
+    throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
+  }
+  if (!nodeTypes.isDate(candidate) || nodeTypes.isProxy(candidate)) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
+  try {
+    const milliseconds = Date.prototype.getTime.call(candidate)
+    if (!Number.isFinite(milliseconds)) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
+    return new Date(milliseconds)
+  } catch (error) {
+    if (error instanceof ConnectorInputError) throw error
+    throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
+  }
+}
+
+function snapshotClock(snapshot: Date): () => Date {
+  return () => new Date(Date.prototype.getTime.call(snapshot))
+}
 
 function auditFailureDetail(error: unknown, stage: 'admission' | 'execution'): Record<string, unknown> {
   return {
@@ -50,12 +81,12 @@ export class GovernedConnectorRunner {
       type, connectorId, product: context.product, workspaceId: context.workspaceId,
       requestedBy: context.requestedBy, checkedBy: context.checkedBy, correlationId: context.correlationId,
       scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,
-      occurredAt: occurredAt.toISOString(), detail,
+      occurredAt: Date.prototype.toISOString.call(occurredAt), detail,
     }
   }
 
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
-    const occurredAt = this.now()
+    const occurredAt = governedRunTimeSnapshot(this.now)
     const context: ConnectorRunContext = {
       product: request.product,
       workspaceId: request.workspaceId,
@@ -66,7 +97,7 @@ export class GovernedConnectorRunner {
       scopes: [...new Set(request.scopes)].sort(),
       costCapCents: request.costCapCents,
       requestedItems: request.requestedItems,
-      now: this.now,
+      now: snapshotClock(occurredAt),
     }
     let connector: Connector
     try {
@@ -90,12 +121,12 @@ export class GovernedConnectorRunner {
 
     const requestedAudit = await this.auditLog.append(this.event('connector.run.requested', connector.id, context, occurredAt, {}))
     try {
-      await this.quota.consume({ ...context, connectorId: connector.id, occurredAt })
+      await this.quota.consume({ ...context, connectorId: connector.id, occurredAt: snapshotClock(occurredAt)() })
       const result = await connector.run(request.input, context)
-      const succeededAudit = await this.auditLog.append(this.event('connector.run.succeeded', connector.id, context, this.now(), { requestedAuditHash: requestedAudit.hash }))
+      const succeededAudit = await this.auditLog.append(this.event('connector.run.succeeded', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash }))
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
     } catch (error) {
-      await this.auditLog.append(this.event('connector.run.failed', connector.id, context, this.now(), { requestedAuditHash: requestedAudit.hash, ...auditFailureDetail(error, 'execution') }))
+      await this.auditLog.append(this.event('connector.run.failed', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash, ...auditFailureDetail(error, 'execution') }))
       throw error
     }
   }
