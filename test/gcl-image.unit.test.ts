@@ -156,6 +156,35 @@ test('an injected family-safety hook is mandatory before audit or quota reservat
   assert.equal(quota.requests.length, 0)
 })
 
+test('D3 keeps the baseline family gate ahead of a permissive custom policy', async () => {
+  let policyCalls = 0
+  const connector = new SyntheticImageTtiConnector({
+    liveMode: LIVE_DISABLED,
+    maxCostCapCents: 20,
+    maxItems: 2,
+    ownerReviewTtlSeconds: 300,
+    familySafetyFilter: {
+      id: 'narrowing-policy-d3',
+      assess: () => { policyCalls += 1; return { allowed: true } },
+    },
+  })
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'An explicit adult scene' })), FamilySafetyError)
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'Çocuklara yönelik şiddet sahnesi' })), FamilySafetyError)
+  assert.equal(policyCalls, 0)
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+
+  const safeResult = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
+  assert.equal(policyCalls, 2)
+  assert.equal(safeResult.data.candidates[0]?.safety.filterId, 'narrowing-policy-d3')
+  assert.equal(audit.entries.length, 2)
+  assert.equal(quota.requests.length, 1)
+})
+
 test('malformed safety hooks and free-form policy reasons fail closed without leaking text into audit', async () => {
   const privateText = 'PRIVATE-OWNER-PROMPT-ONLY'
   const invalidFilter = new SyntheticImageTtiConnector({

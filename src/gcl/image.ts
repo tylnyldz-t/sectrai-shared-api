@@ -439,6 +439,19 @@ function safetyAssessment(filter: ClosedFamilySafetyFilter, input: Readonly<Text
 }
 
 /**
+ * The local baseline is an irreducible synthetic safety gate. A host policy
+ * may only narrow that decision; it must never replace the baseline and
+ * approve input that the baseline already rejected. Running the baseline
+ * first also avoids handing a known-unsafe prompt to an optional host seam.
+ */
+function familySafetyAssessment(policy: ClosedFamilySafetyFilter | undefined, input: Readonly<TextToImageInput>): string {
+  safetyAssessment(closedDefaultFamilySafetyFilter, input)
+  if (!policy) return closedDefaultFamilySafetyFilter.id
+  safetyAssessment(policy, input)
+  return policy.id
+}
+
+/**
  * Minimal local hook used only by the synthetic adapter. It rejects obviously
  * adult, explicit, graphic, or weapon-focused prompts, but is not a substitute
  * for an owner-approved production moderation policy.
@@ -501,7 +514,7 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
     this.#config = closedImageTtiConfig(config)
   }
 
-  private configured(ctx: ConnectorRunContext): { filter: ClosedFamilySafetyFilter; ownerReviewTtlSeconds: number } {
+  private configured(ctx: ConnectorRunContext): { policy: ClosedFamilySafetyFilter | undefined; ownerReviewTtlSeconds: number } {
     const config = this.#config
     if (!config) throw new ConnectorUnavailableError('IMAGE_TTI_CONFIGURATION_INVALID')
     if ((config.liveMode ?? LIVE_DISABLED) !== LIVE_DISABLED) throw new ConnectorUnavailableError('IMAGE_TTI_LIVE_DISABLED')
@@ -513,21 +526,21 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
     if (!positiveInteger(ctx.costCapCents) || !positiveInteger(ctx.requestedItems)) throw new CostCapError('INVALID_IMAGE_TTI_GOVERNANCE_REQUEST')
     if (ctx.costCapCents > maxCostCapCents) throw new CostCapError()
     if (ctx.requestedItems > maxItems) throw new CostCapError('CONNECTOR_ITEM_CAP_EXCEEDED')
-    return { filter: config.familySafetyFilter ?? closedDefaultFamilySafetyFilter, ownerReviewTtlSeconds: reviewTtl }
+    return { policy: config.familySafetyFilter, ownerReviewTtlSeconds: reviewTtl }
   }
 
   preflight(input: TextToImageInput, ctx: ConnectorRunContext): void {
     const context = imageRunContext(ctx)
-    const { filter } = this.configured(context)
+    const { policy } = this.configured(context)
     currentDate(context.now, 'INVALID_IMAGE_TTI_CONTEXT')
-    safetyAssessment(filter, imageInput(input))
+    familySafetyAssessment(policy, imageInput(input))
   }
 
   async run(input: TextToImageInput, ctx: ConnectorRunContext): Promise<ConnectorResult<TextToImageData>> {
     const context = imageRunContext(ctx)
-    const { filter, ownerReviewTtlSeconds: reviewTtl } = this.configured(context)
+    const { policy, ownerReviewTtlSeconds: reviewTtl } = this.configured(context)
     const normalized = imageInput(input)
-    safetyAssessment(filter, normalized)
+    const filterId = familySafetyAssessment(policy, normalized)
     const generatedDate = currentDate(context.now, 'INVALID_IMAGE_TTI_CONTEXT')
     const generatedAt = generatedDate.toISOString()
     const expiresAt = reviewExpiresAt(generatedDate, reviewTtl, 'INVALID_IMAGE_TTI_CONTEXT')
@@ -548,7 +561,7 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
         mediaType: 'image/svg+xml',
         previewDataUri: previewDataUri(id, normalized.width, normalized.height),
         syntheticUri: `synthetic://gcl/${this.id}/${id}`,
-        safety: Object.freeze({ filterId: filter.id, classification: 'family-safe' }),
+        safety: Object.freeze({ filterId, classification: 'family-safe' }),
         creativeWorkerPlan: plan,
         ownerReview: Object.freeze({ status: 'pending', visibility: 'owner-only', publication: 'blocked', required: true, reviewExpiresAt: expiresAt }),
       })
