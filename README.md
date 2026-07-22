@@ -20,7 +20,10 @@ system records. The runner accepts only a closed owner-approved request
 envelope (including no hidden own fields), validates its synthetic
 result/provenance and an ordinary copied injected clock, and records only a
 fixed failure code after reservation—never an adapter error message. The
-ledgers reuse existing Records and add no migration. See
+connector snapshots only its documented configuration fields at construction:
+hidden credential/endpoint fields, accessors, malformed policy seams, and
+post-construction caller-object changes fail closed before preflight, audit, or
+quota. The ledgers reuse existing Records and add no migration. See
 [the GM3 contract](docs/GM3_IMAGE_TTI_CONTRACT.md).
 
 ## Record contract

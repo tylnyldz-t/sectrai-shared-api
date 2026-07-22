@@ -146,6 +146,26 @@ breaking issuance proof. A single run is also capped at 32 candidates, exactly
 the maximum receipt set the issuance ledger accepts; valid governed output is
 therefore always issuable.
 
+## D1 — closed configuration and policy boundary
+
+`SyntheticImageTtiConnector` snapshots its configuration at construction into a
+runtime-private, immutable copy. Only these own data fields are accepted:
+`liveMode`, `maxCostCapCents`, `maxItems`, `ownerReviewTtlSeconds`, and the
+optional `familySafetyFilter`. Any extra field—including a non-enumerable
+provider credential or endpoint—symbol, accessor, non-data value, or malformed
+policy causes `IMAGE_TTI_CONFIGURATION_INVALID` before preflight, audit, quota,
+SVG creation, or review work. Later changes to the caller's configuration object
+cannot alter a constructed connector's live mode or governance limits.
+
+The optional policy is an explicitly local, synchronous host seam. Its `id` and
+`assess` callable must be own data properties; inherited getters and inherited
+assessment methods are not consulted. A policy result must have its own boolean
+`allowed` field and may have only an own string `reason`; inherited approval or
+extra result fields fail as `IMAGE_FAMILY_SAFETY_FILTER_INVALID`. Environment
+construction does not spread caller overrides, so an accessor-bearing override
+is also closed without being read. This is structural hardening, not a new
+provider or moderation service.
+
 This contract does not authorize a real provider, a local GPU worker, a model
 installation, a migration, or public publishing. Each remains a separate owner
 decision and must be implemented behind its own bounded approval path.
@@ -166,9 +186,14 @@ decision and must be implemented behind its own bounded approval path.
   text—never enters the chain.
 - The baseline local family filter tokenizes Unicode text, including Turkish
   terms such as `şiddet`, while avoiding substring false positives such as
-  `gunmetal`. An injected filter must have a bounded identifier and may return
-  only a bounded uppercase reason code; untrusted free-form reasons are
-  replaced with `FAMILY_SAFETY_FILTER_REJECTED`.
+  `gunmetal`. An injected filter must have own data `id`/`assess` properties,
+  a bounded identifier, and may return only an own boolean `allowed` plus a
+  bounded uppercase reason code; inherited approval and untrusted free-form
+  reasons are rejected or replaced with `FAMILY_SAFETY_FILTER_REJECTED`.
+- Connector configuration is an exact, runtime-private snapshot. Hidden
+  credential/endpoint fields, symbols, accessors, inherited policy methods,
+  malformed environment overrides, and post-construction mutation attempts
+  cannot reach preflight, audit, quota, candidate creation, or a provider path.
 - The review audit records only candidate IDs, maker/checker identities,
   controlled decision fields, blocked publication state, and SHA-256 lineage
   hashes. It never records the prompt, negative prompt, preview bytes,
@@ -243,3 +268,29 @@ decision and must be implemented behind its own bounded approval path.
   `{ performed: false, gate: "LIVE_DISABLED", network: "not-attempted" }`.
   This package does not invoke Creative Worker, ComfyUI, Docker, loopback, a
   GPU, an HTTP client, or an external provider.
+
+## ADOS boundary checklist (10 rules)
+
+1. Product/workspace isolation is retained; no cross-product runtime import or
+   cross-database query is introduced.
+2. `LIVE_DISABLED` remains the only accepted mode; there is no provider key,
+   endpoint, SDK, HTTP client, Docker client, loopback client, or outbound call.
+3. Exact owner approval, bounded identity, a closed configuration snapshot,
+   and a canonical owner checker default to deny.
+4. The exact `image:generate` scope, positive cost cap/item count, connector
+   limits, and daily quota gate execution before the adapter runs.
+5. Prompt and policy input are untrusted data only, never instructions;
+   malformed/accessor/inherited shapes and family-unsafe content are rejected.
+6. Candidates, receipts, and audit events retain only blocked metadata,
+   digests, and provenance—never prompt text, preview bytes, provider output,
+   endpoint, or credentials.
+7. Candidate-set and candidate fingerprints are recomputed from the exact
+   redacted shape before issuance or terminal review.
+8. A governed run has one bound issuance set, and each candidate has one
+   replay-protected terminal outcome in the SHA-256 audit lineage.
+9. Canonical monotonic timestamps, expiry, full scope binding, and
+   maker-checker separation prevent stale, self-approved, cross-scope, or
+   backdated decisions.
+10. Durable issuance/review writes share an audit transaction; no migration,
+    publication, dispatch, send, live provider, GPU activation, or production
+    enablement is authorized by this synthetic contract or its tests.

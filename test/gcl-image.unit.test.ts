@@ -509,8 +509,58 @@ test('accessor-shaped input and family-safety hooks fail closed without executin
   const filter = { assess: () => ({ allowed: true }) }
   Object.defineProperty(filter, 'id', { enumerable: true, get: () => { filterGetterRead = true; return 'should-not-be-read' } })
   const connector = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300, familySafetyFilter: filter as never })
-  await assert.rejects(() => connector.run({ prompt: 'A child-friendly solar system poster' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_FAMILY_SAFETY_FILTER_INVALID')
+  await assert.rejects(() => connector.run({ prompt: 'A child-friendly solar system poster' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_CONFIGURATION_INVALID')
   assert.equal(filterGetterRead, false)
+})
+
+test('image configuration is an immutable closed boundary that rejects hidden credentials before preflight', async () => {
+  const privateValue = 'PRIVATE-IMAGE-PROVIDER-CREDENTIAL'
+  const hiddenConfig = { liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300 } as Record<string, unknown>
+  Object.defineProperty(hiddenConfig, 'providerCredential', { enumerable: false, value: privateValue })
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([new SyntheticImageTtiConnector(hiddenConfig as never)]), audit, quota, now)
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_CONFIGURATION_INVALID')
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+  assert.equal(JSON.stringify(audit.entries).includes(privateValue), false)
+
+  let getterRead = false
+  const accessorConfig = { liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300 }
+  Object.defineProperty(accessorConfig, 'providerEndpoint', { enumerable: true, get: () => { getterRead = true; return 'https://must-not-be-read.example' } })
+  await assert.rejects(() => new SyntheticImageTtiConnector(accessorConfig as never).run({ prompt: 'A child-friendly solar system poster' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_CONFIGURATION_INVALID')
+  assert.equal(getterRead, false)
+
+  const mutableConfig: { liveMode: string; maxCostCapCents: number; maxItems: number; ownerReviewTtlSeconds: number } = { liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300 }
+  const snapshotConnector = new SyntheticImageTtiConnector(mutableConfig)
+  mutableConfig.liveMode = 'LIVE_ENABLED'
+  mutableConfig.maxCostCapCents = 1
+  const result = await snapshotConnector.run({ prompt: 'A child-friendly solar system poster' }, context)
+  assert.equal(result.data.mode, LIVE_DISABLED)
+})
+
+test('family-safety policy and assessment shapes cannot inherit approval or read prototype accessors', async () => {
+  let inheritedGetterRead = false
+  const inheritedPolicy = Object.create({}) as Record<string, unknown>
+  Object.defineProperty(inheritedPolicy, 'id', { enumerable: true, value: 'inherited-policy' })
+  Object.defineProperty(Object.getPrototypeOf(inheritedPolicy), 'assess', { enumerable: true, get: () => { inheritedGetterRead = true; return () => ({ allowed: true }) } })
+  const inheritedConnector = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300, familySafetyFilter: inheritedPolicy as never })
+  await assert.rejects(() => inheritedConnector.run({ prompt: 'A child-friendly solar system poster' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_CONFIGURATION_INVALID')
+  assert.equal(inheritedGetterRead, false)
+
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const inheritedAssessment = new SyntheticImageTtiConnector({
+    liveMode: LIVE_DISABLED,
+    maxCostCapCents: 20,
+    maxItems: 2,
+    ownerReviewTtlSeconds: 300,
+    familySafetyFilter: { id: 'inherited-assessment', assess: () => Object.create({ allowed: true }) },
+  })
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([inheritedAssessment]), audit, quota, now)
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_FAMILY_SAFETY_FILTER_INVALID')
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
 })
 
 test('direct image contexts and ledger capability boundaries reject accessors without invoking them', async () => {
@@ -975,6 +1025,13 @@ test('environment construction has no credential fields and accepts only explici
 
   const invalidTtl = syntheticImageTtiConnectorFromEnvironment({ GCL_IMAGE_LIVE_MODE: LIVE_DISABLED, GCL_IMAGE_MAX_COST_CENTS: '20', GCL_IMAGE_MAX_ITEMS: '2', GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS: '59' })
   await assert.rejects(() => invalidTtl.run({ prompt: 'A child-friendly solar system poster' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_TTL_NOT_CONFIGURED')
+
+  let overrideGetterRead = false
+  const unsafeOverrides = {}
+  Object.defineProperty(unsafeOverrides, 'familySafetyFilter', { enumerable: true, get: () => { overrideGetterRead = true; return { id: 'must-not-read', assess: () => ({ allowed: true }) } } })
+  const unsafeOverride = syntheticImageTtiConnectorFromEnvironment({ GCL_IMAGE_LIVE_MODE: LIVE_DISABLED, GCL_IMAGE_MAX_COST_CENTS: '20', GCL_IMAGE_MAX_ITEMS: '2', GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS: '300' }, unsafeOverrides)
+  await assert.rejects(() => unsafeOverride.run({ prompt: 'A child-friendly solar system poster' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_CONFIGURATION_INVALID')
+  assert.equal(overrideGetterRead, false)
 })
 
 test('direct connector use also rejects malformed context and unexpected input fields', async () => {
