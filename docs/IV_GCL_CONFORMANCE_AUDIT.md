@@ -1319,3 +1319,98 @@ hidden; no migration; proposal-only/no-action output; no JARVIS/JNC start; and
 synthetic evidence is never deployment or live-enable authority. D16 loaded no
 credential, contacted no provider or network, accessed no device or production
 database, sent nothing, and made no `main` or production write.
+
+## D17 — direct immutable successor package
+
+D17 pins exactly the direct committed child of every D16 snapshot: RA OCR
+`3ff9d1d`, RA image `2e021b3`, RA 3D/game `a9dbbe6`, RA market `f501388`,
+RFID `7ee3b11`, translation `a57b677`, language education `7f21473`, and
+camera `1adcf01`. RA voice still has no successor beyond its D1 object. The
+fixture resolves each local Git commit, re-derives the connector and runner
+blob IDs, and reads only the local `src/gcl` closure using
+`git show <revision>:<path>`. A missing repository, object, closure file, or
+blob mismatch is a failure; mutable sibling worktree files are not evidence.
+
+D17 additionally pins the changed 3D result boundary, translation audit
+module, and camera audit/error boundaries. It does not import target runtime
+code, read an environment file or credential, open a socket, contact a
+provider, access a device or database, run a migration, start JARVIS/JNC, or
+write `main`/production.
+
+| Connector | D17 source-only evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D17 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Review-packet v13 detects a Node Proxy before structural reflection/value reads and binds that permanent rejection boundary into the packet integrity material | `requested` only | Pass | Nonconformant; unit regression |
+| RA image | The runner now copies closed request/connector/result/audit collaborator data, and its protected quota path appends a linked failure audit after `requested` | `requested`, `failed` | Pass | Conformant |
+| RA 3D/game | Synthetic artifact IDs now bind actor and reservation envelope; a GPU card must exactly match the review snapshot’s normalized request | `requested` only | Pass | Nonconformant |
+| RA market | Unit-only direct successor proves the D12 frozen runner-envelope control remains represented in the ADOS control text | `requested` only | Pass | Nonconformant |
+| RFID | Documentation-only direct successor; the connector and runner remain D16-identical | `requested`, `failed` | Pass | Conformant |
+| Translation | A terminal run outcome must use the exact same canonical run instant as its linked `requested` event | `requested`, `failed` | Pass | Conformant |
+| Language education | Documentation/unit direct successor; the connector and runner remain D16-identical | `requested`, `failed` | Pass | Conformant |
+| Camera | Every governed and independent-review append now accepts only a descriptor-safe, one-field SHA-256 receipt; a malformed terminal receipt stops without appending an invented second transition | `requested`, `failed` | Pass | Source-conformant; unit regression |
+
+`Conformant` is only a classification of the exact pinned source against this
+synthetic IV GCL envelope. It is not permission to configure a provider or API
+key, make an egress call, use OCR/media/RFID/camera input, connect hardware,
+write a database, migrate, start JARVIS/JNC, reserve/book/publish/handoff,
+send output, write production data, or enable live operation.
+
+### D17 negative and edge evidence
+
+- The quota classifier now recognizes the closed RA image runner form only
+  when `quotaConsume.call(...)` occurs inside the post-`requested` protected
+  `try` and the failure event carries the locally validated
+  `requestedAuditHash`. This changes image from `requested`-only to a linked
+  `requested`, `failed` classification; it does not infer that behaviour for
+  OCR, 3D/game, or market.
+- The added D17 receipt edge checks camera’s audit source for Proxy rejection,
+  an exact enumerable `{ hash }` shape, a lowercase SHA-256 value, and copying
+  through `validateAuditAppendReceipt` before a hash is exposed. The runner
+  and review connector may not directly bind `auditLog.append(...)`; an
+  `AuditReceiptError` terminates rather than creating a second failed event.
+- OCR rejects Proxy-wrapped objects and arrays before `Object.getPrototypeOf`,
+  `Reflect.ownKeys`, descriptor inspection, or a value read. Translation’s
+  source rejects a terminal audit event whose canonical timestamp differs from
+  its exact requested-event instant. The existing no-egress, no-credential,
+  no-subprocess, no-auto-publication, import-closure, owner-ordering, and
+  literal `LIVE_DISABLED` checks continue to fail closed.
+
+### D17 test evidence and ADOS boundary
+
+`npm run test:conformance` passes the full D1–D17 immutable-pin,
+local-closure, disabled-mode, owner-ordering, quota-classification, and
+negative-source suite. It uses only local Git objects and in-process
+TypeScript parsing.
+
+Selected exact-commit synthetic unit files were run from temporary local Git
+archives with an empty environment except `PATH`; database integration and
+migration files were excluded. Eight selected files pass: image, 3D/game,
+both market files, RFID, both translation files, and language education. No
+credential, network/provider/device call, database connection, migration,
+send, publication, or launch was attempted.
+
+Two selected unit suites are regressions and are not counted as positive
+evidence:
+
+- OCR has 7 passing and 13 failing tests. Its v13 source adds
+  `proxyBoundaryBinding`, while older test fixtures still assert packet v12
+  and omit that required field before checking their intended rejection.
+- Camera has 22 passing and one failing test. Its ADOS-text assertion still
+  requires the prior contiguous D8–D13 wording, while the D17 source correctly
+  inserts the D14 audit-receipt boundary.
+
+The OCR and camera test expectations must be updated in their owning branches
+before those exact packages can be called unit-certified. This audit records
+the regressions instead of treating them as passes or live approval. OCR,
+3D/game, and market still require a protected quota reservation (or an
+equivalent linked failure audit) and behavioural rejecting-quota coverage
+before GCL certification. The historical D1 Apify live-opt-in blocker remains
+unchanged and outside D17.
+
+All ten ADOS rules remain enforced: product data planes stay separate;
+inputs/outputs are minimized and synthetic; missing gates deny; owner and
+maker–checker checks are retained; audit gaps and unit failures remain visible;
+no migration is introduced; outputs are proposal-only/no-action; no JARVIS/JNC
+job is launched; and synthetic evidence is never deployment or live-enable
+authority. D17 loaded no credential, contacted no provider or network, used no
+device or production database, sent nothing, and made no `main`/production
+write.
