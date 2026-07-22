@@ -58,6 +58,13 @@ only accepted mode.
    candidate tuple. A terminal decision at or after `reviewExpiresAt` is
    rejected before the issuance proof or review-audit append. A decision whose
    event time predates its durable issuance is also rejected.
+8. A terminal action is not considered complete merely because
+   `appendDecision` returned a hash. Both like and rejection re-read an exact
+   `gcl-image-owner-review-v1` receipt through `assertRecorded`. That receipt
+   must bind the terminal audit event to the same issued candidate, issuance
+   audit hash, governed-run success hash, maker, scope, and ordered audit
+   chain. Direct calls to the durable review ledger with an invented or orphan
+   issuance hash fail before either a review receipt or audit event is written.
 
 Before either terminal decision, the module fail-closes unless the candidate
 has the exact local SVG preview, synthetic URI, non-executable plan shape,
@@ -168,6 +175,13 @@ decision and must be implemented behind its own bounded approval path.
   append and before a candidate proof is used, the whole ordered workspace
   chain is rechecked; an issuance receipt must still match both its issuance
   event and the bound source success event.
+- A terminal owner-review output additionally requires an exact, re-read
+  `gcl-image-owner-review-v1` receipt. The review ledger independently proves
+  the candidate was included in its governed issuance and that the issuance
+  binds to the matching successful run before it writes or re-reads a decision.
+  An orphan direct `appendDecision`, altered terminal receipt, mismatched
+  maker, candidate, scope, issuance hash, or run hash fails closed; no liked
+  artifact is returned from an unproven terminal decision.
 - Accessor-shaped input, policy objects, and candidate data are rejected
   before their getters can run, so untrusted runtime objects cannot smuggle
   prompt text or behavior through validation. The same fail-closed rule applies

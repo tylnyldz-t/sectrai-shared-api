@@ -8,7 +8,9 @@ plan shape only: `LIVE_DISABLED` is mandatory, no provider credential, graph
 execution, Docker/loopback client, or network adapter exists, and a separate
 owner checker plus a replay-protected terminal review ledger is required before
 a still-unpublished liked artifact or a non-publishable rejection receipt can
-exist. Candidates have a bounded, digest-bound review deadline: expiry blocks
+exist. Terminal decisions are re-read as exact durable receipts and must bind
+back to the same issued candidate and governed-run audit lineage before a
+still-blocked artifact can be returned. Candidates have a bounded, digest-bound review deadline: expiry blocks
 both issuance and any terminal decision, and the durable lineage cannot be
 backdated; every chain event also has a canonical, monotonic UTC timestamp. A
 successful governed run must first receive a durable, redacted

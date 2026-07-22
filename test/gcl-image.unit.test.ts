@@ -259,6 +259,42 @@ test('owner rejection is terminal, scope-bound, auditable, and never returns a m
   assert.equal(JSON.stringify(audit.entries).includes('child-friendly solar system poster'), false)
 })
 
+test('terminal review refuses an orphan direct ledger append before it writes an audit or receipt', async () => {
+  const persistence = new TestGclPersistence()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), new PrismaHashChainAuditLog(persistence), new TestQuota(), now)
+  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  const ledger = new PrismaImageOwnerReviewLedger(persistence)
+  const orphan = {
+    type: 'connector.artifact.owner_liked' as const,
+    connectorId: 'image-tti', product: context.product, workspaceId: context.workspaceId, actor: 'checker@example.test', correlationId: context.correlationId,
+    scopes: ['image:generate'], costCapCents: 0, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: {
+      candidateId: candidate.candidateId, maker: context.actor, publication: 'blocked' as const,
+      issuanceAuditHash: 'a'.repeat(64), runAuditHash: result.provenance.auditHash, artifactId: `owner-liked-${candidate.candidateId}`, ownerReview: 'liked' as const,
+    },
+  }
+  await assert.rejects(() => ledger.appendDecision(orphan), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_OWNER_REVIEW_DECISION_LINEAGE_INVALID')
+  assert.equal(persistence.records.filter((record) => record.moduleId === GCL_AUDIT_MODULE_ID).length, 2)
+  assert.equal(persistence.records.filter((record) => record.moduleId === GCL_IMAGE_OWNER_REVIEW_MODULE_ID).length, 0)
+})
+
+test('a returned liked artifact requires an exact terminal receipt proof', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const { candidate, candidates } = await governedIssuedRun(audit)
+  let appended = 0
+  let checked = 0
+  const missingReceiptLedger = {
+    appendDecision: async () => { appended += 1; return { hash: 'f'.repeat(64) } },
+    assertRecorded: async () => { checked += 1; return { auditHash: 'f'.repeat(64), issuanceAuditHash: 'a'.repeat(64), runAuditHash: 'b'.repeat(64) } },
+  }
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', missingReceiptLedger as never, candidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_LEDGER_INVALID')
+  assert.equal(appended, 1)
+  assert.equal(checked, 1)
+  assert.equal(audit.entries.length, 3)
+})
+
 test('owner review rejects malformed, cross-scope, or already-decided candidates before audit append', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const reviews = new InMemoryImageOwnerReviewLedger(audit)
