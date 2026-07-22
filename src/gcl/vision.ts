@@ -17,7 +17,7 @@ const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v20' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v21' as const
 const SYNTHETIC_DOCUMENT_DATA_BOUNDARY = {
   evidenceSource: 'synthetic-fixture',
   inputShape: 'plain-own-data-only',
@@ -88,6 +88,12 @@ const SYNTHETIC_DOCUMENT_AUDIT_RECEIPT_BOUNDARY = {
   receiptShape: 'plain-own-enumerable-sha256-hash-only',
   malformedReceiptAccepted: false,
   reviewResultRequiresValidatedAuditHash: true,
+} as const
+const SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY = {
+  auditLog: 'non-proxy-data-method-only',
+  appendResult: 'native-promise-only',
+  accessorOrProxyAuditTargetsAccepted: false,
+  rejectedOrThenableAuditResultsAccepted: false,
 } as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
@@ -251,6 +257,13 @@ export type SyntheticDocumentReviewPacket = {
     receiptShape: typeof SYNTHETIC_DOCUMENT_AUDIT_RECEIPT_BOUNDARY.receiptShape
     malformedReceiptAccepted: typeof SYNTHETIC_DOCUMENT_AUDIT_RECEIPT_BOUNDARY.malformedReceiptAccepted
     reviewResultRequiresValidatedAuditHash: typeof SYNTHETIC_DOCUMENT_AUDIT_RECEIPT_BOUNDARY.reviewResultRequiresValidatedAuditHash
+  }
+  /** Audit invocation is a data-method/native-Promise boundary before append. */
+  auditAppendBoundaryBinding: {
+    auditLog: typeof SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY.auditLog
+    appendResult: typeof SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY.appendResult
+    accessorOrProxyAuditTargetsAccepted: typeof SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY.accessorOrProxyAuditTargetsAccepted
+    rejectedOrThenableAuditResultsAccepted: typeof SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY.rejectedOrThenableAuditResultsAccepted
   }
   /** Metadata-only freshness limit for the synthetic evidence reference. */
   evidenceBinding: {
