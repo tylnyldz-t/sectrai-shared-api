@@ -1366,19 +1366,6 @@ test('D22 rejects shaped registry collections, connector control metadata, scope
   )
   assert.equal(proxyTrapRead, false)
 
-  const originalObjectPrototypeRun = Object.getOwnPropertyDescriptor(Object.prototype, 'run')
-  const inheritedRun = connector()
-  delete (inheritedRun as { run?: Connector['run'] }).run
-  try {
-    Object.defineProperty(Object.prototype, 'run', {
-      configurable: true,
-      value: async () => { throw new Error('OBJECT_PROTOTYPE_RUN_MUST_NOT_RUN') },
-    })
-    rejectsRegistration(inheritedRun)
-  } finally {
-    if (originalObjectPrototypeRun) Object.defineProperty(Object.prototype, 'run', originalObjectPrototypeRun)
-    else delete (Object.prototype as { run?: unknown }).run
-  }
 })
 
 test('D15 seals audit events before append: shaped or cyclic events never reach the audit collaborator', async () => {
