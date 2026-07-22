@@ -7,7 +7,7 @@ const ACTOR_LIMIT = 160
 export type RecordScope = { product: string; workspaceId: string; moduleId: string }
 export type RecordMutation = { values: Record<string, unknown>; status: string | null; createdBy?: string }
 export type WorkspaceScope = { product: string; workspaceId: string }
-export type ConnectorRunMutation = { input: Record<string, unknown>; scopes: string[]; costCapCents: number; requestedItems: number }
+export type ConnectorRunMutation = { input: Record<string, unknown>; scopes: string[]; costCapCents: number; requestedItems: number; correlationId?: string }
 export type TranslationArtifactApprovalMutation = { decision: 'approved' | 'rejected'; reviewDigest: string }
 
 /**
@@ -77,6 +77,12 @@ function positiveInteger(value: unknown, error: string, limit: number): number {
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > limit) throw new RequestValidationError(error, 422)
   return value
 }
+
+function correlationId(value: unknown): string | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string' || !/^[a-zA-Z0-9:_-]{1,120}$/.test(value)) throw new RequestValidationError('INVALID_CONNECTOR_CORRELATION_ID', 422)
+  return value
+}
 export function mutationFrom(body: unknown, allowCreatedBy: boolean): RecordMutation {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RequestValidationError('INVALID_REQUEST_BODY', 400)
   const input = body as Record<string, unknown>
@@ -86,12 +92,13 @@ export function mutationFrom(body: unknown, allowCreatedBy: boolean): RecordMuta
 }
 
 export function connectorRunFrom(body: unknown): ConnectorRunMutation {
-  const input = exactObject(body, ['input', 'scopes', 'costCapCents', 'requestedItems'], 'INVALID_CONNECTOR_RUN_REQUEST')
+  const input = exactObject(body, ['input', 'scopes', 'costCapCents', 'requestedItems', 'correlationId'], 'INVALID_CONNECTOR_RUN_REQUEST')
   return {
     input: plainObject(input.input, 'INVALID_CONNECTOR_INPUT'),
     scopes: stringArray(input.scopes, 'INVALID_CONNECTOR_SCOPES', 12, 80),
     costCapCents: positiveInteger(input.costCapCents, 'INVALID_CONNECTOR_COST_CAP', 10_000_000),
     requestedItems: positiveInteger(input.requestedItems, 'INVALID_CONNECTOR_REQUESTED_ITEMS', 100_000),
+    ...(input.correlationId === undefined ? {} : { correlationId: correlationId(input.correlationId) }),
   }
 }
 

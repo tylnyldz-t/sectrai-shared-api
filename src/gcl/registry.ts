@@ -1,5 +1,7 @@
 import { ConnectorInputError, CostCapError, ConnectorUnavailableError, GclError, OwnerGateError, ScopeError } from './errors.js'
 import { requireGclTenantContext } from './context.js'
+import { CameraConnectorRegistry, CameraGovernedConnectorRunner, type CameraRunConnectorRequest } from './camera-registry.js'
+import { intrinsicIsProxy, intrinsicObjectGetOwnPropertyDescriptor } from './intrinsics.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 const ACTOR_ID = /^[a-zA-Z0-9:_@. -]{1,160}$/
@@ -49,7 +51,7 @@ function runClock(now: () => Date, connector: Connector): { occurredAt: string; 
     throw new ConnectorUnavailableError('CONNECTOR_RUN_CLOCK_INVALID')
   }
 }
-export type RunConnectorRequest = {
+export type LegacyRunConnectorRequest = {
   connectorId: string
   input: unknown
   product: string
@@ -61,17 +63,42 @@ export type RunConnectorRequest = {
   requestedItems: number
 }
 
+/** Backward-compatible HTTP runner request; the concrete runner also accepts camera requests. */
+export type RunConnectorRequest = LegacyRunConnectorRequest
+
+function connectorLane(value: unknown): 'legacy' | 'camera' {
+  if (!value || typeof value !== 'object' || intrinsicIsProxy(value)) return 'camera'
+  const descriptor = intrinsicObjectGetOwnPropertyDescriptor(value, 'kind')
+  return descriptor && 'value' in descriptor
+    && (descriptor.value === 'text-translation' || descriptor.value === 'speech-translation' || descriptor.value === 'document-analysis')
+    ? 'legacy'
+    : 'camera'
+}
+
 export class ConnectorRegistry {
   private readonly connectors = new Map<string, Connector>()
+  readonly camera?: CameraConnectorRegistry
+  readonly hasLegacy: boolean
 
   constructor(connectors: readonly Connector[]) {
-    for (const connector of connectors) {
+    if (intrinsicIsProxy(connectors)) {
+      this.hasLegacy = false
+      this.camera = new CameraConnectorRegistry(connectors)
+      return
+    }
+    const legacy: Connector[] = []
+    const camera: Connector[] = []
+    for (const connector of connectors) (connectorLane(connector) === 'legacy' ? legacy : camera).push(connector)
+    this.hasLegacy = legacy.length > 0
+    if (camera.length > 0) this.camera = new CameraConnectorRegistry(camera)
+    for (const connector of legacy) {
       if (this.connectors.has(connector.id)) throw new Error(`DUPLICATE_CONNECTOR:${connector.id}`)
       this.connectors.set(connector.id, connector)
     }
   }
 
   get(connectorId: string): Connector {
+    if (connectorId === 'camera-observation' && this.camera) return this.camera.get(connectorId)
     const connector = this.connectors.get(connectorId)
     if (!connector) throw new ConnectorUnavailableError('CONNECTOR_NOT_REGISTERED')
     return connector
@@ -83,35 +110,48 @@ export class ConnectorRegistry {
    * reservation, quota reservation, then the adapter.
    */
 export class GovernedConnectorRunner {
-  constructor(private readonly registry: ConnectorRegistry, private readonly auditLog: AuditLog, private readonly quota: ConnectorQuota, private readonly now: () => Date = () => new Date()) {}
+  private readonly camera?: CameraGovernedConnectorRunner
 
-  async run(request: RunConnectorRequest): Promise<ConnectorResult> {
-    const connector = this.registry.get(request.connectorId)
-    if (request.ownerApproved !== true) throw new OwnerGateError()
+  constructor(private readonly registry: ConnectorRegistry, private readonly auditLog: AuditLog, private readonly quota: ConnectorQuota, private readonly now: () => Date = () => new Date()) {
+    if (intrinsicIsProxy(registry)) {
+      this.camera = new CameraGovernedConnectorRunner(registry as unknown as CameraConnectorRegistry, auditLog, quota, now)
+      return
+    }
+    if (registry.camera) this.camera = new CameraGovernedConnectorRunner(registry.camera, auditLog, quota, now)
+  }
+
+  async run(request: LegacyRunConnectorRequest | CameraRunConnectorRequest): Promise<ConnectorResult> {
+    if (intrinsicIsProxy(request) || (this.camera && !this.registry.hasLegacy) || (request && typeof request === 'object' && intrinsicObjectGetOwnPropertyDescriptor(request, 'connectorId')?.value === 'camera-observation')) {
+      if (!this.camera) throw new ConnectorUnavailableError('CONNECTOR_NOT_REGISTERED')
+      return this.camera.run(request as CameraRunConnectorRequest)
+    }
+    const legacyRequest = request as LegacyRunConnectorRequest
+    const connector = this.registry.get(legacyRequest.connectorId)
+    if (legacyRequest.ownerApproved !== true) throw new OwnerGateError()
     try {
-      requireGclTenantContext(request)
+      requireGclTenantContext(legacyRequest)
     } catch (error) {
       if (connector.kind === 'document-analysis') throw new ConnectorInputError('INVALID_CONNECTOR_CONTEXT')
       throw error
     }
-    const actor = connector.kind === 'document-analysis' ? visionActor(request.actor) : (canonicalActor(request.actor) ? request.actor : null)
+    const actor = connector.kind === 'document-analysis' ? visionActor(legacyRequest.actor) : (canonicalActor(legacyRequest.actor) ? legacyRequest.actor : null)
     if (!actor) {
       if (connector.kind === 'document-analysis') throw new ConnectorInputError('INVALID_CONNECTOR_CONTEXT')
       throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
     }
-    if (!Number.isSafeInteger(request.costCapCents) || request.costCapCents < 1) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
-    if (!Number.isSafeInteger(request.requestedItems) || request.requestedItems < 1) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
-    const scopes = canonicalScopes(request.scopes, connector)
+    if (!Number.isSafeInteger(legacyRequest.costCapCents) || legacyRequest.costCapCents < 1) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
+    if (!Number.isSafeInteger(legacyRequest.requestedItems) || legacyRequest.requestedItems < 1) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
+    const scopes = canonicalScopes(legacyRequest.scopes, connector)
 
     const run = runClock(this.now, connector)
     const context: ConnectorRunContext = {
-      product: request.product,
-      workspaceId: request.workspaceId,
+      product: legacyRequest.product,
+      workspaceId: legacyRequest.workspaceId,
       actor,
-      ownerApproved: request.ownerApproved,
+      ownerApproved: legacyRequest.ownerApproved,
       scopes,
-      costCapCents: request.costCapCents,
-      requestedItems: request.requestedItems,
+      costCapCents: legacyRequest.costCapCents,
+      requestedItems: legacyRequest.requestedItems,
       now: run.now,
     }
     // A connector that returns a canonical preflight value commits the exact
@@ -119,8 +159,8 @@ export class GovernedConnectorRunner {
     // original object (or a stateful Proxy) from changing a reviewed fixture
     // while the requested audit/quota awaits. Older validate-only connectors
     // still return undefined and retain their existing contract.
-    const preparedInput = await connector.preflight?.(request.input, context)
-    const adapterInput = preparedInput === undefined ? request.input : preparedInput
+    const preparedInput = await connector.preflight?.(legacyRequest.input, context)
+    const adapterInput = preparedInput === undefined ? legacyRequest.input : preparedInput
     const requestedAudit = await this.auditLog.append({
       type: 'connector.run.requested', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
       scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: run.occurredAt, detail: {},

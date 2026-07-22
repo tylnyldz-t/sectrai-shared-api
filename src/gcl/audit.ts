@@ -1,10 +1,19 @@
-import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
+import {
+  CameraPrismaHashChainAuditLog,
+  appendVerifiedAuditEvent,
+  hashAuditEvent as cameraHashAuditEvent,
+  sealAuditAppendEvent,
+  validateAuditAppendReceipt,
+  validateAuditChainHead,
+} from './camera-audit.js'
 import { validGclTenantContext } from './context.js'
 import { ConnectorUnavailableError } from './errors.js'
 import { translationArtifactReviewDigest } from './translation-artifact-review.js'
 import type { TranslationArtifactRecord } from './translation-artifacts.js'
-import type { AuditLog, ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
+import type { AuditAppendReceipt, AuditLog, ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
+
+export { appendVerifiedAuditEvent, sealAuditAppendEvent, validateAuditAppendReceipt, validateAuditChainHead }
 
 export const GCL_AUDIT_MODULE_ID = 'gcl-audit'
 
@@ -304,16 +313,8 @@ function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
   if (value.type === 'connector.document.owner_reviewed') return validVisionDocumentReviewEvent(value)
   return false
 }
-function normalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalize)
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, normalize(item)]))
-  }
-  return value
-}
-
-export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string | null): string {
-  return createHash('sha256').update(JSON.stringify(normalize({ event, previousHash }))).digest('hex')
+export function hashAuditEvent(event: ConnectorAuditEvent | Record<string, unknown>, previousHash: string | null): string {
+  return cameraHashAuditEvent(event as ConnectorAuditEvent, previousHash)
 }
 
 function auditValue(value: unknown): AuditRecordValue | null {
@@ -475,7 +476,9 @@ function validVisionDocumentReviewTransition(entries: readonly AuditRecordValue[
   // runner. Preserve that standalone audit contract. When governed provenance
   // is present, at least one matching maker must still be independent.
   return governedRuns.length === 0
-    || governedRuns.some((entry) => entry.event.actor.toLowerCase() !== event.actor.toLowerCase())
+    || governedRuns.some((entry) => typeof entry.event.actor === 'string'
+      && typeof event.actor === 'string'
+      && entry.event.actor.toLowerCase() !== event.actor.toLowerCase())
 }
 
 /**
@@ -638,7 +641,7 @@ export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionC
  * mutation and its audit row in the same transaction prevents a durable,
  * unaudited translation decision when the audit write fails.
  */
-export async function appendAuditEvent(transaction: Prisma.TransactionClient, event: ConnectorAuditEvent): Promise<{ hash: string }> {
+export async function appendAuditEvent(transaction: Prisma.TransactionClient, event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
   const snapshot = snapshotAuditEvent(event)
   if (!snapshot || !validAuditEvent(snapshot)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
   const entries = await validatedAuditEntries(transaction, snapshot.product, snapshot.workspaceId)
@@ -658,12 +661,23 @@ export async function appendAuditEvent(transaction: Prisma.TransactionClient, ev
   return { hash }
 }
 
+function isCameraAuditEvent(event: ConnectorAuditEvent): boolean {
+  return typeof event.requestedBy === 'string'
+    && typeof event.checkedBy === 'string'
+    && typeof event.correlationId === 'string'
+}
+
 /** Per product/workspace append-only SHA-256 chain. Translation text and audio
  * bytes are represented by hashes only; they never enter audit records. */
 export class PrismaHashChainAuditLog implements AuditLog {
-  constructor(private readonly prisma: PrismaClient) {}
+  private readonly camera: CameraPrismaHashChainAuditLog
 
-  async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
+  constructor(private readonly prisma: PrismaClient) {
+    this.camera = new CameraPrismaHashChainAuditLog(prisma)
+  }
+
+  async append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
+    if (isCameraAuditEvent(event)) return this.camera.append(event)
     return this.prisma.$transaction((transaction) => appendAuditEvent(transaction, event))
   }
 }
@@ -672,7 +686,14 @@ export class PrismaHashChainAuditLog implements AuditLog {
 export class InMemoryHashChainAuditLog implements AuditLog {
   readonly entries: AuditRecordValue[] = []
 
-  async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
+  async append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
+    if (isCameraAuditEvent(event)) {
+      const snapshot = sealAuditAppendEvent(event)
+      const previousHash = this.entries.at(-1)?.hash ?? null
+      const hash = hashAuditEvent(snapshot, previousHash)
+      this.entries.push({ event: snapshot, previousHash, hash })
+      return { hash, previousHash }
+    }
     // The durable implementation replays every stored row inside its
     // transaction. Preserve that fail-closed property in the test seam too:
     // a test or caller must not be able to mutate an old entry and then append

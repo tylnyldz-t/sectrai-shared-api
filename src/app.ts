@@ -3,15 +3,17 @@ import express, { type NextFunction, type Request, type RequestHandler, type Res
 import { productAuth, validProduct } from './auth.js'
 import { PrismaHashChainAuditLog, GCL_AUDIT_MODULE_ID } from './gcl/audit.js'
 import { ConnectorUnavailableError, GclError } from './gcl/errors.js'
-import { EnvironmentPrismaDailyConnectorQuota, GCL_USAGE_MODULE_ID } from './gcl/quota.js'
-import { ConnectorRegistry, GovernedConnectorRunner, type RunConnectorRequest } from './gcl/registry.js'
+import { cameraConnectorFromEnvironment } from './gcl/camera.js'
+import { EnvironmentPrismaDailyConnectorQuota, GCL_USAGE_MODULE_ID, GCL_VISION_USAGE_MODULE_ID } from './gcl/quota.js'
+import { ConnectorRegistry, GovernedConnectorRunner, type LegacyRunConnectorRequest, type RunConnectorRequest } from './gcl/registry.js'
+import type { CameraRunConnectorRequest } from './gcl/camera-registry.js'
 import { translationConnectorsFromEnvironment } from './gcl/translation.js'
 import { GCL_TRANSLATION_ARTIFACT_MODULE_ID, PrismaTranslationArtifactStore, type TranslationArtifactRecord } from './gcl/translation-artifacts.js'
 import type { AuditLog, ConnectorAuditEvent, ConnectorResult } from './gcl/types.js'
 import { serializeRecord } from './types.js'
 import { RequestValidationError, connectorRunFrom, mutationFrom, scopeFrom, translationArtifactApprovalFrom, workspaceScopeFrom } from './validation.js'
 
-type ConnectorRunner = { run(request: RunConnectorRequest): Promise<ConnectorResult> }
+type ConnectorRunner = { run(request: RunConnectorRequest | CameraRunConnectorRequest): Promise<ConnectorResult> }
 type ArtifactAuditContext = Pick<ConnectorAuditEvent, 'scopes' | 'costCapCents' | 'requestedItems' | 'occurredAt'>
 type TranslationArtifactStore = {
   get(product: string, workspaceId: string, id: string): Promise<TranslationArtifactRecord | null>
@@ -20,7 +22,7 @@ type TranslationArtifactStore = {
 }
 type AppOptions = { prisma?: PrismaClient; now?: () => Date; gclRunner?: ConnectorRunner; gclOwnerToken?: string; gclAuditLog?: AuditLog; translationArtifactStore?: TranslationArtifactStore }
 
-const GCL_RESERVED_MODULES = new Set([GCL_AUDIT_MODULE_ID, GCL_USAGE_MODULE_ID, GCL_TRANSLATION_ARTIFACT_MODULE_ID])
+const GCL_RESERVED_MODULES = new Set([GCL_AUDIT_MODULE_ID, GCL_USAGE_MODULE_ID, GCL_VISION_USAGE_MODULE_ID, GCL_TRANSLATION_ARTIFACT_MODULE_ID])
 
 function asyncRoute(handler: (request: Request, response: Response, next: NextFunction) => Promise<unknown> | unknown): RequestHandler {
   return (request, response, next) => { void Promise.resolve(handler(request, response, next)).catch(next) }
@@ -31,7 +33,7 @@ function cors(request: Request, response: Response, next: NextFunction): void {
   if (origin) response.setHeader('Access-Control-Allow-Origin', origin)
   response.setHeader('Vary', 'Origin')
   response.setHeader('Access-Control-Allow-Methods', 'GET,POST,PATCH,DELETE,OPTIONS')
-  response.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-Sectrai-Product-Key,X-Sectrai-Owner-Token,X-Sectrai-Owner-Actor')
+  response.setHeader('Access-Control-Allow-Headers', 'Content-Type,X-Sectrai-Product-Key,X-Sectrai-Owner-Token,X-Sectrai-Owner-Actor,X-Sectrai-Request-Actor')
   response.setHeader('Access-Control-Max-Age', '600')
   next()
 }
@@ -58,6 +60,12 @@ function ownerActorFrom(request: Request): string {
   // rewrite a header value into a different principal: padded identity is an
   // invalid request, just like a padded scope is invalid authority.
   if (typeof actor !== 'string' || !actor || actor.trim() !== actor || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(actor)) throw new RequestValidationError('INVALID_OWNER_ACTOR', 422)
+  return actor
+}
+
+function requestActorFrom(request: Request): string {
+  const actor = request.header('x-sectrai-request-actor')
+  if (typeof actor !== 'string' || !actor || actor.trim() !== actor || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(actor)) throw new RequestValidationError('INVALID_REQUEST_ACTOR', 422)
   return actor
 }
 
@@ -90,7 +98,7 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
   const app = express()
   const auditLog = gclAuditLog ?? new PrismaHashChainAuditLog(prisma)
   const governedRunner = gclRunner ?? new GovernedConnectorRunner(
-    new ConnectorRegistry(translationConnectorsFromEnvironment()),
+    new ConnectorRegistry([...translationConnectorsFromEnvironment(), cameraConnectorFromEnvironment()]),
     auditLog,
     new EnvironmentPrismaDailyConnectorQuota(prisma),
     now,
@@ -154,16 +162,11 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
     const input = connectorRunFrom(request.body)
     const connectorId = connectorIdFrom(request)
     const actor = ownerActorFrom(request)
-    const result = await governedRunner.run({
-      connectorId,
-      input: input.input,
-      ...scope,
-      actor,
-      ownerApproved: true,
-      scopes: input.scopes,
-      costCapCents: input.costCapCents,
-      requestedItems: input.requestedItems,
-    })
+    const common = { connectorId, input: input.input, ...scope, ownerApproved: true, scopes: input.scopes, costCapCents: input.costCapCents, requestedItems: input.requestedItems }
+    const runRequest: LegacyRunConnectorRequest | CameraRunConnectorRequest = connectorId === 'camera-observation'
+      ? { ...common, requestedBy: requestActorFrom(request), checkedBy: actor, correlationId: input.correlationId ?? '' }
+      : { ...common, actor }
+    const result = await governedRunner.run(runRequest)
     if (!result.artifact || !result.provenance.auditHash) return response.json({ result })
     const creationNow = artifactMutationClock(now)
     const artifactAuditContext: ArtifactAuditContext = {

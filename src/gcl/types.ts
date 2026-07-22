@@ -1,5 +1,5 @@
 /** Connector input is always treated as data, never as executable instructions. */
-export type ConnectorKind = 'text-translation' | 'speech-translation' | 'document-analysis'
+export type ConnectorKind = 'text-translation' | 'speech-translation' | 'document-analysis' | 'synthetic-camera'
 export type ConnectorAuthKind = 'owner-token'
 
 export type IsolatedContent = {
@@ -14,6 +14,8 @@ export type ConnectorProvenance = {
   source: string
   retrievedAt: string
   auditHash?: string
+  liveStatus?: 'LIVE_DISABLED'
+  synthetic?: true
   untrustedContent: IsolatedContent
 }
 
@@ -37,16 +39,27 @@ export type ConnectorResult<TData = unknown> = {
   artifact?: TranslationArtifactProposal
 }
 
-export type ConnectorRunContext = {
+type BaseConnectorRunContext = {
   product: string
   workspaceId: string
-  actor: string
   ownerApproved: boolean
   scopes: readonly string[]
   costCapCents: number
   requestedItems: number
   now: () => Date
 }
+
+export type ConnectorRunContext = BaseConnectorRunContext & ({
+  actor: string
+  requestedBy?: never
+  checkedBy?: never
+  correlationId?: never
+} | {
+  actor?: never
+  requestedBy: string
+  checkedBy: string
+  correlationId: string
+})
 
 export interface Connector<TInput = unknown, TData = unknown> {
   id: string
@@ -61,13 +74,13 @@ export interface Connector<TInput = unknown, TData = unknown> {
    */
   preflight?(input: TInput, ctx: ConnectorRunContext): Promise<TInput | void> | TInput | void
   run(input: TInput, ctx: ConnectorRunContext): Promise<ConnectorResult<TData>>
+  validateResult?(result: ConnectorResult<TData>, ctx: ConnectorRunContext): ConnectorResult<TData>
 }
 
 type BaseAuditEvent = {
   connectorId: string
   product: string
   workspaceId: string
-  actor: string
   scopes: readonly string[]
   costCapCents: number
   requestedItems: number
@@ -75,11 +88,24 @@ type BaseAuditEvent = {
   detail: Record<string, unknown>
 }
 
-export type ConnectorAuditEvent = BaseAuditEvent & {
+export type ConnectorAuditEvent = BaseAuditEvent & ({
   type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'translation.artifact.created' | 'translation.artifact.approved' | 'translation.artifact.rejected' | 'connector.document.owner_reviewed'
-}
+  actor: string
+  requestedBy?: never
+  checkedBy?: never
+  correlationId?: never
+} | {
+  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'connector.run.denied' | 'connector.camera.owner_reviewed'
+  actor?: never
+  requestedBy: string
+  checkedBy: string
+  correlationId: string
+})
+
+/** A locally checked append witness; it is not a durable lookup or signature. */
+export type AuditAppendReceipt = Readonly<{ hash: string; previousHash?: string | null }>
 export interface AuditLog {
-  append(event: ConnectorAuditEvent): Promise<{ hash: string }>
+  append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt>
 }
 
 export interface ConnectorQuota {

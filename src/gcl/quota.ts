@@ -67,7 +67,8 @@ export class EnvironmentPrismaDailyConnectorQuota implements ConnectorQuota {
 
   async consume(request: Parameters<ConnectorQuota['consume']>[0]): Promise<void> {
     const vision = request.connectorId === 'vision-document-field-extraction'
-    const config = vision ? visionDailyQuotaFromEnvironment(this.environment) : translationDailyQuotaFromEnvironment(this.environment)
+    const camera = request.connectorId === 'camera-observation'
+    const config = camera ? cameraDailyQuotaFromEnvironment(this.environment) : vision ? visionDailyQuotaFromEnvironment(this.environment) : translationDailyQuotaFromEnvironment(this.environment)
     const moduleId = vision ? GCL_VISION_USAGE_MODULE_ID : GCL_USAGE_MODULE_ID
     return new PrismaDailyConnectorQuota(this.prisma, config, moduleId).consume(request)
   }
@@ -79,4 +80,20 @@ export function visionDailyQuotaFromEnvironment(environment: NodeJS.ProcessEnv =
   const dailyItems = positiveInteger(environment.GCL_VISION_DAILY_ITEM_QUOTA)
   if (!dailyRuns || !dailyItems) throw new ConnectorUnavailableError('VISION_CONNECTOR_QUOTA_NOT_CONFIGURED')
   return { dailyRuns, dailyItems }
+}
+
+export function cameraDailyQuotaFromEnvironment(environment: NodeJS.ProcessEnv = process.env): DailyQuotaConfig {
+  const dailyRuns = positiveInteger(environment.GCL_CAMERA_DAILY_RUN_QUOTA)
+  const dailyItems = positiveInteger(environment.GCL_CAMERA_DAILY_OBSERVATION_QUOTA)
+  if (!dailyRuns || !dailyItems) throw new ConnectorUnavailableError('CAMERA_QUOTA_NOT_CONFIGURED')
+  return { dailyRuns, dailyItems }
+}
+
+/** Missing deployment limits close only the camera connector route. */
+export class EnvironmentPrismaCameraQuota implements ConnectorQuota {
+  constructor(private readonly prisma: PrismaClient, private readonly environment: NodeJS.ProcessEnv = process.env) {}
+
+  async consume(request: Parameters<ConnectorQuota['consume']>[0]): Promise<void> {
+    return new PrismaDailyConnectorQuota(this.prisma, cameraDailyQuotaFromEnvironment(this.environment)).consume(request)
+  }
 }

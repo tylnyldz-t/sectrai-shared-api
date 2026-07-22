@@ -28,6 +28,54 @@ DELETE /api/products/:product/workspaces/:workspaceId/modules/:moduleId/records/
 - `PATCH` accepts `{ values, status? }` and returns `{ record }`.
 - `DELETE` returns `204` only when the record exists in the exact product/workspace/module scope.
 
+## GM2 camera observation connector
+
+`POST /api/products/:product/workspaces/:workspaceId/gcl/connectors/camera-observation/runs` is a consent-gated, fixture-only camera observation contract. It requires a product key plus a separately authenticated owner checker and a distinct request maker:
+
+- `X-Sectrai-Owner-Token` — configured local governance secret; missing or mismatched values fail closed.
+- `X-Sectrai-Owner-Actor` — checker identity.
+- `X-Sectrai-Request-Actor` — maker identity; it must differ from the checker.
+
+The body is bounded to a synthetic fixture, declared purpose, synthetic consent assertion, cost/item limits, and correlation ID:
+
+```json
+{
+  "input": {
+    "synthetic": true,
+    "cameraFixtureId": "synthetic-loading-dock-001",
+    "purpose": "operational-safety",
+    "consent": {
+      "state": "granted",
+      "receiptRef": "synthetic-consent-safety-001",
+      "policyVersion": "kvkk-synthetic-v1",
+      "sourceRights": "synthetic-fixture"
+    }
+  },
+  "scopes": ["camera:observe"],
+  "costCapCents": 25,
+  "requestedItems": 1,
+  "correlationId": "synthetic-camera-correlation-001"
+}
+```
+
+The adapter accepts no snapshot, video bytes, stream URL, device address, serial number, credential, or provider configuration. It resolves only the built-in `synthetic-*` fixtures and permanently reports `mode: "SYNTHETIC"` and `liveStatus: "LIVE_DISABLED"`; a live flag is an explicit rejection, never an opt-in. It never performs biometric or identity inference, does not retain a device identifier or media, and returns `OWNER_REVIEW_REQUIRED`, `NOT_EXECUTED`, `NOT_SENT`, and `NOT_PUBLISHED` outcomes.
+
+Consent must be granted, have the KVKK synthetic policy version and source-rights assertion, and match the selected fixture purpose and synthetic receipt. Missing, revoked, malformed, or mismatched consent is denied before quota reservation. Owner-gate, maker–checker, scope, cost, consent, and execution decisions are appended to a product/workspace SHA-256 audit chain with the correlation ID; raw input and media are never placed in audit details. The normal record API cannot read or mutate the reserved `gcl-audit` and `gcl-usage` modules.
+
+The D1 review-packet package adds an unkeyed SHA-256 mutation check around the fixed synthetic result. `independentlyReviewCameraObservation()` is a library-only, explicit owner-review seam: it revalidates scope, fixture observation, privacy flags, no-handoff state, and packet integrity before appending a review audit event. The original request maker cannot review it. D2 adds a minimized, library-only review receipt and `validateCameraReviewReceipt()`, which rechecks the receipt against the original packet without storage access, quota use, audit append, HTTP route, or durable state. D3 requires every input and review-evidence object to have only allowlisted own enumerable data fields; hidden, symbol, Proxy, accessor/getter, inherited, and raw-media/device-shaped fields fail closed without evaluating an accessor or Proxy trap. D4 adds `validateCameraReviewAuditWitness()`: it read-checks one caller-supplied review audit entry against D1/D2. D5 adds `validateCameraReviewAuditTrailWitness()`: it read-checks only a caller-supplied `requested → succeeded → owner_reviewed` segment, including its internal hashes and fixed no-action fields. D6 adds `createCameraReviewAuditTrailReceipt()` and `validateCameraReviewAuditTrailReceipt()`: they derive and recheck a minimized, context-bound rendering of that same supplied D5 segment. D7 adds `createCameraReviewEvidenceManifest()` and `validateCameraReviewEvidenceManifest()`: they bind independently rebuilt D2/D6 evidence through two integrity digests, omitting the fixture, finding, reviewer, decision text, and audit hashes. D8 applies the same strict own-data boundary to caller review context, so hidden, symbol, Proxy, accessor, inherited, or media/device-shaped context is rejected before any review audit append. D9 permits the sole callable review-context field only as a non-Proxy local clock that returns a finite native `Date`; forged, invalid, or Proxy-shaped clock values fail before review audit append. D10 applies that strict own-data boundary to direct synthetic adapter execution and derives its provenance timestamp only from the same safe local-clock rule; shaped context or clock values fail before a fixture result, and an invalid clock is rejected in preflight before quota reservation. D11 makes the governed runner take one validated native-`Date` snapshot and pass only clean copies of it to preflight, quota, result provenance, and its scoped audit events; a thrown, invalid, or Proxy-shaped runner clock fails before any audit or quota operation. D12 validates the full direct governed-run request envelope before it touches that clock, the registry, audit, quota, or adapter; unknown, hidden, symbol, inherited, accessor, Proxy, sparse-array, or media/device-shaped request fields fail closed without evaluating a getter or Proxy trap. D13 validates an adapter's direct result/provenance control plane before a success audit or return: a Proxy, accessor, hidden/symbol/unknown field, injected audit hash, invalid synthetic/live status, connector mismatch, malformed source, stale timestamp, or invalid confidence fails as `connector.run.failed`; generic data remains opaque and adapter-owned. D14 validates every audit append receipt's exact own-data shape; malformed, extra, hidden, symbol, inherited, accessor, Proxy, or non-lowercase-SHA-256 values fail closed. D15 seals each audit event as an immutable, deep own-data snapshot before the audit collaborator receives it, so shaped, cyclic, hidden, symbol, accessor, or Proxy event data fails before append and the collaborator cannot add media-shaped fields or alter a scope/detail. D16 validates the existing durable audit head before a successor can bind to it: its exact record shape and self-contained SHA-256 chain link must verify, otherwise the append fails closed without a new record. D17 makes each `{ hash, previousHash }` append receipt re-hash the sealed event and pins the runner's `succeeded`/`failed` receipt to its accepted `requested` hash. D18 captures Node SHA-256 operations at module initialization so later public `Hash`-prototype hooks cannot alter fixture/review/audit integrity checks. D19 then makes `camera-observation` reconstruct both its fixture result and the isolated observation before a success audit; raw/device-shaped, accessor, hidden, or mismatched data fails as `connector.run.failed`, and only new fixed no-media copies are returned. D4–D19 add no storage lookup route, provider or time-service call, or capability grant; D16 only validates the immediate record the existing append already reads, D17 does not prove persistence, and D18 does not attest to a clean realm before module initialization. None proves a durable audit read or authorizes a handoff. Every digest remains an unkeyed mutation check, never authorization or delivery capability. An approved or rejected review never sends a handoff, command, notification, or publication. See [the camera contract](docs/GCL_CAMERA_CONTRACT.md).
+
+D20 freezes the admitted governed context, including its sole scope array, before preflight or adapter execution. A connector cannot retarget later quota, audit, or camera-result verification; an uncaught write is denied before quota. It adds no storage lookup, provider/time-service call, credential, camera connection, handoff, publication, action, or capability.
+
+D21 deep-snapshots and freezes generic governed input before the runner touches its clock, registry, audit, quota, or adapter. Hidden, symbol, inherited, accessor, Proxy, sparse, cyclic, exotic, over-deep, non-finite, and function-shaped values fail closed; a caller or preflight hook cannot retarget the later camera run by mutating a shared input alias. It adds no storage lookup, provider/time-service call, credential, camera connection, handoff, publication, action, or capability.
+
+D22 snapshots the selected synthetic connector control plane at registry construction: immutable ID/scopes plus captured descriptor-only callbacks. Shaped collections/metadata/callbacks fail closed, and later connector property replacement cannot retarget audit, quota, scope, or the selected callback path. D23 snapshots the runner's registry/audit/quota method references and local clock at construction; Proxy, accessor, or Proxy-method collaborators fail closed, and later public-property replacement cannot retarget the existing synthetic path. It is not a plug-in/collaborator sandbox and adds no route, credential, provider/device call, handoff, publication, action, or capability.
+
+D24 captures the native `Date` constructor/methods used by governed, audit, fixture, and review timestamps, together with the runner registration/collaborator own-data inspection helpers. Hooks installed after module initialization cannot retarget those existing checks. It is not a clean-realm attestation and adds no time service, route, storage operation, credential, provider/device call, handoff, publication, action, or capability.
+
+D25 completes that local post-load hook boundary for the governed input/result parser, audit sealer/canonicalizer, and synthetic camera review code: own-data inspection/copy/freeze, array identity/membership/map/sort, numeric checks, Set cycle/uniqueness helpers, canonical `JSON.stringify`, and audit-key ordering use module-captured operations. These paths do not use a replaceable global collection iterator. Late replacements cannot turn a result/review integrity comparison into a constant, bypass a tampered fixture finding, or retarget the fixed no-media audit path. This is only in-process hardening—not a clean-realm or durable-proof claim—and adds no route, storage operation, credential, provider/device call, handoff, publication, action, or capability.
+
+No migration, camera connection, notification, action, or publication is part of this connector.
+
 ## Run and migrate
 
 ```bash
@@ -36,7 +84,7 @@ DATABASE_URL='your Neon URL' npm run db:migrate
 DATABASE_URL='your Neon URL' SHARED_API_KEY_HEALTH='...' npm start
 ```
 
-`npm test` is a real Neon integration test. It creates records only under the temporary `sectrai-integration-test` product, verifies create → list → edit → a new Prisma connection → delete, and cleans those records up.
+`npm test` runs the offline camera/GCL unit suite without a database or network. The existing Neon CRUD integration test is skipped unless `DATABASE_URL` is explicitly supplied; it creates records only under the temporary `sectrai-integration-test` product, verifies create → list → edit → a new Prisma connection → delete, and cleans those records up.
 
 ## Product adaptation guide
 

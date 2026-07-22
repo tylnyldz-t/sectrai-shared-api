@@ -55,3 +55,25 @@ export class ArtifactReviewExpiredError extends GclError {
 export class ConsentError extends GclError {
   constructor(message = 'DOCUMENT_CONSENT_REQUIRED') { super(message, 403, 'document_consent_required') }
 }
+
+export class CameraConsentError extends GclError {
+  constructor(message = 'CAMERA_CONSENT_REQUIRED') { super(message, 403, 'camera_consent_required') }
+}
+
+/** A connector returned an unsafe or non-synthetic result envelope. */
+export class ConnectorResultError extends GclError {
+  constructor(message = 'INVALID_CONNECTOR_RESULT') { super(message, 502, 'invalid_connector_result') }
+}
+
+/** An audit collaborator did not return the bounded receipt required to continue. */
+export class AuditReceiptError extends GclError {
+  constructor(message = 'INVALID_AUDIT_APPEND_RECEIPT') { super(message, 503, 'audit_log_unavailable') }
+}
+
+export class AuditEventError extends GclError {
+  constructor(message = 'INVALID_AUDIT_APPEND_EVENT') { super(message, 503, 'audit_log_unavailable') }
+}
+
+export class AuditChainError extends GclError {
+  constructor(message = 'INVALID_AUDIT_CHAIN_HEAD') { super(message, 503, 'audit_chain_invalid') }
+}
