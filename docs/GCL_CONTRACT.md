@@ -62,7 +62,9 @@ Every registered connector is governed by these rules:
   array through descriptors before connector preflight, audit, or quota can
   read it. D13 lets `market` return a canonical preflight snapshot, which the
   runner carries across its later asynchronous seams instead of the
-  caller-held input. None reads audit storage, writes, or approves execution.
+  caller-held input. D14 copies market's exact scalar configuration at
+  construction, so a caller cannot mutate its live gate or limits after
+  preflight. None reads audit storage, writes, or approves execution.
   All resulting evidence remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
@@ -162,7 +164,9 @@ quota. It copies the envelope primitives and scope strings only; `input`
 remains opaque data for the selected connector's own parser. D13 lets that
 parser return a canonical market copy for the runner to use after its audit
 and quota awaits, so a caller mutation cannot alter an already accepted market
-request. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13 are local mutation checks or
+request. D14 copies the connector's exact scalar configuration at construction
+and rejects accessor-, Proxy-, inherited-, hidden-, symbol-, and extra
+credential-shaped configuration before preflight, audit, or quota. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14 are local mutation checks or
 boundary hardening, never signatures, credentials, approval workflows, or
 execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).

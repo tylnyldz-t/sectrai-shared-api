@@ -438,6 +438,31 @@ reservation, booking, publication, handoff, send, durable approval,
 signature, authorization, or execution capability. The resulting plan remains
 exactly `SYNTHETIC`, `LIVE_DISABLED`, and `NOT_AUTHORIZED`.
 
+## D14 — construction-time connector configuration snapshot
+
+`SyntheticMarketConnector` copies its configuration exactly once at
+construction. Only own enumerable data fields from this bounded set are
+accepted: `liveEnabled`, `maxCostCapCents`, `maxItems`, and
+`maxCapacityUnits`. The resulting scalar-only copy is frozen internally.
+Accessor, Proxy, inherited, hidden, symbol, and extra fields—including a
+credential/provider-shaped field—make the configuration unavailable before
+preflight, audit, or quota. The normal unavailable error remains
+`MARKET_GOVERNANCE_LIMITS_NOT_CONFIGURED`; this package adds no configuration
+fallback.
+
+The runner calls market preflight before its asynchronous audit and quota
+steps, then invokes market again for the plan. D14 ensures both calls use the
+same construction-time disabled live flag and limits. Mutating the original
+configuration after `runner.run()` cannot turn a successful request into a
+post-quota limit or live-gate failure, increase a limit, inject a credential,
+or create a live path.
+
+D14 adds no route, storage, migration, worker, queue, provider configuration,
+credential, network call, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution capability.
+The resulting plan remains exactly `SYNTHETIC`, `LIVE_DISABLED`, and
+`NOT_AUTHORIZED`.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -502,7 +527,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -518,7 +543,8 @@ review context and limits its clock to one verified host call whose intrinsic
 literal boolean `true` at every owner-gate boundary. D12 snapshots the exact
 governed-run envelope and its scope strings before preflight, audit, or quota.
 D13 keeps market's accepted canonical input snapshot across the runner's
-asynchronous audit, quota, and run seams.
+asynchronous audit, quota, and run seams. D14 fixes market's exact
+construction-time configuration snapshot across those same seams.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -552,7 +578,11 @@ accessors, root and scope-array Proxies, inherited fields, and scope accessors
 before preflight, audit, or quota; a caller mutation after runner invocation
 cannot replace the snapshotted scope binding. D13 additionally proves that a
 post-preflight mutation cannot replace an accepted market request, inject a
-provider-shaped field, or create a failed/post-quota alternate request.
+provider-shaped field, or create a failed/post-quota alternate request. D14
+additionally rejects visible/hidden credential-shaped fields, accessors,
+Proxies, and inherited configuration without evaluating shaped values, and
+proves post-preflight configuration mutation cannot change a successful plan
+or create a post-quota failure.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -574,7 +604,8 @@ provider-shaped field, or create a failed/post-quota alternate request.
    only literal boolean owner approval before any market review seam; D12
    snapshots an exact governed-run envelope before connector preflight, audit,
    or quota can consume it; D13 retains market's canonical preflight result
-   across those later asynchronous seams.
+   across those later asynchronous seams; D14 fixes the connector configuration
+   before those seams.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.
@@ -585,8 +616,9 @@ provider-shaped field, or create a failed/post-quota alternate request.
    segment, a minimized rendering, and a further compact binding of it; D8
    only hardens D2's in-process append seam and D9 only validates in-process
    review inputs/results; D12 snapshots the run envelope before those governed
-   seams; D13 retains the accepted market request after preflight.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13 evidence cannot quote, reserve, book,
+   seams; D13 retains the accepted market request after preflight; D14 fixes
+   the connector configuration before preflight.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -596,4 +628,4 @@ provider-shaped field, or create a failed/post-quota alternate request.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14.

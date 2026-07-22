@@ -101,4 +101,7 @@ closed. The market input itself remains bounded synthetic data for its own
 parser, never a credential or live action. D13 preserves that parser's
 canonical preflight copy across the runner's asynchronous audit, quota, and
 run seams, so a caller cannot mutate the original input into a different
-proposal or provider-shaped request after ingress.
+proposal or provider-shaped request after ingress. D14 also copies the
+connector's exact scalar configuration at construction, so a caller cannot
+flip its live gate, limit, or inject a credential-shaped field after
+preflight; malformed configuration remains unavailable before audit or quota.

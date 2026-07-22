@@ -359,6 +359,56 @@ test('D13 retains the canonical market preflight input across async runner seams
   assert.equal(setup.quota.requests.length, 1)
 })
 
+test('D14 snapshots connector configuration before preflight and rejects shaped or credential-like configuration before audit or quota', async () => {
+  const mutableConfig = { ...limits }
+  const setup = marketRunner(mutableConfig)
+  const run = setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
+
+  // Preflight has already used the construction-time scalar copy. A caller
+  // cannot flip the live gate or lower a limit during audit/quota awaits.
+  mutableConfig.liveEnabled = true
+  mutableConfig.maxItems = 0
+  mutableConfig.maxCapacityUnits = 1
+
+  const result = await run
+  assert.equal((result.data as SyntheticMarketPlan).liveStatus, 'LIVE_DISABLED')
+  assert.equal(setup.audit.entries.length, 2)
+  assert.equal(setup.audit.entries[0]?.event.type, 'connector.run.requested')
+  assert.equal(setup.audit.entries[1]?.event.type, 'connector.run.succeeded')
+  assert.equal(setup.quota.requests.length, 1)
+
+  const hiddenCredential = { ...limits }
+  Object.defineProperty(hiddenCredential, 'providerCredential', { value: 'synthetic-not-accepted' })
+  let accessorRead = false
+  const accessorLimit = { ...limits }
+  Object.defineProperty(accessorLimit, 'maxItems', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('CONFIG_ACCESSOR_MUST_NOT_RUN') },
+  })
+  let proxyRead = false
+  const proxyConfig = new Proxy({ ...limits }, {
+    get() { proxyRead = true; throw new Error('CONFIG_PROXY_MUST_NOT_RUN') },
+  })
+  const invalidConfigs: unknown[] = [
+    { ...limits, providerCredential: 'synthetic-not-accepted' },
+    hiddenCredential,
+    accessorLimit,
+    proxyConfig,
+    Object.create(limits),
+  ]
+  for (const config of invalidConfigs) {
+    const rejected = marketRunner(config as SyntheticMarketConnectorConfig)
+    await assert.rejects(
+      () => rejected.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext }),
+      (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_GOVERNANCE_LIMITS_NOT_CONFIGURED',
+    )
+    assert.equal(rejected.audit.entries.length, 0)
+    assert.equal(rejected.quota.requests.length, 0)
+  }
+  assert.equal(accessorRead, false)
+  assert.equal(proxyRead, false)
+})
+
 test('a distinct owner can audit a market review, but neither decision can authorize an execution', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
@@ -1265,6 +1315,7 @@ test('ADOS 10 controls are complete and explicitly prohibit egress and productio
   ])
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D12 snapshots the runner envelope/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D13 retains the market preflight snapshot/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D14 fixes the connector configuration snapshot/i)
   assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
   assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
