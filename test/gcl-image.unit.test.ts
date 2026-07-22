@@ -8,6 +8,7 @@ import { GCL_IMAGE_OWNER_REVIEW_MODULE_ID, InMemoryImageOwnerReviewLedger, Prism
 import type { GclPersistence, GclRecordTransaction } from '../src/gcl/persistence.js'
 import { imageDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
+import type { RunConnectorRequest } from '../src/gcl/registry.js'
 import type { TextToImageData } from '../src/gcl/image.js'
 import type { ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
 import { isInternalGclModuleId } from '../src/validation.js'
@@ -16,6 +17,11 @@ const now = () => new Date('2026-07-22T12:00:00.000Z')
 const context: ConnectorRunContext = {
   product: 'sectrai-gm3-test', workspaceId: 'image-workspace', actor: 'maker@example.test', correlationId: 'gm3-image-test-001', ownerApproved: true,
   scopes: ['image:generate'], costCapCents: 20, requestedItems: 2, now,
+}
+
+function governedRunRequest(input: unknown, overrides: Partial<RunConnectorRequest> = {}): RunConnectorRequest {
+  const { now: _, ...requestContext } = context
+  return { connectorId: 'image-tti', input, ...requestContext, ...overrides }
 }
 
 class TestQuota implements ConnectorQuota {
@@ -77,7 +83,7 @@ function configuredConnector(): SyntheticImageTtiConnector {
 
 async function governedIssuedRun(audit: InMemoryHashChainAuditLog, input: { prompt: string; negativePrompt?: string } = { prompt: 'A child-friendly solar system poster' }) {
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
-  const result = await runner.run({ connectorId: 'image-tti', input, ...context }) as ConnectorResult<TextToImageData>
+  const result = await runner.run(governedRunRequest(input)) as ConnectorResult<TextToImageData>
   const candidates = new InMemoryImageCandidateLedger(audit)
   await issueSyntheticImageCandidates(result, candidates, context)
   const candidate = result.data.candidates[0]
@@ -112,7 +118,7 @@ test('family-unsafe image requests are rejected in preflight without audit or qu
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, quota, now)
-  await assert.rejects(() => runner.run({ connectorId: 'image-tti', input: { prompt: 'An explicit adult scene' }, ...context }), (error: unknown) => error instanceof FamilySafetyError)
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'An explicit adult scene' })), (error: unknown) => error instanceof FamilySafetyError)
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
 })
@@ -121,7 +127,7 @@ test('family-safety tokenization catches Turkish terms, avoids substring false p
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, quota, now)
-  await assert.rejects(() => runner.run({ connectorId: 'image-tti', input: { prompt: 'Çocuklara yönelik şiddet sahnesi' }, ...context }), FamilySafetyError)
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'Çocuklara yönelik şiddet sahnesi' })), FamilySafetyError)
   await assert.rejects(() => configuredConnector().run({ prompt: 'A friendly robot\u200B reading a book' }, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_TTI_PROMPT')
   const safe = await configuredConnector().run({ prompt: 'A child-friendly gunmetal blue robot poster' }, context)
   assert.equal(safe.data.candidates.length, 2)
@@ -144,7 +150,7 @@ test('an injected family-safety hook is mandatory before audit or quota reservat
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
-  await assert.rejects(() => runner.run({ connectorId: 'image-tti', input: { prompt: 'A friendly blue robot reading a book' }, ...context }), (error: unknown) => error instanceof FamilySafetyError && error.message === 'OWNER_POLICY_DENIED')
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'A friendly blue robot reading a book' })), (error: unknown) => error instanceof FamilySafetyError && error.message === 'OWNER_POLICY_DENIED')
   assert.equal(policyCalls, 1)
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
@@ -171,7 +177,7 @@ test('malformed safety hooks and free-form policy reasons fail closed without le
     familySafetyFilter: { id: 'test-policy', assess: () => ({ allowed: false, reason: `DENIED:${privateText}` }) },
   })
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([unsafeReason]), audit, quota, now)
-  await assert.rejects(() => runner.run({ connectorId: 'image-tti', input: { prompt: privateText }, ...context }), (error: unknown) => error instanceof FamilySafetyError && error.message === 'FAMILY_SAFETY_FILTER_REJECTED')
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: privateText })), (error: unknown) => error instanceof FamilySafetyError && error.message === 'FAMILY_SAFETY_FILTER_REJECTED')
   assert.equal(JSON.stringify(audit.entries).includes(privateText), false)
   assert.equal(quota.requests.length, 0)
 })
@@ -183,16 +189,16 @@ test('GM3 run requires owner gate, cost cap, scope, safe identity, quota, audit 
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, quota, now)
 
-  await assert.rejects(() => runner.run({ connectorId: 'image-tti', input: { prompt: 'A friendly blue robot reading a book' }, ...context, ownerApproved: false }), (error: unknown) => error instanceof OwnerGateError)
-  await assert.rejects(() => runner.run({ connectorId: 'image-tti', input: { prompt: 'A friendly blue robot reading a book' }, ...context, costCapCents: 21 }), (error: unknown) => error instanceof CostCapError)
-  await assert.rejects(() => runner.run({ connectorId: 'image-tti', input: { prompt: 'A friendly blue robot reading a book' }, ...context, scopes: ['image:read'] }), (error: unknown) => error instanceof ScopeError)
-  await assert.rejects(() => runner.run({ connectorId: 'image-tti', input: { prompt: 'A friendly blue robot reading a book' }, ...context, correlationId: 'unsafe/correlation-id' }), (error: unknown) => error instanceof ConnectorInputError)
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'A friendly blue robot reading a book' }, { ownerApproved: false })), (error: unknown) => error instanceof OwnerGateError)
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'A friendly blue robot reading a book' }, { costCapCents: 21 })), (error: unknown) => error instanceof CostCapError)
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'A friendly blue robot reading a book' }, { scopes: ['image:read'] })), (error: unknown) => error instanceof ScopeError)
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'A friendly blue robot reading a book' }, { correlationId: 'unsafe/correlation-id' })), (error: unknown) => error instanceof ConnectorInputError)
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
 
   const privatePrompt = 'PRIVATE-OWNER-PROMPT-ONLY: friendly blue robot reading a book'
   const privateNegativePrompt = 'PRIVATE-NEGATIVE-PROMPT-ONLY: blurry composition'
-  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: privatePrompt, negativePrompt: privateNegativePrompt, width: 512, height: 1024 }, ...context }) as ConnectorResult<TextToImageData>
+  const result = await runner.run(governedRunRequest({ prompt: privatePrompt, negativePrompt: privateNegativePrompt, width: 512, height: 1024 })) as ConnectorResult<TextToImageData>
   assert.equal(result.data.mode, LIVE_DISABLED)
   assert.equal(result.data.candidates.length, 2)
   assert.equal(result.data.candidates[0]?.ownerReview.status, 'pending')
@@ -238,6 +244,89 @@ test('GM3 run requires owner gate, cost cap, scope, safe identity, quota, audit 
   assert.equal(audit.entries[3]?.event.correlationId, context.correlationId)
 })
 
+test('governed image runs accept only a closed request envelope without reading accessors', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, quota, now)
+  const privateValue = 'PRIVATE-UNTRUSTED-RUN-FIELD'
+
+  const accessorRequest = governedRunRequest({ prompt: 'A child-friendly solar system poster' }) as Record<string, unknown>
+  let getterRead = false
+  Object.defineProperty(accessorRequest, 'input', { enumerable: true, get: () => { getterRead = true; return { prompt: privateValue } } })
+  await assert.rejects(() => runner.run(accessorRequest as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CONNECTOR_RUN_REQUEST')
+  assert.equal(getterRead, false)
+
+  await assert.rejects(() => runner.run({ ...governedRunRequest({ prompt: 'A child-friendly solar system poster' }), unexpected: privateValue } as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CONNECTOR_RUN_REQUEST')
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' }, { ownerApproved: 'true' as never })), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CONNECTOR_RUN_REQUEST')
+  const sparseScopes: string[] = []
+  sparseScopes[1] = 'image:generate'
+  await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' }, { scopes: sparseScopes })), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CONNECTOR_RUN_REQUEST')
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+  assert.equal(JSON.stringify(audit.entries).includes(privateValue), false)
+})
+
+test('governed image runs reject accessor capabilities and malformed clocks before reservation', async () => {
+  const request = governedRunRequest({ prompt: 'A child-friendly solar system poster' })
+  let auditGetterRead = false
+  const accessorAudit = {}
+  Object.defineProperty(accessorAudit, 'append', { enumerable: true, get: () => { auditGetterRead = true; return async () => ({ hash: 'a'.repeat(64) }) } })
+  const quota = new TestQuota()
+  const auditRunner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), accessorAudit as never, quota, now)
+  await assert.rejects(() => auditRunner.run(request), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_LOG_UNAVAILABLE')
+  assert.equal(auditGetterRead, false)
+  assert.equal(quota.requests.length, 0)
+
+  const audit = new InMemoryHashChainAuditLog()
+  let quotaGetterRead = false
+  const accessorQuota = {}
+  Object.defineProperty(accessorQuota, 'consume', { enumerable: true, get: () => { quotaGetterRead = true; return async () => undefined } })
+  const quotaRunner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, accessorQuota as never, now)
+  await assert.rejects(() => quotaRunner.run(request), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_QUOTA_UNAVAILABLE')
+  assert.equal(quotaGetterRead, false)
+  assert.equal(audit.entries.length, 0)
+
+  const invalidClockAudit = new InMemoryHashChainAuditLog()
+  const invalidClockQuota = new TestQuota()
+  const clockRunner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), invalidClockAudit, invalidClockQuota, () => new Date('invalid'))
+  await assert.rejects(() => clockRunner.run(request), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_CLOCK_INVALID')
+  assert.equal(invalidClockAudit.entries.length, 0)
+  assert.equal(invalidClockQuota.requests.length, 0)
+})
+
+test('post-reservation runner failures redact error text and reject accessor-shaped results', async () => {
+  const privateError = 'PRIVATE-CONNECTOR-FAILURE-DO-NOT-AUDIT'
+  const failingConnector = {
+    id: 'synthetic-image-failure', kind: 'media-generation' as const, authKind: 'owner-token' as const, scopes: ['image:generate'],
+    run: async () => { throw new Error(privateError) },
+  }
+  const failureAudit = new InMemoryHashChainAuditLog()
+  const failureQuota = new TestQuota()
+  const failureRunner = new GovernedConnectorRunner(new ConnectorRegistry([failingConnector]), failureAudit, failureQuota, now)
+  await assert.rejects(() => failureRunner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' }, { connectorId: failingConnector.id })), (error: unknown) => error instanceof Error && error.message === privateError)
+  assert.equal(failureQuota.requests.length, 1)
+  assert.equal(failureAudit.entries.length, 2)
+  assert.equal(failureAudit.entries[1]?.event.type, 'connector.run.failed')
+  assert.equal(failureAudit.entries[1]?.event.detail.error, 'CONNECTOR_RUN_FAILED')
+  assert.equal(JSON.stringify(failureAudit.entries).includes(privateError), false)
+
+  let provenanceGetterRead = false
+  const malformedConnector = {
+    id: 'synthetic-image-malformed-result', kind: 'media-generation' as const, authKind: 'owner-token' as const, scopes: ['image:generate'],
+    run: async () => {
+      const result = { data: {}, confidence: 0 }
+      Object.defineProperty(result, 'provenance', { enumerable: true, get: () => { provenanceGetterRead = true; return {} } })
+      return result as never
+    },
+  }
+  const malformedAudit = new InMemoryHashChainAuditLog()
+  const malformedRunner = new GovernedConnectorRunner(new ConnectorRegistry([malformedConnector]), malformedAudit, new TestQuota(), now)
+  await assert.rejects(() => malformedRunner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' }, { connectorId: malformedConnector.id })), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'INVALID_CONNECTOR_RESULT')
+  assert.equal(provenanceGetterRead, false)
+  assert.equal(malformedAudit.entries.length, 2)
+  assert.equal(malformedAudit.entries[1]?.event.detail.error, 'CONNECTOR_RUN_FAILED')
+})
+
 test('owner rejection is terminal, scope-bound, auditable, and never returns a media artifact', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const reviews = new InMemoryImageOwnerReviewLedger(audit)
@@ -262,7 +351,7 @@ test('owner rejection is terminal, scope-bound, auditable, and never returns a m
 test('terminal review refuses an orphan direct ledger append before it writes an audit or receipt', async () => {
   const persistence = new TestGclPersistence()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), new PrismaHashChainAuditLog(persistence), new TestQuota(), now)
-  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   const candidate = result.data.candidates[0]
   assert.ok(candidate)
   const ledger = new PrismaImageOwnerReviewLedger(persistence)
@@ -323,7 +412,7 @@ test('expired candidates cannot be issued or terminally reviewed, including at t
   const connector = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 60 })
   const audit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, new TestQuota(), issuedAt)
-  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   const candidate = result.data.candidates[0]
   assert.ok(candidate)
   assert.equal(candidate.ownerReview.reviewExpiresAt, '2026-07-22T12:01:00.000Z')
@@ -343,7 +432,7 @@ test('expired candidates cannot be issued or terminally reviewed, including at t
 test('candidate issuance and terminal review cannot be backdated across the governed lineage', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
-  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   const earlier = () => new Date('2026-07-22T11:59:59.999Z')
   const candidates = new InMemoryImageCandidateLedger(audit)
   await assert.rejects(() => issueSyntheticImageCandidates(result, candidates, { ...context, now: earlier }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_ISSUANCE_BEFORE_RUN_SUCCESS')
@@ -373,7 +462,7 @@ test('candidate issuance rejects direct output, binds the full redacted candidat
 
   const concurrentAudit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), concurrentAudit, new TestQuota(), now)
-  const concurrentResult = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const concurrentResult = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   const forgedResult = structuredClone(concurrentResult)
   forgedResult.provenance.auditHash = 'f'.repeat(64)
   await assert.rejects(() => issueSyntheticImageCandidates(forgedResult, new InMemoryImageCandidateLedger(concurrentAudit), context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_RUN_AUDIT_NOT_FOUND')
@@ -413,7 +502,7 @@ test('direct image contexts and ledger capability boundaries reject accessors wi
 
   const audit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
-  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   let issuanceContextGetterRead = false
   const issuanceContext = {}
   Object.defineProperty(issuanceContext, 'product', { enumerable: true, get: () => { issuanceContextGetterRead = true; return context.product } })
@@ -455,7 +544,7 @@ test('direct image contexts and ledger capability boundaries reject accessors wi
 test('test-only image ledgers fail closed on accessor-backed audit seams and responses', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
-  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
 
   const inheritedDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'appendIssuance')
   let inheritedAppendCalled = false
@@ -542,7 +631,7 @@ test('image ledger event scopes reject accessor arrays before reading a scope va
 test('candidate issuance rejects accessor-shaped candidate sets before it reads an untrusted array item', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
-  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   let getterRead = false
   const candidates: unknown[] = []
   Object.defineProperty(candidates, '0', { enumerable: true, get: () => { getterRead = true; return result.data.candidates[0] } })
@@ -556,7 +645,7 @@ test('candidate issuance rejects accessor-shaped candidate sets before it reads 
 test('the candidate ledger rejects accessor-shaped issuance entries before it reads an entry', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
-  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   let getterRead = false
   const entries: unknown[] = []
   Object.defineProperty(entries, '0', { enumerable: true, get: () => { getterRead = true; return { candidateId: 'synthetic-image-00000000000000000000', fingerprint: '0'.repeat(64) } } })
@@ -725,7 +814,7 @@ test('an accessor-shaped stored audit record array fails closed without reading 
 test('durable owner-review ledger commits one redacted receipt with its audit event and rolls back invalid state', async () => {
   const persistence = new TestGclPersistence()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), new PrismaHashChainAuditLog(persistence), new TestQuota(), now)
-  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   const candidates = new PrismaImageCandidateLedger(persistence)
   await issueSyntheticImageCandidates(result, candidates, context)
   const reviews = new PrismaImageOwnerReviewLedger(persistence)
@@ -742,7 +831,7 @@ test('durable owner-review ledger commits one redacted receipt with its audit ev
 
   const corrupt = new TestGclPersistence()
   const corruptRunner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), new PrismaHashChainAuditLog(corrupt), new TestQuota(), now)
-  const corruptResult = await corruptRunner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const corruptResult = await corruptRunner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   const corruptCandidates = new PrismaImageCandidateLedger(corrupt)
   await issueSyntheticImageCandidates(corruptResult, corruptCandidates, context)
   corrupt.records.push({ id: 'bad-receipt', product: context.product, workspaceId: context.workspaceId, moduleId: GCL_IMAGE_OWNER_REVIEW_MODULE_ID, values: { unexpected: true }, createdAt: now() })
@@ -755,7 +844,7 @@ test('durable owner-review ledger commits one redacted receipt with its audit ev
 test('durable candidate receipts fail closed when their issuance timestamp no longer matches the audit event', async () => {
   const persistence = new TestGclPersistence()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), new PrismaHashChainAuditLog(persistence), new TestQuota(), now)
-  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   const candidates = new PrismaImageCandidateLedger(persistence)
   await issueSyntheticImageCandidates(result, candidates, context)
   const stored = persistence.records.find((record) => record.moduleId === GCL_IMAGE_CANDIDATE_MODULE_ID)
