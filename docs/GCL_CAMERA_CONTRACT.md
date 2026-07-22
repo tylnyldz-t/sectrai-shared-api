@@ -198,21 +198,37 @@ does not add a context API, route, storage read/write, quota use, audit append,
 credential, or capability. In particular, an invalid context is rejected
 before `independentlyReviewCameraObservation()` can append its review event.
 
+## D9 — strict local review-clock boundary
+
+`independentlyReviewCameraObservation()` has one documented callable
+caller-context value: the local `now` clock. D9 rejects a Proxy clock function
+before it is invoked. Its return value must be a non-Proxy native `Date` with a
+finite timestamp. The timestamp is rendered with `Date`'s own methods, not a
+caller-provided `toISOString` override. A thrown clock, invalid `Date`, forged
+date-shaped object, or Proxy-wrapped `Date` therefore fails closed before the
+owner-review audit append.
+
+D9 does not add a time service, route, storage read/write, quota use,
+credential, delivery, handoff, notification, publication, action, or durable
+state. It only prevents malformed caller clock values from reaching the
+existing synthetic review audit record. The clock is not an authorization or a
+capability; all D1–D9 digests remain unkeyed mutation checks.
+
 ## Audit and storage boundary
 
-The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1/D2/D3/D4/D5/D6/D7/D8 add no migration and no new persistence model.
+The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1/D2/D3/D4/D5/D6/D7/D8/D9 add no migration and no new persistence model.
 
 ## ADOS 10-rule conformance
 
 1. Product/workspace digest binding keeps each run and review packet scoped to one data plane.
 2. Only minimized built-in synthetic fixture metadata is accepted.
 3. The front door default-denies absent configuration; `LIVE_DISABLED` is permanent.
-4. Unknown, hidden, symbol, Proxy, and accessor-shaped input, evidence, and D8 caller-context fields—plus media, device identifiers, personal identity, and biometric inference—are excluded.
+4. Unknown, hidden, symbol, Proxy, and accessor-shaped input, evidence, and D8 caller-context fields—including D9 clock values—plus media, device identifiers, personal identity, and biometric inference—are excluded.
 5. Purpose-bound synthetic KVKK consent must match the fixture.
 6. Owner approval plus maker–checker separation are required; D1 rejects the original maker as reviewer and D2 minimizes that review evidence.
 7. The code has no device SDK, transport, network client, credential, or provider interface.
-8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, D6/D7 only minimize and recheck evidence derived from it, and D8 rejects shaped caller context before review append.
-9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate evidence and D8 validates context without executing accessors or adding a write path.
+8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, D6/D7 only minimize and recheck evidence derived from it, and D8/D9 reject shaped context or an invalid local clock before review append.
+9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate evidence and D8/D9 validate context and the local clock without evaluating accessors, Proxy traps, or adding a write path.
 10. This branch contains no live launch, production migration, main/prod write, or camera hardware path.
 
 ## Explicit non-goals

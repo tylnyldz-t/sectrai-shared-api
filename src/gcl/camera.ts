@@ -28,12 +28,12 @@ export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every audit and review packet is bound to one product and workspace digest.' },
   { id: 'ADOS-02', control: 'MINIMIZED_SYNTHETIC_FIXTURE', enforcement: 'Only an allowlisted synthetic fixture ID and fixed finding are resolved.' },
   { id: 'ADOS-03', control: 'DEFAULT_DENY_LIVE_DISABLED', enforcement: 'Synthetic enablement and positive limits are required; a live flag is rejected.' },
-  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown, hidden, symbol, proxy, or accessor-shaped input, evidence, and D8 caller-context fields, media, device identifiers, identity resolution, and biometric inference are denied.' },
+  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown, hidden, symbol, proxy, or accessor-shaped input, evidence, and D8 caller-context fields—including D9 clock values—plus media, device identifiers, identity resolution, and biometric inference are denied.' },
   { id: 'ADOS-05', control: 'PURPOSE_BOUND_CONSENT', enforcement: 'A granted synthetic KVKK consent assertion must match the selected fixture and purpose.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'The governed run requires owner approval and separate request/check actors; review rejects the original maker.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIAL_INTERFACE', enforcement: 'The adapter has no camera SDK, network client, stream URL, credential, or provider configuration surface.' },
-  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment, D6/D7 only render minimized evidence, and D8 rejects shaped caller context before review audit append.' },
-  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6/D7 witnesses record only an approved or rejected decision; D8 only validates their caller context; action, notification, publication, and handoff remain not sent.' },
+  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment, D6/D7 only render minimized evidence, and D8/D9 reject shaped context or an invalid local clock before review audit append.' },
+  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6/D7 witnesses record only an approved or rejected decision; D8/D9 validate caller context and the local clock only; action, notification, publication, and handoff remain not sent.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or camera connection is part of this connector.' },
 ])
 
@@ -384,8 +384,30 @@ function cameraReviewAuditWitnessContext(context: Pick<ConnectorRunContext, 'pro
 function independentCameraReviewContext(context: ConnectorRunContext): { product: string; workspaceId: string; requestedBy: string; correlationId: string; costCapCents: number; requestedItems: number; now: () => Date } {
   const candidate = cameraReviewContextRecord(context)
   const witness = cameraReviewAuditWitnessContextFromRecord(candidate)
-  if (typeof candidate.now !== 'function') throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CONTEXT')
+  if (typeof candidate.now !== 'function' || nodeTypes.isProxy(candidate.now)) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CONTEXT')
   return { ...witness, now: candidate.now as () => Date }
+}
+
+/**
+ * D9 makes the only callable review-context value fail closed. A local clock
+ * may supply a native, finite Date only; it cannot provide a forged
+ * toISOString implementation or a Proxy-shaped value to the audit append.
+ */
+function localReviewOccurredAt(now: () => Date): string {
+  let candidate: unknown
+  try {
+    candidate = now()
+  } catch {
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CLOCK')
+  }
+  if (!nodeTypes.isDate(candidate) || nodeTypes.isProxy(candidate)) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CLOCK')
+  try {
+    if (!Number.isFinite(Date.prototype.getTime.call(candidate))) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CLOCK')
+    return canonicalIsoInstant(Date.prototype.toISOString.call(candidate), 'INVALID_CAMERA_REVIEW_CLOCK')
+  } catch (error) {
+    if (error instanceof ConnectorInputError) throw error
+    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CLOCK')
+  }
 }
 
 function inputFrom(value: unknown): CameraObservationInput {
@@ -1062,7 +1084,7 @@ export async function independentlyReviewCameraObservation(result: CameraObserva
   const normalizedRequester = reviewContext.requestedBy
   const normalized = validateCameraObservationForReview(result, reviewContext)
   if (normalizedReviewer === normalizedRequester) throw new MakerCheckerError('CAMERA_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
-  const occurredAt = reviewContext.now().toISOString()
+  const occurredAt = localReviewOccurredAt(reviewContext.now)
   const audit = await auditLog.append({
     type: 'connector.camera.owner_reviewed', connectorId: CAMERA_CONNECTOR_ID,
     product: reviewContext.product, workspaceId: reviewContext.workspaceId, requestedBy: normalizedRequester, checkedBy: normalizedReviewer,

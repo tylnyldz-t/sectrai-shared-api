@@ -739,6 +739,53 @@ test('D8 caller review context rejects hidden, symbol, inherited, accessor, Prox
   assert.equal(setup.audit.entries.length, 3)
 })
 
+test('D9 review clock accepts only a finite native Date and fails closed before audit append', async () => {
+  const setup = runnerFor()
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, { ...context, now: () => { throw new Error('CLOCK_MUST_FAIL_CLOSED') } }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_REVIEW_CLOCK',
+  )
+
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, { ...context, now: () => new Date('not-a-date') }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_REVIEW_CLOCK',
+  )
+
+  let forgedToISOStringRead = false
+  const forgedClock = {
+    toISOString() { forgedToISOStringRead = true; throw new Error('FORGED_CLOCK_MUST_NOT_RUN') },
+  } as unknown as Date
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, { ...context, now: () => forgedClock }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_REVIEW_CLOCK',
+  )
+  assert.equal(forgedToISOStringRead, false)
+
+  let returnedClockTrapRead = false
+  const proxyClock = new Proxy(new Date('2026-07-22T12:00:00.000Z'), {
+    get() { returnedClockTrapRead = true; throw new Error('CLOCK_PROXY_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, { ...context, now: () => proxyClock }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_REVIEW_CLOCK',
+  )
+  assert.equal(returnedClockTrapRead, false)
+
+  let clockFunctionApplied = false
+  const proxyNow = new Proxy(now, {
+    apply() { clockFunctionApplied = true; throw new Error('CLOCK_FUNCTION_PROXY_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, { ...context, now: proxyNow }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_REVIEW_CONTEXT',
+  )
+  assert.equal(clockFunctionApplied, false)
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+  assert.equal(setup.audit.entries.length, 2)
+})
+
 test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
   const setup = runnerFor()
   const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
@@ -801,8 +848,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields—including D9 clock values/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 
