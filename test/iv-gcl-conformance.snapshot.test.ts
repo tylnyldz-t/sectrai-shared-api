@@ -5,7 +5,7 @@ import { posix as path } from 'node:path'
 import test from 'node:test'
 import ts from 'typescript'
 
-type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16' | 'D17'
+type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16' | 'D17' | 'D18'
 
 type PinnedClosureBlob = {
   path: string
@@ -26,12 +26,16 @@ type Snapshot = {
   batch: AuditBatch
   name: string
   revision: string
+  /** When supplied, this snapshot must be the exact direct Git child of it. */
+  parentRevision?: string
   directory: string
   connectorPath: string
   connectorBlob: string
   registryBlob: string
   hardDeniesLiveOptIn: boolean
   quotaFailureAudited: boolean
+  /** A truthy runtime value must not substitute for an explicit owner approval. */
+  strictOwnerApproval?: boolean
   /** A package module gets an exact blob pin in addition to its closure scan. */
   pinnedClosureBlobs?: readonly PinnedClosureBlob[]
   /** A package companion requires review even when it is not imported by the public connector. */
@@ -46,7 +50,7 @@ const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
 const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
 
 /*
- * These are immutable local Git snapshots from the D1 through D17 audit batches.
+ * These are immutable local Git snapshots from the D1 through D18 audit batches.
  * Every source read below is `git show <revision>:<path>`, never the mutable
  * worktree file. This fixture does not import target runtime code, load an
  * env file, open a socket, or make a network request. A missing worktree,
@@ -187,6 +191,14 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D17', name: 'Translation', revision: 'a57b677', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '46280bb34960ee1ae5794bd8ee952ccfc1262708', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: '3bc0b92de9e503f6f0d4a4384e619776ab6cff74' }] },
   { batch: 'D17', name: 'Language education', revision: '7f21473', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: 'c016c22ff9c9dc8fd017e18b5c237f173ce9b6f5', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
   { batch: 'D17', name: 'Camera', revision: '1adcf01', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '41e83266ea7f68a06fdf3220137943c4276abb47', registryBlob: '5fc1d513d6ade75defca073e34c2a7d6cd92ee50', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/audit.ts', blob: 'f1d877895b7ba805b3359a40cdd6e76b3c36bf24' }, { path: 'src/gcl/errors.ts', blob: '0cb36107c3f6844d399c7fe1a11f71b07b2a0951' }] },
+  { batch: 'D18', name: 'RA OCR', revision: 'a9e040a', parentRevision: '3ff9d1d', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: '6fa36ca1fe83aaee1bb15d97cf2a256e35a67b95', registryBlob: '2407ff38734546832bd9a8e2e97fae488198e7f9', hardDeniesLiveOptIn: false, quotaFailureAudited: false, strictOwnerApproval: false },
+  { batch: 'D18', name: 'RA image', revision: '111bcb8', parentRevision: '2e021b3', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: 'bf63ec84ac4f49d2a96be90c30b77b186e065cae', registryBlob: '6faf3cd1be37336d7cdc4181a81d90199aa2e9a2a2', hardDeniesLiveOptIn: false, quotaFailureAudited: true, strictOwnerApproval: true },
+  { batch: 'D18', name: 'RA 3D/game', revision: 'f3dd0b9', parentRevision: 'a9dbbe6', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: 'eccfc749f420702b6c7f206f72d54241a71ce05d', registryBlob: '400933ad278d07687541967370fae5ef584abbc9', hardDeniesLiveOptIn: false, quotaFailureAudited: false, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/result-boundary.ts', blob: 'cf6127caa4fb7549a73f92acdff69e6d7d7cf172' }] },
+  { batch: 'D18', name: 'RA market', revision: '441f4b7', parentRevision: 'f501388', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: 'b9fa623e97bc2913955ed6993b6e1ba51ac70966', registryBlob: '1221f840ebab9e1cb893c22b799eb257222dd9de', hardDeniesLiveOptIn: true, quotaFailureAudited: false, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: 'af015f263316247e31302ae615ae02cef03d06f0' }] },
+  { batch: 'D18', name: 'RFID', revision: '9fb39bb', parentRevision: '7ee3b11', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: 'cf77ae105725ef7b9580afd4e0faf745547d16de', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true, strictOwnerApproval: false },
+  { batch: 'D18', name: 'Translation', revision: '564b7b0', parentRevision: 'a57b677', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '8b614f48e48dea12b2ea94b1d7ab3565f19b297d', registryBlob: '34e9d79cf1a748e63c2b0de8ac65d351e2339c21', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: false },
+  { batch: 'D18', name: 'Language education', revision: 'c297207', parentRevision: '7f21473', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '3999b859dd5aec06000563f679634bd50a44ca36', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: '3880778017fa930b58dee48e4a45af2b755ce607' }] },
+  { batch: 'D18', name: 'Camera', revision: '7591c86', parentRevision: '1adcf01', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '41e83266ea7f68a06fdf3220137943c4276abb47', registryBlob: '5fc1d513d6ade75defca073e34c2a7d6cd92ee50', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/audit.ts', blob: 'f1d877895b7ba805b3359a40cdd6e76b3c36bf24' }, { path: 'src/gcl/errors.ts', blob: '0cb36107c3f6844d399c7fe1a11f71b07b2a0951' }] },
 ]
 
 function repositoryFor(snapshot: Snapshot): string {
@@ -521,10 +533,28 @@ function ownerDenialPrecedesReservations(registry: string): boolean {
   return ownerGate >= 0 && ownerGate < preflight && preflight < requestedAudit && requestedAudit < quota
 }
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 source fixture pins every audited connector and its governance runner to local Git objects', () => {
+/**
+ * A deny-by-default owner gate needs either an explicit `=== true` check, or
+ * a runtime boolean validation that precedes a conventional falsy check. A
+ * TypeScript annotation alone is erased and cannot protect a JavaScript
+ * caller that supplies a truthy string or object.
+ */
+function strictOwnerApprovalGate(registry: string): boolean {
+  const explicitGate = /if \(\s*(?:request|context|safeRequest|validated|normalizedRequest)\.ownerApproved\s*!==\s*true\s*\) throw new OwnerGateError/.test(registry)
+  if (explicitGate) return true
+  const runtimeBooleanValidation = /typeof\s+(?:request|ownerApproved)\s*(?:\.|\?\.)?ownerApproved\s*!==\s*['"]boolean['"]|typeof\s+ownerApproved\s*!==\s*['"]boolean['"]/.test(registry)
+  const falsyGate = /if \(\s*!\s*(?:request|context|safeRequest|validated|normalizedRequest)\.ownerApproved\s*\) throw new OwnerGateError/.test(registry)
+  return runtimeBooleanValidation && falsyGate
+}
+
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
     assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
+    if (snapshot.parentRevision) {
+      const parentRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^`]).trim()
+      assert.equal(parentRevision.startsWith(snapshot.parentRevision), true, `${snapshot.name} is not the exact direct child of ${snapshot.parentRevision}`)
+    }
     assert.equal(gitBlobId(sourceAt(snapshot, snapshot.connectorPath)), snapshot.connectorBlob, `${snapshot.name} connector source changed from ${snapshot.revision}`)
     assert.equal(gitBlobId(sourceAt(snapshot, 'src/gcl/registry.ts')), snapshot.registryBlob, `${snapshot.name} runner source changed from ${snapshot.revision}`)
     for (const closureBlob of snapshot.pinnedClosureBlobs ?? []) {
@@ -538,7 +568,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 source fixture 
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
     const closure = [...sourceClosure(snapshot).values()].join('\n')
@@ -557,7 +587,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 synthetic sourc
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
@@ -771,4 +801,54 @@ test('D17 audit-receipt edge accepts only a bounded receipt and never continues 
   assert.doesNotMatch(registry, /this\.auditLog\.append\(/, 'D17 governed runner must not bind an unvalidated audit receipt')
   assert.doesNotMatch(connector, /\bauditLog\.append\(/, 'D17 camera review must not bind an unvalidated audit receipt')
   assert.match(registry, /if \(error instanceof AuditReceiptError\) throw error/, 'D17 malformed terminal receipt must stop without appending a second failure transition')
+})
+
+test('D18 direct-successor package preserves immutable lineage and classifies truthy owner-approval bypasses fail closed', () => {
+  const d18 = snapshots.filter((snapshot) => snapshot.batch === 'D18')
+  assert.equal(d18.length, 8, 'D18 must cover the eight direct successor packages')
+
+  for (const snapshot of d18) {
+    assert.notEqual(snapshot.parentRevision, undefined, `${snapshot.name} must name its audited parent`)
+    const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
+    assert.equal(strictOwnerApprovalGate(registry), snapshot.strictOwnerApproval, `${snapshot.name} strict owner-approval classification changed`)
+  }
+
+  assert.equal(strictOwnerApprovalGate('if (!request.ownerApproved) throw new OwnerGateError()'), false, 'an erased TypeScript type cannot reject a truthy owner value')
+  assert.equal(strictOwnerApprovalGate("if (typeof request.ownerApproved !== 'boolean') throw new ConnectorInputError(); if (!validated.ownerApproved) throw new OwnerGateError()"), true, 'runtime boolean validation may precede a falsy owner gate')
+})
+
+test('D18 synthetic boundary additions remain proposal-only and reject the newly audited edge cases', () => {
+  const snapshot = (name: string): Snapshot => {
+    const found = snapshots.find((candidate) => candidate.batch === 'D18' && candidate.name === name)
+    assert.ok(found, `D18 ${name} snapshot must be present`)
+    return found
+  }
+
+  const ocr = sourceAt(snapshot('RA OCR'), 'src/gcl/vision.ts')
+  assert.match(ocr, /if \(!value \|\| typeof value !== 'object'\) return false\s+if \(isProxyObject\(value\)\) return false\s+if \(Array\.isArray\(value\)\) return false/, 'D18 OCR must reject a Proxy before Array or prototype inspection')
+  assert.match(ocr, /proxyObjectsAccepted !== false \|\| proxyArraysAccepted !== false/, 'D18 OCR packet must bind both Proxy rejection claims')
+
+  const threeD = sourceAt(snapshot('RA 3D/game'), 'src/gcl/result-boundary.ts')
+  assert.match(threeD, /input\.outputFormat === 'glb' \|\| input\.outputFormat === 'obj'/, 'D18 3D result review must retain a bounded requested format')
+  assert.match(threeD, /artifact\.outputFormat === input\.outputFormat/, 'D18 3D result review must reject an artifact-format substitution')
+
+  const market = snapshot('RA market')
+  const marketConnector = sourceAt(market, market.connectorPath)
+  const marketRegistry = sourceAt(market, 'src/gcl/registry.ts')
+  assert.match(marketConnector, /preflight\(input: SyntheticMarketInput, ctx: ConnectorRunContext\): SyntheticMarketInput \{\s+return validatedRequest\(this\.config, input, ctx\)/, 'D18 market preflight must return a canonical scalar-only request')
+  assert.match(marketRegistry, /const preparedInput = await connector\.preflight\?\.\(safeRequest\.input, context\)\s+const connectorInput = preparedInput === undefined \? safeRequest\.input : preparedInput/, 'D18 market runner must select the preflight snapshot before audit or quota')
+  assert.match(marketRegistry, /await connector\.run\(connectorInput, context\)/, 'D18 market runner must not pass the preflight caller object to run when a snapshot exists')
+
+  const rfid = sourceAt(snapshot('RFID'), 'src/gcl/rfid.ts')
+  assert.match(rfid, /execution: 'SYNTHETIC_EXCEPTION_WAIVER_BOUNDARY_REVIEW_PROPOSAL_ONLY_NOT_EXECUTED'/, 'D18 RFID waiver boundary must remain a non-executed proposal')
+  assert.match(rfid, /exceptionOrWaiverInput: 'NOT_ACCEPTED'/, 'D18 RFID waiver boundary must accept no waiver input')
+  assert.match(rfid, /ownerOrRoleBasedOverride: 'NOT_GRANTED'/, 'D18 RFID waiver boundary must not grant an owner or role override')
+
+  const translationRegistry = sourceAt(snapshot('Translation'), 'src/gcl/registry.ts')
+  assert.match(translationRegistry, /new Set\(value\)\.size !== value\.length/, 'D18 translation must reject duplicate scopes rather than silently deduplicating authority')
+
+  const languageEducation = sourceAt(snapshot('Language education'), 'src/gcl/language-education.ts')
+  assert.match(languageEducation, /const input = exact\(value, \['synthetic', 'reflectionRef', 'reflectionHash', 'locale', 'activity'\]\)/, 'D18 language reflection accepts only a bounded fixture reference')
+  assert.match(languageEducation, /reflection: 'NO_LEARNER_RESPONSE_SENTIMENT_OR_WELLBEING_INFERENCE'/, 'D18 language reflection must deny response and wellbeing inference')
+  assert.doesNotMatch(languageEducation, /reflectionText|learnerResponse|sentimentScore|wellbeingScore/, 'D18 language reflection must not add raw response or inference fields')
 })
