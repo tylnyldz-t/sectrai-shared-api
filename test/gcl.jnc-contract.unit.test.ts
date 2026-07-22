@@ -878,7 +878,17 @@ test('GM5/GM6 proxy-backed boundaries fail closed before reflection, reservation
     { prompt: 'A genuine local synthetic plan' }, directContext(),
   )
   const resultTraps = { count: 0 }
-  const proxyResult = trapCountingProxy({ data: genuine.data, provenance: genuine.provenance, confidence: 0 }, resultTraps)
+  // Native Promise resolution is required to read `then` once to distinguish
+  // a thenable. Count every data-reflection trap after that protocol probe.
+  const proxyResult = new Proxy({ data: genuine.data, provenance: genuine.provenance, confidence: 0 }, {
+    get(target, property, receiver) {
+      if (property !== 'then') resultTraps.count += 1
+      return Reflect.get(target, property, receiver)
+    },
+    getPrototypeOf(target) { resultTraps.count += 1; return Reflect.getPrototypeOf(target) },
+    getOwnPropertyDescriptor(target, property) { resultTraps.count += 1; return Reflect.getOwnPropertyDescriptor(target, property) },
+    ownKeys(target) { resultTraps.count += 1; return Reflect.ownKeys(target) },
+  })
   const resultConnector: Connector = {
     id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
     async run() { return proxyResult as unknown as ConnectorResult },
