@@ -187,6 +187,19 @@ field read, audit, quota reservation, or adapter result; this prevents a
 programmatic caller from changing a checked fixture through inheritance or a
 getter after preflight.
 
+## Canonical connector configuration
+
+Programmatic configuration is also a governance boundary. At connector
+construction it is copied once from an ordinary object containing only the
+documented synthetic gates and limits. It must use own, enumerable data
+properties only; inherited fields, accessors, symbols, hidden fields, throwing
+Proxies, and unknown fields fail closed as `TRANSLATION_CONFIGURATION_INVALID`
+before preflight, audit, or quota reservation. The captured configuration is
+immutable, so changing the object retained by a caller after construction
+cannot lower a cap, add a live-mode surface, or otherwise change a run between
+preflight and adapter execution. `liveOptInRequested` remains an explicit
+poison pill when present on an otherwise canonical configuration.
+
 ## Metadata-only checker workflow
 
 Successful runs create a proposal with:

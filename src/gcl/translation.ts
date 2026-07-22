@@ -19,6 +19,18 @@ export type TranslationConnectorConfig = {
   reviewTtlMs?: number
 }
 
+type TranslationConnectorConfigSnapshot = Readonly<TranslationConnectorConfig>
+
+const TRANSLATION_CONFIG_FIELDS = [
+  'syntheticEnabled',
+  'liveOptInRequested',
+  'liveState',
+  'maxCostCapCents',
+  'maxInputCharacters',
+  'maxAudioDurationMs',
+  'reviewTtlMs',
+] as const
+
 export type SyntheticAudioDescriptor = {
   synthetic: true
   sourceRef: string
@@ -122,6 +134,38 @@ function object(value: unknown): Record<string, unknown> {
     // Proxies can throw while their object envelope is inspected. Do not let a
     // caller-controlled runtime message cross the adapter boundary.
     throw new ConnectorInputError('TRANSLATION_NONCANONICAL_INPUT_OBJECT')
+  }
+}
+
+/**
+ * Connector governance is construction-time state, not caller-controlled run
+ * input. Capture only a plain, enumerable, data-property configuration once
+ * so a later mutation, getter, Proxy, or undeclared provider-like field cannot
+ * change the gates between preflight and the audited adapter run.
+ */
+function configSnapshot(value: unknown): { config: TranslationConnectorConfigSnapshot; invalid: boolean } {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+      throw new TypeError('noncanonical configuration')
+    }
+    const snapshot = Object.create(null) as TranslationConnectorConfig
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (typeof key !== 'string'
+        || !TRANSLATION_CONFIG_FIELDS.includes(key as typeof TRANSLATION_CONFIG_FIELDS[number])
+        || !descriptor
+        || !descriptor.enumerable
+        || !Object.hasOwn(descriptor, 'value')) {
+        throw new TypeError('noncanonical configuration')
+      }
+      Object.defineProperty(snapshot, key, { value: descriptor.value, enumerable: true })
+    }
+    return { config: Object.freeze(snapshot), invalid: false }
+  } catch {
+    // Do not expose a programmatic configuration getter or Proxy failure. The
+    // adapter remains unavailable until a canonical synthetic-only config is
+    // supplied.
+    return { config: Object.freeze({}) as TranslationConnectorConfigSnapshot, invalid: true }
   }
 }
 
@@ -246,7 +290,8 @@ function reviewExpiry(now: Date, reviewTtlMs: number): Date {
   return expiresAt
 }
 
-function configured(config: TranslationConnectorConfig, ctx: ConnectorRunContext): Required<Pick<TranslationConnectorConfig, 'maxCostCapCents' | 'maxInputCharacters' | 'maxAudioDurationMs' | 'reviewTtlMs'>> & { now: Date; reviewExpiresAt: Date } {
+function configured(config: TranslationConnectorConfigSnapshot, configurationInvalid: boolean, ctx: ConnectorRunContext): Required<Pick<TranslationConnectorConfig, 'maxCostCapCents' | 'maxInputCharacters' | 'maxAudioDurationMs' | 'reviewTtlMs'>> & { now: Date; reviewExpiresAt: Date } {
+  if (configurationInvalid) throw new ConnectorUnavailableError('TRANSLATION_CONFIGURATION_INVALID')
   // Treat the configuration *surface* as forbidden, not merely a true value.
   // A programmatic adapter construction must not turn an explicit false into a
   // future-compatible live-mode switch.
@@ -320,15 +365,22 @@ export class SyntheticTextTranslationConnector implements Connector<TextTranslat
   readonly scopes = ['translation:text'] as const
   readonly liveState = LIVE_DISABLED
 
-  constructor(private readonly config: TranslationConnectorConfig = {}) {}
+  private readonly config: TranslationConnectorConfigSnapshot
+  private readonly configurationInvalid: boolean
+
+  constructor(config: TranslationConnectorConfig = {}) {
+    const snapshot = configSnapshot(config)
+    this.config = snapshot.config
+    this.configurationInvalid = snapshot.invalid
+  }
 
   preflight(input: TextTranslationInput, ctx: ConnectorRunContext): void {
-    const limits = configured(this.config, ctx)
+    const limits = configured(this.config, this.configurationInvalid, ctx)
     textInput(input, limits.maxInputCharacters)
   }
 
   async run(input: TextTranslationInput, ctx: ConnectorRunContext): Promise<ConnectorResult<TextTranslationData>> {
-    const limits = configured(this.config, ctx)
+    const limits = configured(this.config, this.configurationInvalid, ctx)
     const parsed = textInput(input, limits.maxInputCharacters)
     const data: TextTranslationData = {
       type: 'text-translation',
@@ -368,15 +420,22 @@ export class SyntheticSpeechTranslationConnector implements Connector<SpeechTran
   readonly scopes = ['translation:speech'] as const
   readonly liveState = LIVE_DISABLED
 
-  constructor(private readonly config: TranslationConnectorConfig = {}) {}
+  private readonly config: TranslationConnectorConfigSnapshot
+  private readonly configurationInvalid: boolean
+
+  constructor(config: TranslationConnectorConfig = {}) {
+    const snapshot = configSnapshot(config)
+    this.config = snapshot.config
+    this.configurationInvalid = snapshot.invalid
+  }
 
   preflight(input: SpeechTranslationInput, ctx: ConnectorRunContext): void {
-    const limits = configured(this.config, ctx)
+    const limits = configured(this.config, this.configurationInvalid, ctx)
     speechInput(input, limits.maxInputCharacters, limits.maxAudioDurationMs)
   }
 
   async run(input: SpeechTranslationInput, ctx: ConnectorRunContext): Promise<ConnectorResult<SpeechTranslationData>> {
-    const limits = configured(this.config, ctx)
+    const limits = configured(this.config, this.configurationInvalid, ctx)
     const parsed = speechInput(input, limits.maxInputCharacters, limits.maxAudioDurationMs)
     const audioHash = digest({ translatedText: parsed.translatedText, targetLocale: parsed.targetLocale, targetVoice: parsed.targetVoice })
     const durationMs = Math.min(limits.maxAudioDurationMs, Math.max(250, parsed.translatedText.split(/\s+/).length * 420))

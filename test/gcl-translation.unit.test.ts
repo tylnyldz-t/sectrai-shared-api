@@ -78,6 +78,59 @@ test('an explicit programmatic live opt-in surface is a poison pill even when fa
   assert.equal(quota.requests.length, 0)
 })
 
+test('connector configuration is a canonical construction-time snapshot and malformed configuration fails before audit or quota', async () => {
+  const mutableConfig: TranslationConnectorConfig = { ...config }
+  const connector = new SyntheticTextTranslationConnector(mutableConfig)
+  // A caller retaining the construction object cannot lower the cap, add a
+  // live-mode surface, or otherwise alter the already-created connector.
+  mutableConfig.syntheticEnabled = false
+  mutableConfig.maxCostCapCents = 1
+  ;(mutableConfig as Record<string, unknown>).liveOptInRequested = false
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+  await assert.doesNotReject(() => runner.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: textInput(), ...context }))
+  assert.equal(audit.entries.length, 2)
+  assert.equal(quota.requests.length, 1)
+
+  let accessorReads = 0
+  const accessorBacked = { ...config } as Record<string, unknown>
+  Object.defineProperty(accessorBacked, 'maxCostCapCents', {
+    enumerable: true,
+    get(): number {
+      accessorReads += 1
+      throw new Error('configuration accessor must not be evaluated')
+    },
+  })
+  const hiddenField = { ...config } as Record<string, unknown>
+  Object.defineProperty(hiddenField, 'unreviewedSetting', { value: true, enumerable: false })
+  const symbolField = { ...config }
+  Object.defineProperty(symbolField, Symbol('unreviewed-setting'), { value: true, enumerable: true })
+  const malformedConfigurations: unknown[] = [
+    Object.create(config),
+    accessorBacked,
+    hiddenField,
+    symbolField,
+    { ...config, providerUrl: 'synthetic://unaccepted-configuration-surface' },
+    new Proxy({ ...config }, { ownKeys: () => { throw new Error('configuration proxy must not escape') } }),
+  ]
+
+  for (const malformedConfig of malformedConfigurations) {
+    const malformedAudit = new InMemoryHashChainAuditLog()
+    const malformedQuota = new TestQuota()
+    const malformedRunner = new GovernedConnectorRunner(
+      new ConnectorRegistry([new SyntheticTextTranslationConnector(malformedConfig as TranslationConnectorConfig)]),
+      malformedAudit,
+      malformedQuota,
+      now,
+    )
+    await assert.rejects(() => malformedRunner.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: textInput(), ...context }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_CONFIGURATION_INVALID')
+    assert.equal(malformedAudit.entries.length, 0)
+    assert.equal(malformedQuota.requests.length, 0)
+  }
+  assert.equal(accessorReads, 0)
+})
+
 test('a present live-enable environment key is a configuration poison pill, even when false', async () => {
   const environment: NodeJS.ProcessEnv = {
     GCL_TRANSLATION_SYNTHETIC_ENABLED: 'true',
