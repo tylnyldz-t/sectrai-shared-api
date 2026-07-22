@@ -9,7 +9,7 @@ import { translationConnectorsFromEnvironment } from './gcl/translation.js'
 import { GCL_TRANSLATION_ARTIFACT_MODULE_ID, PrismaTranslationArtifactStore, type TranslationArtifactRecord } from './gcl/translation-artifacts.js'
 import type { AuditLog, ConnectorAuditEvent, ConnectorResult } from './gcl/types.js'
 import { serializeRecord } from './types.js'
-import { connectorRunFrom, mutationFrom, scopeFrom, translationArtifactApprovalFrom, workspaceScopeFrom } from './validation.js'
+import { RequestValidationError, connectorRunFrom, mutationFrom, scopeFrom, translationArtifactApprovalFrom, workspaceScopeFrom } from './validation.js'
 
 type ConnectorRunner = { run(request: RunConnectorRequest): Promise<ConnectorResult> }
 type ArtifactAuditContext = Pick<ConnectorAuditEvent, 'scopes' | 'costCapCents' | 'requestedItems' | 'occurredAt'>
@@ -57,20 +57,33 @@ function ownerActorFrom(request: Request): string {
   // The actor is part of the durable maker/checker audit identity. Never
   // rewrite a header value into a different principal: padded identity is an
   // invalid request, just like a padded scope is invalid authority.
-  if (typeof actor !== 'string' || !actor || actor.trim() !== actor || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(actor)) throw Object.assign(new Error('INVALID_OWNER_ACTOR'), { status: 422 })
+  if (typeof actor !== 'string' || !actor || actor.trim() !== actor || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(actor)) throw new RequestValidationError('INVALID_OWNER_ACTOR', 422)
   return actor
 }
 
 function connectorIdFrom(request: Request): string {
   const connectorId = request.params.connectorId
-  if (typeof connectorId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(connectorId)) throw Object.assign(new Error('INVALID_CONNECTOR_ID'), { status: 400 })
+  if (typeof connectorId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(connectorId)) throw new RequestValidationError('INVALID_CONNECTOR_ID', 400)
   return connectorId
 }
 
 function recordIdFrom(request: Request): string {
   const recordId = request.params.recordId
-  if (typeof recordId !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(recordId)) throw Object.assign(new Error('INVALID_RECORD_ID'), { status: 400 })
+  if (typeof recordId !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(recordId)) throw new RequestValidationError('INVALID_RECORD_ID', 400)
   return recordId
+}
+
+/** Artifact lifecycle writes get an independent, canonical clock snapshot. */
+function artifactMutationClock(now: () => Date): Date {
+  try {
+    const candidate = now()
+    if (!(candidate instanceof Date)) throw new TypeError('not a date')
+    const milliseconds = Date.prototype.getTime.call(candidate)
+    if (!Number.isFinite(milliseconds)) throw new TypeError('invalid date')
+    return new Date(milliseconds)
+  } catch {
+    throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_CLOCK_INVALID')
+  }
 }
 
 export function createApp({ prisma = new PrismaClient(), now = () => new Date(), gclRunner, gclOwnerToken = process.env.GCL_OWNER_TOKEN, gclAuditLog, translationArtifactStore }: AppOptions = {}) {
@@ -152,7 +165,7 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
       requestedItems: input.requestedItems,
     })
     if (!result.artifact || !result.provenance.auditHash) return response.json({ result })
-    const creationNow = now()
+    const creationNow = artifactMutationClock(now)
     const artifactAuditContext: ArtifactAuditContext = {
       scopes: [...input.scopes].sort(), costCapCents: input.costCapCents, requestedItems: input.requestedItems, occurredAt: creationNow.toISOString(),
     }
@@ -173,7 +186,7 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
     const scope = workspaceScopeFrom(request)
     const actor = ownerActorFrom(request)
     const decision = translationArtifactApprovalFrom(request.body)
-    const decisionNow = now()
+    const decisionNow = artifactMutationClock(now)
     const artifactAuditContext: ArtifactAuditContext = {
       scopes: ['translation:artifact:approve'], costCapCents: 0, requestedItems: 0, occurredAt: decisionNow.toISOString(),
     }
@@ -185,8 +198,10 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
   app.use((error: unknown, _: Request, response: Response, __: NextFunction) => {
     if (error instanceof SyntaxError && 'body' in error) return response.status(400).json({ error: 'INVALID_JSON', code: 'invalid_json' })
     if (error instanceof GclError) return response.status(error.status).json({ error: error.message, code: error.code })
-    const status = typeof error === 'object' && error && 'status' in error && typeof error.status === 'number' ? error.status : 500
-    return response.status(status).json({ error: error instanceof Error ? error.message : 'INTERNAL_ERROR', code: status === 500 ? 'internal_error' : 'invalid_request' })
+    if (error instanceof RequestValidationError) return response.status(error.status).json({ error: error.message, code: 'invalid_request' })
+    // A connector or persistence exception can contain owner-supplied fixture
+    // data. It is neither audit metadata nor HTTP response content.
+    return response.status(500).json({ error: 'INTERNAL_ERROR', code: 'internal_error' })
   })
   return app
 }

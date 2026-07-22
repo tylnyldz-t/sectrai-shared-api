@@ -544,11 +544,28 @@ export class InMemoryHashChainAuditLog implements AuditLog {
   readonly entries: AuditRecordValue[] = []
 
   async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
+    // The durable implementation replays every stored row inside its
+    // transaction. Preserve that fail-closed property in the test seam too:
+    // a test or caller must not be able to mutate an old entry and then append
+    // a seemingly valid continuation.
+    let previousHash: string | null = null
+    for (let index = 0; index < this.entries.length; index += 1) {
+      const entry = this.entries[index]!
+      if (!auditValue(entry)
+        || entry.previousHash !== previousHash
+        || entry.hash !== hashAuditEvent(entry.event, entry.previousHash)
+        || !validAuditTransition(this.entries.slice(0, index), entry.event)) {
+        throw new ConnectorUnavailableError('GCL_AUDIT_CHAIN_INVALID')
+      }
+      previousHash = entry.hash
+    }
     if (!validAuditEvent(event)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
     if (!validAuditTransition(this.entries, event)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
-    const previousHash = this.entries.at(-1)?.hash ?? null
     const hash = hashAuditEvent(event, previousHash)
-    this.entries.push({ event, previousHash, hash })
+    // Event objects are caller-owned. A clone prevents a post-append mutation
+    // of the caller's object from retroactively changing the in-memory chain.
+    const storedEvent = JSON.parse(JSON.stringify(event)) as ConnectorAuditEvent
+    this.entries.push({ event: storedEvent, previousHash, hash })
     return { hash }
   }
 }

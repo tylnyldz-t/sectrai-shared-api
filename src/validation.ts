@@ -10,66 +10,78 @@ export type WorkspaceScope = { product: string; workspaceId: string }
 export type ConnectorRunMutation = { input: Record<string, unknown>; scopes: string[]; costCapCents: number; requestedItems: number }
 export type TranslationArtifactApprovalMutation = { decision: 'approved' | 'rejected'; reviewDigest: string }
 
+/**
+ * Only deliberately constructed request-validation failures may expose their
+ * stable identifier at the HTTP boundary. Runtime and adapter failures must
+ * never be treated as client-safe just because they carry a `status` field.
+ */
+export class RequestValidationError extends Error {
+  constructor(message: string, readonly status: 400 | 422) {
+    super(message)
+    this.name = 'RequestValidationError'
+  }
+}
+
 export function scopeFrom(request: Request): RecordScope {
   const { product, workspaceId, moduleId } = request.params
-  if (typeof product !== 'string' || typeof workspaceId !== 'string' || typeof moduleId !== 'string') throw Object.assign(new Error('INVALID_RECORD_SCOPE'), { status: 400 })
-  if (!product || !workspaceId || !moduleId || !ID_PATTERN.test(workspaceId) || !ID_PATTERN.test(moduleId)) throw Object.assign(new Error('INVALID_RECORD_SCOPE'), { status: 400 })
+  if (typeof product !== 'string' || typeof workspaceId !== 'string' || typeof moduleId !== 'string') throw new RequestValidationError('INVALID_RECORD_SCOPE', 400)
+  if (!product || !workspaceId || !moduleId || !ID_PATTERN.test(workspaceId) || !ID_PATTERN.test(moduleId)) throw new RequestValidationError('INVALID_RECORD_SCOPE', 400)
   return { product, workspaceId, moduleId }
 }
 
 export function workspaceScopeFrom(request: Request): WorkspaceScope {
   const { product, workspaceId } = request.params
-  if (typeof product !== 'string' || typeof workspaceId !== 'string' || !product || !workspaceId || !ID_PATTERN.test(workspaceId)) throw Object.assign(new Error('INVALID_WORKSPACE_SCOPE'), { status: 400 })
+  if (typeof product !== 'string' || typeof workspaceId !== 'string' || !product || !workspaceId || !ID_PATTERN.test(workspaceId)) throw new RequestValidationError('INVALID_WORKSPACE_SCOPE', 400)
   return { product, workspaceId }
 }
 
 function jsonSize(value: unknown): number { return Buffer.byteLength(JSON.stringify(value), 'utf8') }
 function values(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || jsonSize(value) > 48 * 1024) throw Object.assign(new Error('INVALID_RECORD_VALUES'), { status: 422 })
+  if (!value || typeof value !== 'object' || Array.isArray(value) || jsonSize(value) > 48 * 1024) throw new RequestValidationError('INVALID_RECORD_VALUES', 422)
   return value as Record<string, unknown>
 }
 function status(value: unknown): string | null {
   if (value === undefined || value === null) return null
-  if (typeof value !== 'string' || !value.trim() || value.trim().length > STATUS_LIMIT) throw Object.assign(new Error('INVALID_RECORD_STATUS'), { status: 422 })
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > STATUS_LIMIT) throw new RequestValidationError('INVALID_RECORD_STATUS', 422)
   return value.trim()
 }
 function actor(value: unknown): string | undefined {
   if (value === undefined) return undefined
-  if (typeof value !== 'string' || !value.trim() || value.trim().length > ACTOR_LIMIT) throw Object.assign(new Error('INVALID_RECORD_ACTOR'), { status: 422 })
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > ACTOR_LIMIT) throw new RequestValidationError('INVALID_RECORD_ACTOR', 422)
   return value.trim()
 }
 
 function exactObject(body: unknown, allowed: readonly string[], error: string): Record<string, unknown> {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) throw Object.assign(new Error(error), { status: 400 })
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RequestValidationError(error, 400)
   const input = body as Record<string, unknown>
-  if (Object.keys(input).some((key) => !allowed.includes(key))) throw Object.assign(new Error(error), { status: 400 })
+  if (Object.keys(input).some((key) => !allowed.includes(key))) throw new RequestValidationError(error, 400)
   return input
 }
 
 function plainObject(value: unknown, error: string, limit = 48 * 1024): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || jsonSize(value) > limit) throw Object.assign(new Error(error), { status: 422 })
+  if (!value || typeof value !== 'object' || Array.isArray(value) || jsonSize(value) > limit) throw new RequestValidationError(error, 422)
   return value as Record<string, unknown>
 }
 
 function stringArray(value: unknown, error: string, limit: number, itemLimit = 120): string[] {
-  if (!Array.isArray(value) || value.length < 1 || value.length > limit) throw Object.assign(new Error(error), { status: 422 })
+  if (!Array.isArray(value) || value.length < 1 || value.length > limit) throw new RequestValidationError(error, 422)
   // Scopes carry authority into the audit chain. Do not rewrite a caller's
   // scope string at the HTTP boundary: a padded value must be rejected, not
   // silently converted into a different accepted authority envelope.
   const output = value.map((item) => typeof item === 'string' && item.trim() === item && Boolean(item) && item.length <= itemLimit ? item : null)
-  if (output.some((item) => item === null) || new Set(output).size !== output.length) throw Object.assign(new Error(error), { status: 422 })
+  if (output.some((item) => item === null) || new Set(output).size !== output.length) throw new RequestValidationError(error, 422)
   return output as string[]
 }
 
 function positiveInteger(value: unknown, error: string, limit: number): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > limit) throw Object.assign(new Error(error), { status: 422 })
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 1 || value > limit) throw new RequestValidationError(error, 422)
   return value
 }
 export function mutationFrom(body: unknown, allowCreatedBy: boolean): RecordMutation {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) throw Object.assign(new Error('INVALID_REQUEST_BODY'), { status: 400 })
+  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RequestValidationError('INVALID_REQUEST_BODY', 400)
   const input = body as Record<string, unknown>
   const allowed = allowCreatedBy ? new Set(['values', 'status', 'createdBy']) : new Set(['values', 'status'])
-  if (Object.keys(input).some((key) => !allowed.has(key))) throw Object.assign(new Error('UNEXPECTED_RECORD_FIELD'), { status: 400 })
+  if (Object.keys(input).some((key) => !allowed.has(key))) throw new RequestValidationError('UNEXPECTED_RECORD_FIELD', 400)
   return { values: values(input.values), status: status(input.status), ...(allowCreatedBy ? { createdBy: actor(input.createdBy) } : {}) }
 }
 
@@ -85,7 +97,7 @@ export function connectorRunFrom(body: unknown): ConnectorRunMutation {
 
 export function translationArtifactApprovalFrom(body: unknown): TranslationArtifactApprovalMutation {
   const input = exactObject(body, ['decision', 'reviewDigest'], 'INVALID_TRANSLATION_ARTIFACT_APPROVAL')
-  if (input.decision !== 'approved' && input.decision !== 'rejected') throw Object.assign(new Error('INVALID_TRANSLATION_ARTIFACT_DECISION'), { status: 422 })
-  if (typeof input.reviewDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(input.reviewDigest)) throw Object.assign(new Error('INVALID_TRANSLATION_ARTIFACT_REVIEW_DIGEST'), { status: 422 })
+  if (input.decision !== 'approved' && input.decision !== 'rejected') throw new RequestValidationError('INVALID_TRANSLATION_ARTIFACT_DECISION', 422)
+  if (typeof input.reviewDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(input.reviewDigest)) throw new RequestValidationError('INVALID_TRANSLATION_ARTIFACT_REVIEW_DIGEST', 422)
   return { decision: input.decision, reviewDigest: input.reviewDigest }
 }
