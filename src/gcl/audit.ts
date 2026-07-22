@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import { ConnectorUnavailableError } from './errors.js'
+import { translationArtifactReviewDigest } from './translation-artifact-review.js'
 import type { TranslationArtifactRecord } from './translation-artifacts.js'
 import type { AuditLog, ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
 
@@ -145,6 +146,28 @@ function auditDetailRequestedHash(event: ConnectorAuditEvent): string | null {
   return typeof detail.requestedAuditHash === 'string' ? detail.requestedAuditHash : null
 }
 
+function auditDetailRunHash(event: ConnectorAuditEvent): string | null {
+  const detail = event.detail
+  return typeof detail.runAuditHash === 'string' ? detail.runAuditHash : null
+}
+
+/** Audit rows must carry the same canonical checker binding as artifact rows. */
+function reviewDigestMatchesArtifactDetail(connectorId: string, detail: Record<string, unknown>): boolean {
+  return typeof detail.reviewDigest === 'string'
+    && detail.reviewDigest === translationArtifactReviewDigest({
+      connectorId,
+      kind: detail.kind as TranslationArtifactProposal['kind'],
+      contentHash: detail.contentHash as string,
+      mediaType: detail.mediaType as TranslationArtifactProposal['mediaType'],
+      source: detail.source as TranslationArtifactProposal['source'],
+      synthetic: detail.synthetic as true,
+      autoPublish: detail.autoPublish as false,
+      reviewPolicyVersion: detail.reviewPolicyVersion as TranslationArtifactProposal['reviewPolicyVersion'],
+      reviewExpiresAt: detail.reviewExpiresAt as string,
+      runAuditHash: detail.runAuditHash as string,
+    })
+}
+
 function artifactDetailMatchesProposal(detail: Record<string, unknown>, proposal: TranslationArtifactProposal): boolean {
   return detail.kind === proposal.kind
     && detail.contentHash === proposal.contentHash
@@ -180,9 +203,9 @@ function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
     return hasExactlyKeys(value.detail, ['requestedAuditHash', 'artifact']) && artifactProposalDetail(value.connectorId, value.detail.artifact)
   }
   if (value.type === 'connector.run.failed') return connectorRunScopes(value.connectorId, value.scopes) && isObject(value.detail) && hasExactlyKeys(value.detail, ['requestedAuditHash', 'error']) && typeof value.detail.requestedAuditHash === 'string' && SHA256.test(value.detail.requestedAuditHash) && typeof value.detail.error === 'string' && ERROR_CODE.test(value.detail.error) && value.costCapCents >= 1 && value.requestedItems === 1
-  if (value.type === 'translation.artifact.created') return connectorRunScopes(value.connectorId, value.scopes) && isObject(value.detail) && artifactDetail(value.detail, 'pending-checker-approval') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents >= 1 && value.requestedItems === 1
-  if (value.type === 'translation.artifact.approved') return exactScopes(value.scopes, ARTIFACT_APPROVAL_SCOPES) && isObject(value.detail) && artifactDetail(value.detail, 'approved') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
-  if (value.type === 'translation.artifact.rejected') return exactScopes(value.scopes, ARTIFACT_APPROVAL_SCOPES) && isObject(value.detail) && artifactDetail(value.detail, 'rejected') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
+  if (value.type === 'translation.artifact.created') return connectorRunScopes(value.connectorId, value.scopes) && isObject(value.detail) && artifactDetail(value.detail, 'pending-checker-approval') && reviewDigestMatchesArtifactDetail(value.connectorId, value.detail) && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents >= 1 && value.requestedItems === 1
+  if (value.type === 'translation.artifact.approved') return exactScopes(value.scopes, ARTIFACT_APPROVAL_SCOPES) && isObject(value.detail) && artifactDetail(value.detail, 'approved') && reviewDigestMatchesArtifactDetail(value.connectorId, value.detail) && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
+  if (value.type === 'translation.artifact.rejected') return exactScopes(value.scopes, ARTIFACT_APPROVAL_SCOPES) && isObject(value.detail) && artifactDetail(value.detail, 'rejected') && reviewDigestMatchesArtifactDetail(value.connectorId, value.detail) && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
   return false
 }
 
@@ -283,8 +306,10 @@ function sameArtifactMetadata(left: Record<string, unknown>, right: Record<strin
 function validArtifactCreationTransition(entries: readonly AuditRecordValue[], event: ConnectorAuditEvent): boolean {
   const detail = event.detail
   const artifactId = auditDetailArtifactId(event)
-  const runAuditHash = typeof detail.runAuditHash === 'string' ? detail.runAuditHash : null
-  if (!artifactId || !runAuditHash || entries.some((entry) => auditDetailArtifactId(entry.event) === artifactId)) return false
+  const runAuditHash = auditDetailRunHash(event)
+  if (!artifactId || !runAuditHash || entries.some((entry) =>
+    auditDetailArtifactId(entry.event) === artifactId
+      || (entry.event.type === 'translation.artifact.created' && auditDetailRunHash(entry.event) === runAuditHash))) return false
   const succeeded = entries.find((entry) => entry.hash === runAuditHash)?.event
   const proposal = succeeded?.detail.artifact
   return Boolean(succeeded

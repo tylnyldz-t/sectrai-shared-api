@@ -1,8 +1,10 @@
-import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import { appendAuditEvent, requireSuccessfulRunAudit, requireTranslationArtifactLifecycleAudit } from './audit.js'
 import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorUnavailableError, MakerCheckerError } from './errors.js'
+import { translationArtifactReviewDigest } from './translation-artifact-review.js'
 import type { AuditLog, ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
+
+export { translationArtifactReviewDigest } from './translation-artifact-review.js'
 
 export const GCL_TRANSLATION_ARTIFACT_MODULE_ID = 'gcl-translation-artifacts'
 const SHA256 = /^sha256:[a-f0-9]{64}$/
@@ -68,28 +70,7 @@ function validArtifactBinding(input: Pick<TranslationArtifactRecord, 'connectorI
     || (input.connectorId === 'translation-speech-synthetic' && input.kind === 'translated-speech' && input.mediaType === 'audio/wav' && input.source === 'synthetic-speech-translation')
 }
 
-type ReviewDigestInput = Pick<TranslationArtifactRecord, 'connectorId' | 'kind' | 'contentHash' | 'mediaType' | 'source' | 'synthetic' | 'autoPublish' | 'reviewPolicyVersion' | 'reviewExpiresAt' | 'runAuditHash'>
 type ArtifactAuditContext = Pick<ConnectorAuditEvent, 'scopes' | 'costCapCents' | 'requestedItems' | 'occurredAt'>
-
-function digest(value: unknown): string {
-  return `sha256:${createHash('sha256').update(JSON.stringify(value)).digest('hex')}`
-}
-
-/** Exact metadata binding a checker must echo; it never contains translation or audio content. */
-export function translationArtifactReviewDigest(input: ReviewDigestInput): string {
-  return digest({
-    connectorId: input.connectorId,
-    kind: input.kind,
-    contentHash: input.contentHash,
-    mediaType: input.mediaType,
-    source: input.source,
-    synthetic: input.synthetic,
-    autoPublish: input.autoPublish,
-    reviewPolicyVersion: input.reviewPolicyVersion,
-    reviewExpiresAt: input.reviewExpiresAt,
-    runAuditHash: input.runAuditHash,
-  })
-}
 
 function constantTimeEqual(left: string, right: string): boolean {
   if (left.length !== right.length) return false
