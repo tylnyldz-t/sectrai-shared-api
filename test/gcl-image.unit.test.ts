@@ -403,6 +403,8 @@ test('terminal review refuses an orphan direct ledger append before it writes an
   const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   const candidate = result.data.candidates[0]
   assert.ok(candidate)
+  const runAuditHash = result.provenance.auditHash
+  if (typeof runAuditHash !== 'string') throw new Error('D4_TEST_RUN_AUDIT_HASH_MISSING')
   const ledger = new PrismaImageOwnerReviewLedger(persistence)
   const orphan = {
     type: 'connector.artifact.owner_liked' as const,
@@ -487,6 +489,8 @@ test('D4 binds each redacted candidate fingerprint and review deadline through d
   const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
   const candidate = result.data.candidates[0]
   assert.ok(candidate)
+  const runAuditHash = result.provenance.auditHash
+  if (typeof runAuditHash !== 'string') throw new Error('D4_TEST_RUN_AUDIT_HASH_MISSING')
   const entries = result.data.candidates.map((item) => ({
     candidateId: item.candidateId,
     fingerprint: imageCandidateFingerprint(item),
@@ -496,7 +500,7 @@ test('D4 binds each redacted candidate fingerprint and review deadline through d
     type: 'connector.artifact.candidates_issued' as const,
     connectorId: 'image-tti', product: context.product, workspaceId: context.workspaceId, actor: context.actor, correlationId: context.correlationId,
     scopes: ['image:generate'], costCapCents: 0, requestedItems: entries.length, occurredAt: deadline,
-    detail: { candidateSetDigest: imageCandidateSetDigest(result.data.candidates), candidateCount: entries.length, candidates: entries, publication: 'blocked' as const, runAuditHash: result.provenance.auditHash },
+    detail: { candidateSetDigest: imageCandidateSetDigest(result.data.candidates), candidateCount: entries.length, candidates: entries, publication: 'blocked' as const, runAuditHash },
   }
   await assert.rejects(() => new InMemoryImageCandidateLedger(audit).appendIssuance(expiredIssuance), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_ISSUANCE_EXPIRED')
   assert.equal(audit.entries.length, 2)
@@ -506,7 +510,7 @@ test('D4 binds each redacted candidate fingerprint and review deadline through d
   const issuance = audit.entries[2]
   assert.ok(issuance)
   assert.equal(issuance.event.type, 'connector.artifact.candidates_issued')
-  assert.deepEqual(issuance.event.detail.candidates[0], entries[0])
+  assert.deepEqual((issuance.event.detail.candidates as unknown[])[0], entries[0])
 
   const expiredDecision = {
     type: 'connector.artifact.owner_liked' as const,
@@ -519,7 +523,7 @@ test('D4 binds each redacted candidate fingerprint and review deadline through d
       maker: context.actor,
       publication: 'blocked' as const,
       issuanceAuditHash: issuance.hash,
-      runAuditHash: result.provenance.auditHash,
+      runAuditHash,
       artifactId: `owner-liked-${candidate.candidateId}`,
       ownerReview: 'liked' as const,
     },
@@ -537,7 +541,7 @@ test('D4 binds each redacted candidate fingerprint and review deadline through d
   const mismatchedProofLedger = {
     assertIssued: async () => ({
       issuanceAuditHash: issuance.hash,
-      runAuditHash: result.provenance.auditHash,
+      runAuditHash,
       issuanceOccurredAt: issuedAt().toISOString(),
       reviewExpiresAt: candidate.ownerReview.reviewExpiresAt,
       candidateFingerprint: '0'.repeat(64),
@@ -545,10 +549,51 @@ test('D4 binds each redacted candidate fingerprint and review deadline through d
   }
   const noAppendReviewLedger = {
     appendDecision: async () => { appendCalled = true; return { hash: 'f'.repeat(64) } },
-    assertRecorded: async () => ({ auditHash: 'f'.repeat(64), issuanceAuditHash: issuance.hash, runAuditHash: result.provenance.auditHash, reviewExpiresAt: candidate.ownerReview.reviewExpiresAt, candidateFingerprint: imageCandidateFingerprint(candidate) }),
+    assertRecorded: async () => ({ auditHash: 'f'.repeat(64), issuanceAuditHash: issuance.hash, runAuditHash, reviewExpiresAt: candidate.ownerReview.reviewExpiresAt, candidateFingerprint: imageCandidateFingerprint(candidate) }),
   }
   await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', noAppendReviewLedger as never, mismatchedProofLedger as never, { ...context, now: issuedAt }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_CANDIDATE_LEDGER_INVALID')
   assert.equal(appendCalled, false)
+})
+
+test('D4 re-hashes an issuance candidate set before a direct terminal ledger decision', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  const runAuditHash = result.provenance.auditHash
+  if (typeof runAuditHash !== 'string') throw new Error('D4_TEST_RUN_AUDIT_HASH_MISSING')
+  const forgedCandidateId = 'synthetic-image-ffffffffffffffffffff'
+  const forgedEntries = result.data.candidates.map((item, index) => ({
+    candidateId: index === 0 ? forgedCandidateId : item.candidateId,
+    fingerprint: imageCandidateFingerprint(item),
+    reviewExpiresAt: item.ownerReview.reviewExpiresAt,
+  }))
+  const copiedDigestIssuance = {
+    type: 'connector.artifact.candidates_issued' as const,
+    connectorId: 'image-tti', product: context.product, workspaceId: context.workspaceId, actor: context.actor, correlationId: context.correlationId,
+    scopes: ['image:generate'], costCapCents: 0, requestedItems: forgedEntries.length, occurredAt: now().toISOString(),
+    detail: { candidateSetDigest: imageCandidateSetDigest(result.data.candidates), candidateCount: forgedEntries.length, candidates: forgedEntries, publication: 'blocked' as const, runAuditHash },
+  }
+  const forgedIssuance = await audit.append(copiedDigestIssuance)
+  const forgedDecision = {
+    type: 'connector.artifact.owner_liked' as const,
+    connectorId: 'image-tti', product: context.product, workspaceId: context.workspaceId, actor: 'checker@example.test', correlationId: context.correlationId,
+    scopes: ['image:generate'], costCapCents: 0, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: {
+      candidateId: forgedCandidateId,
+      candidateFingerprint: imageCandidateFingerprint(candidate),
+      reviewExpiresAt: candidate.ownerReview.reviewExpiresAt,
+      maker: context.actor,
+      publication: 'blocked' as const,
+      issuanceAuditHash: forgedIssuance.hash,
+      runAuditHash,
+      artifactId: `owner-liked-${forgedCandidateId}`,
+      ownerReview: 'liked' as const,
+    },
+  }
+  await assert.rejects(() => new InMemoryImageOwnerReviewLedger(audit).appendDecision(forgedDecision), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_OWNER_REVIEW_DECISION_LINEAGE_INVALID')
+  assert.equal(audit.entries.length, 3)
 })
 
 test('candidate issuance and terminal review cannot be backdated across the governed lineage', async () => {

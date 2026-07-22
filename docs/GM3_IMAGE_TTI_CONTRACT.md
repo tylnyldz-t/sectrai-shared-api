@@ -49,7 +49,7 @@ only accepted mode.
    `issueSyntheticImageCandidates(governedResult, candidateLedger, context)`.
    It accepts only a successful governed result with its success audit hash,
    recomputes the exact candidate-set digest from that result, and then stores
-   one redacted, `publication: blocked` fingerprint receipt per candidate
+   one redacted, `publication: blocked` fingerprint-and-deadline receipt per candidate
    through `PrismaImageCandidateLedger`. A structurally valid candidate from a
    different run cannot borrow the success audit hash. Direct connector output
    is deliberately not issuable. An issuance at or after the candidate's
@@ -71,7 +71,9 @@ only accepted mode.
    preview, and remains `publication: blocked`. The supplied review ledger
    accepts exactly one terminal decision per product/workspace/correlation/
    candidate tuple. A terminal decision at or after `reviewExpiresAt` is
-   rejected before the issuance proof or review-audit append. A decision whose
+   rejected before the issuance proof or review-audit append. The terminal
+   receipt also carries the exact redacted candidate fingerprint and durable
+   deadline, so a direct ledger call cannot swap either field. A decision whose
    event time predates its durable issuance is also rejected.
 8. A terminal action is not considered complete merely because
    `appendDecision` returned a hash. Both like and rejection re-read an exact
@@ -103,9 +105,10 @@ route, database migration, or publishing path; generic product CRUD returns
 `404` for all reserved `gcl-*` system modules.
 
 Candidate receipts are strict `gcl-image-candidate-v1` records. A receipt that
-predates this package and therefore lacks `issuanceOccurredAt` is deliberately
-unusable; the module does not backfill or migrate it. This is a fail-closed
-integrity decision, not a production migration path.
+predates this package and therefore lacks `issuanceOccurredAt` or
+`reviewExpiresAt` is deliberately unusable; the module does not backfill or
+migrate it. This is a fail-closed integrity decision, not a production
+migration path.
 
 The candidate's `creativeWorkerPlan` is intentionally **not** an executable
 Creative Worker manifest: it has no raw prompt or negative prompt, no actual
@@ -208,6 +211,24 @@ either case, the baseline gate is implicit and mandatory. This field is
 redacted local policy metadata only; it is not a moderation-provider handle,
 credential, endpoint, or dispatch authorization.
 
+## D4 — durable deadline and candidate-fingerprint lineage
+
+Each issuance entry now stores the canonical `reviewExpiresAt` alongside the
+candidate ID and its redacted SHA-256 fingerprint. The pre-existing governed
+success digest remains exactly the digest of candidate IDs and fingerprints;
+deadline data is additional lifecycle metadata and cannot retroactively alter
+the successful run audit. Candidate receipts re-read all three values.
+
+Both ledger seams enforce the deadline independently of the public helper:
+candidate issuance at or after an entry's deadline is rejected, and a terminal
+review event must carry the exact issued fingerprint and deadline and occur
+strictly before that deadline. The review ledger also recomputes the issuance
+candidate-set digest before it trusts a direct terminal call. Thus a copied
+success digest, changed candidate ID/fingerprint, extended deadline, or an
+exact-deadline direct ledger decision cannot create a terminal receipt. These
+are redacted integrity checks only—no provider, network, GPU, or publication
+capability is added.
+
 ## Negative and edge-case guarantees
 
 - Prompt fields accept only the documented four keys. Empty text, a value over
@@ -247,11 +268,14 @@ credential, endpoint, or dispatch authorization.
   provider endpoint, or a credential.
 - Candidate issuance accepts only the governed result carrying a success audit
   hash and matching redacted candidate-set digest, stores candidate IDs plus
-  fingerprints/hashes only, and rejects direct connector output, a changed
-  redacted candidate field, a candidate set from another run, duplicate
-  issuance, concurrent issuance replay, or an expired candidate. Owner like
-  and rejection checks use the same strict deadline and reject the exact expiry
-  instant before a receipt or audit event can be added.
+  fingerprints/hashes plus canonical deadlines only, and rejects direct
+  connector output, a changed redacted candidate field, a candidate set from
+  another run, duplicate issuance, concurrent issuance replay, or an expired
+  candidate. The durable candidate ledger independently rejects a direct
+  issuance at the exact deadline. Owner like and rejection checks use the same
+  strict deadline and reject the exact expiry instant before a receipt or audit
+  event can be added; the terminal ledger independently rechecks the issued
+  candidate fingerprint, candidate-set digest, and deadline for direct calls.
 - Issuance events must be timestamped at or after their bound successful run,
   and terminal decisions must be timestamped at or after durable issuance.
   The receipt preserves the canonical issuance event time and rechecks it
@@ -335,7 +359,8 @@ credential, endpoint, or dispatch authorization.
    digests, and provenance—never prompt text, preview bytes, provider output,
    endpoint, or credentials.
 7. Candidate-set and candidate fingerprints are recomputed from the exact
-   redacted shape before issuance or terminal review.
+   redacted shape before issuance or terminal review; canonical review
+   deadlines are re-read from durable issuance and bound into terminal proofs.
 8. A governed run has one bound issuance set, and each candidate has one
    replay-protected terminal outcome in the SHA-256 audit lineage.
 9. Canonical monotonic timestamps, expiry, full scope binding, and

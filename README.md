@@ -38,6 +38,12 @@ baseline-rejected prompt or even receive it. The optional policy can only add a
 stricter denial; it remains local, synchronous, `LIVE_DISABLED`, and never
 authorizes a provider, network, dispatch, or publication path.
 
+D4 binds each candidate's canonical review deadline and redacted fingerprint
+into durable issuance and terminal-review receipts. Direct ledger calls
+independently reject copied candidate-set digests, changed fingerprint/deadline
+data, and issuance or decision at the exact expiry instant; all output remains
+synthetic, owner-only, and publication-blocked.
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:
