@@ -1,4 +1,5 @@
 import type { Request } from 'express'
+import type { ExtensionInput, ExtensionSuggestionInput } from './gcl/extensions.js'
 
 const ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const STATUS_LIMIT = 80
@@ -83,6 +84,11 @@ function correlationId(value: unknown): string | undefined {
   if (typeof value !== 'string' || !/^[a-zA-Z0-9:_-]{1,120}$/.test(value)) throw new RequestValidationError('INVALID_CONNECTOR_CORRELATION_ID', 422)
   return value
 }
+
+function shortText(value: unknown, error: string, limit = 120): string {
+  if (typeof value !== 'string' || !value.trim() || value.trim().length > limit) throw new RequestValidationError(error, 422)
+  return value.trim()
+}
 export function mutationFrom(body: unknown, allowCreatedBy: boolean): RecordMutation {
   if (!body || typeof body !== 'object' || Array.isArray(body)) throw new RequestValidationError('INVALID_REQUEST_BODY', 400)
   const input = body as Record<string, unknown>
@@ -107,4 +113,28 @@ export function translationArtifactApprovalFrom(body: unknown): TranslationArtif
   if (input.decision !== 'approved' && input.decision !== 'rejected') throw new RequestValidationError('INVALID_TRANSLATION_ARTIFACT_DECISION', 422)
   if (typeof input.reviewDigest !== 'string' || !/^sha256:[a-f0-9]{64}$/.test(input.reviewDigest)) throw new RequestValidationError('INVALID_TRANSLATION_ARTIFACT_REVIEW_DIGEST', 422)
   return { decision: input.decision, reviewDigest: input.reviewDigest }
+}
+
+export function extensionFrom(body: unknown): ExtensionInput {
+  const input = exactObject(body, ['name', 'sector', 'role', 'connectorId', 'defaultScopes', 'consentState'], 'INVALID_EXTENSION_REQUEST')
+  if (input.role !== 'ai-support' && input.role !== 'add-on-module') throw new RequestValidationError('INVALID_EXTENSION_ROLE', 422)
+  if (input.consentState !== 'pending' && input.consentState !== 'granted' && input.consentState !== 'revoked') throw new RequestValidationError('INVALID_EXTENSION_CONSENT_STATE', 422)
+  return {
+    name: shortText(input.name, 'INVALID_EXTENSION_NAME'),
+    sector: stringArray(input.sector, 'INVALID_EXTENSION_SECTOR', 12, 80),
+    role: input.role,
+    connectorId: shortText(input.connectorId, 'INVALID_EXTENSION_CONNECTOR_ID', 120),
+    defaultScopes: stringArray(input.defaultScopes, 'INVALID_EXTENSION_SCOPES', 12, 80),
+    consentState: input.consentState,
+  }
+}
+
+export function extensionSuggestionFrom(body: unknown): ExtensionSuggestionInput {
+  const input = exactObject(body, ['sector', 'activeModules', 'lastCommand'], 'INVALID_EXTENSION_SUGGESTION_REQUEST')
+  if (input.lastCommand !== null && input.lastCommand !== undefined && (typeof input.lastCommand !== 'string' || input.lastCommand.length > 500)) throw new RequestValidationError('INVALID_EXTENSION_LAST_COMMAND', 422)
+  return {
+    sector: shortText(input.sector, 'INVALID_EXTENSION_SECTOR', 80),
+    activeModules: stringArray(input.activeModules, 'INVALID_EXTENSION_ACTIVE_MODULES', 40, 120),
+    lastCommand: typeof input.lastCommand === 'string' ? input.lastCommand.trim() : null,
+  }
 }

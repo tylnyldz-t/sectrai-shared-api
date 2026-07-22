@@ -1,0 +1,952 @@
+# Synthetic market — governed connector contract
+
+The `market` connector generalizes three existing designs without connecting
+to any of their runtimes:
+
+- GCL Apify supplies the owner gate, declared scope, cost ceiling, daily quota,
+  SHA-256 audit chain, and untrusted-content-as-data boundary.
+- Hub Connect supplies the distinction between a connector catalog and an
+  enabled, consented, on-demand integration. Here both sources are only
+  `NOT_CONTACTED`; there is no catalog credential, scheduler, or sync.
+- Capacity Market supplies read-only discovery/quote intent and the separation
+  between a quote and a human-initiated reservation. Here no offer is looked
+  up, so a capacity quote remains `NOT_QUOTED`.
+
+## Route and gates
+
+~~~
+POST /api/products/:product/workspaces/:workspaceId/gcl/connectors/market/runs
+~~~
+
+The standard product key, `X-Sectrai-Owner-Token`, and
+`X-Sectrai-Owner-Actor` gates apply. The generic GCL runner writes the
+requested/succeeded or requested/failed SHA-256 audit events and reserves the
+`market` daily quota before a proposal is returned.
+
+There is intentionally no HTTP endpoint for accepting a quote, reserving
+capacity, booking, publishing, sending a handoff, or storing an owner
+decision as mutable workflow state. This package adds only an in-process,
+audit-backed review receipt for a plan that the caller already holds; it is
+not an execution endpoint or a durable approval workflow.
+
+## Request forms
+
+Discovery requests accept exactly:
+
+~~~json
+{
+  "input": {
+    "operation": "freight-discovery",
+    "transportMode": "road",
+    "originCountry": "TR",
+    "destinationCountry": "DE",
+    "requestedListings": 1
+  },
+  "scopes": ["market:discover"],
+  "costCapCents": 50,
+  "requestedItems": 1
+}
+~~~
+
+`capacity-discovery` has the same shape. A capacity quote proposal requires
+`market:capacity:quote` and exactly one extra field:
+
+~~~json
+{
+  "input": {
+    "operation": "capacity-quote",
+    "transportMode": "road",
+    "originCountry": "TR",
+    "destinationCountry": "DE",
+    "requestedListings": 1,
+    "requestedCapacityUnits": 1
+  },
+  "scopes": ["market:capacity:quote"],
+  "costCapCents": 50,
+  "requestedItems": 1
+}
+~~~
+
+`requestedListings` must equal `requestedItems`, so a request cannot
+understate its quota use. Country values are normalized two-letter codes.
+
+`market:review` is a separate scope. It cannot run discovery or quote by
+itself, and it cannot authorize any market action.
+
+## D1 — canonical independent review packet
+
+The returned plan now contains `synthetic-market-review-packet-v1`. It binds
+the plan digest, a product/workspace/maker/scopes/cost/item binding digest,
+and an independently derived packet digest to a deterministic review ID. Its
+only execution state is permanently `NOT_AUTHORIZED`, with external network,
+reservation, booking, and publication all `false`.
+
+`validateSyntheticMarketPlanForReview()` reconstructs the complete canonical
+plan before the local review helper appends a
+`connector.market.owner_reviewed` event. It does not merely compare the
+top-level plan digest. The reconstructed result must also have the exact
+synthetic source states, `NOT_QUOTED` shape, side-effect flags, owner-review
+flags, packet fields, normalized scope ordering, and packet integrity digest.
+An added field (including a credential/provider-shaped field), changed source
+state, invented quote, action flag, malformed packet, changed maker, or
+cross-product/workspace packet is rejected before the review audit append.
+
+Maker and reviewer identifiers are canonical at this boundary: valid values
+cannot have leading or trailing whitespace. That prevents a whitespace variant
+of the maker from bypassing the independent-review check. Identity
+canonicalization beyond this bounded string rule remains the responsibility of
+the authenticated product host.
+
+A review requires all of the following:
+
+- the existing owner gate is the primitive boolean `true`;
+- the reviewer has `market:review`;
+- the reviewer is not the plan maker;
+- the decision is exactly `acknowledged` or `rejected`; and
+- the plan still matches its deterministic binding.
+
+The receipt is deliberately limited to `NOT_AUTHORIZED`. Both decisions keep
+external network, reservation, booking and publication at `false`. In
+particular, `acknowledged` is not “approved”, is not a consent to execute,
+and cannot create an offer or reservation. The digest is a deterministic
+binding check, not a signature or authorization token. D1 has no state
+transition: a receipt can never make a market action available.
+
+## D2 — process-local terminal review ledger
+
+`InMemorySyntheticMarketReviewLedger` is the next, deliberately narrow
+package. `independentlyReviewSyntheticMarketPlan()` now requires an injected
+ledger and lets it append exactly one terminal receipt for the canonical
+`product/workspace/planId/reviewPacketIntegrityDigest` tuple. It serializes
+same-plan calls, so concurrent opposite decisions yield one receipt and one
+rejected replay; an additional sequential decision also fails closed with
+`MARKET_REVIEW_ALREADY_DECIDED`.
+
+The ledger validates its already-canonical entry and only marks the tuple
+decided after its `connector.market.owner_reviewed` audit append returns a
+SHA-256-shaped hash. A missing ledger, invalid review clock, malformed ledger
+entry, or malformed audit result fails before it creates a local terminal
+receipt. The review context likewise default-denies malformed product,
+workspace, scope, and clock values; direct connector calls cannot create a
+plan with an unknown market scope or malformed product/workspace identifier.
+
+This is intentionally an **in-memory, process-local** guard. It adds no
+database table, migration, Prisma adapter, HTTP route, background worker, or
+cross-process state; its entries disappear on restart. It is consequently not
+a durable review workflow, signature, global replay-prevention mechanism, or
+authorization record. A future durable owner-controlled host must still
+supply its own atomic scoped state, retention, idempotency/replay, final
+decision, legal/ToS, and execution rules—and must fail closed until it does.
+D2 never turns a receipt into an offer, quote, reservation, booking,
+publication, handoff, notification, provider call, or sending action.
+
+## D3 — local receipt reconstruction and mutation check
+
+Once D2 has returned its single terminal decision,
+`independentlyReviewSyntheticMarketPlan()` also returns a deterministic
+`synthetic-market-review-receipt-v1`. It binds digests of the original
+product/workspace, plan, packet, reviewer, terminal decision, canonical review
+time, and audit hash. Its only execution object remains exactly
+`NOT_AUTHORIZED`, with all egress, reservation, booking, and publication flags
+set to `false`.
+
+`validateSyntheticMarketReviewReceipt(sourcePlan, reviewResult, context)` is a
+library-only, read-only revalidation seam. It first reconstructs the original
+plan, requires `market:review`, reconstructs the expected receipt from the D2
+result, and compares the complete canonical form. It does **not** query the
+in-memory ledger or audit chain, append an event, consume quota, contact a
+provider, send a handoff, or authorize a market action. It is a mutation check
+for caller-held evidence, not audit-chain verification, a signature,
+authentication credential, durable approval, or an execution token.
+
+The verifier default-denies unknown or hidden fields, non-plain/prototype-shaped
+objects, symbol fields, sparse arrays, altered execution flags, malformed
+timestamps or digest shapes, cross-scope inputs, maker-as-checker evidence, and
+any receipt/plan/integrity drift. The request parser applies the same
+plain-object and exact-field boundary, so inherited or hidden request fields
+cannot become synthetic market input.
+
+## D4 — caller-held review audit-witness link check
+
+`validateSyntheticMarketReviewAuditWitness(sourcePlan, reviewResult, witness,
+context)` is a library-only, read-only check for a caller-held audit record of
+the shape below:
+
+```ts
+{
+  version: 'synthetic-market-review-audit-witness-v1',
+  event: ConnectorAuditEvent,
+  previousHash: string | null,
+  hash: string,
+}
+```
+
+It first runs the D3 receipt reconstruction, then reconstructs the one allowed
+`connector.market.owner_reviewed` event from that result. That event has the
+exact `market:review` scope, zero cost, one requested item, canonical reviewer
+and time, the plan/packet digests, and all market-action flags set to `false`.
+Finally it recomputes `hashAuditEvent(event, previousHash)` and requires the
+result to equal both the witness hash and the receipt audit hash.
+
+D4 default-denies unknown, hidden, inherited, prototype-shaped, or
+credential-shaped witness fields; any event, action flag, predecessor hash,
+receipt, product/workspace, reviewer, scope, or hash drift is rejected. Its
+review context is now also an exact plain object, so inherited or injected
+context properties cannot be used at this boundary.
+
+This is a **single caller-held link check**, not audit-store lookup or chain
+verification. A syntactically valid witness does not prove that a durable audit
+store retained the event, that a preceding event really exists, or that a full
+chain is intact. D4 reads no audit/ledger storage, writes no event, consumes no
+quota, and remains neither a signature, credential, authorization, workflow,
+nor execution token.
+
+## D5 — caller-held three-event audit-trail continuity check
+
+`validateSyntheticMarketReviewAuditTrailWitness(sourcePlan, reviewResult,
+trail, context)` is a library-only, read-only check of exactly these
+caller-supplied entries:
+
+1. `connector.run.requested`
+2. `connector.run.succeeded`
+3. `connector.market.owner_reviewed`
+
+Each entry must be a strict plain-data object with only allowlisted own
+enumerable data fields, a canonical SHA-256-shaped hash, a canonical timestamp,
+and no symbols, hidden fields, accessors, inherited values, or Proxy shape.
+The requested and succeeded events must match the plan's product, workspace,
+maker, normalized scopes, cost cap, and item count. D5 recomputes their hashes,
+requires the requested hash to be both the succeeded predecessor and
+`requestedAuditHash`, then requires the succeeded hash to be the D4 review
+entry predecessor. Event times must be non-decreasing.
+
+On success D5 returns only a fixed-no-action
+`synthetic-market-review-audit-trail-witness-v1` with the three hashes, plan
+and review IDs, and the caller-supplied first predecessor. It does not return
+request content, actor identities, offers, prices, provider data, or a
+capability.
+
+D5 verifies continuity only inside this supplied three-event segment. It does
+**not** read a database, prove any event was stored, prove the first predecessor
+exists, append an event, consume quota, create a route, contact a provider,
+send a handoff, reserve/book/publish, or authorize execution. It is an unkeyed
+mutation check, not a signature, credential, durable replay guard, or
+authorization token.
+
+## D6 — minimized audit-trail receipt
+
+`createSyntheticMarketReviewAuditTrailReceipt(sourcePlan, reviewResult, trail,
+context)` first repeats D5's strict reconstruction of the caller-supplied
+three-event segment. It then returns only a fixed-no-action receipt containing
+product/workspace digests, plan/review IDs, the three event hashes, the first
+predecessor hash, and an unkeyed SHA-256 integrity digest. It omits the market
+request, actor identities, review decision, offer/price/provider data, and any
+credential or action capability.
+
+`validateSyntheticMarketReviewAuditTrailReceipt(sourcePlan, reviewResult,
+trail, receipt, context)` accepts only an exact own-data receipt, rebuilds the
+D5 segment and expected receipt, and compares its canonical receipt ID and
+integrity. Unknown, hidden, symbol, accessor, inherited, Proxy, credential-
+shaped, malformed, cross-workspace, or mutated values fail closed before a
+result is returned; getters and Proxy traps are not evaluated.
+
+D6 is a library-only, read-only rendering and check. It does not read or write
+storage, consume quota, append audit, add a route, contact a provider, send a
+handoff, reserve/book/publish, or authorize execution. It proves neither
+durable retention nor the first predecessor. Its digest is mutation evidence,
+not a signature, credential, durable audit proof, replay guard, or execution
+token.
+
+## D7 — compact review-evidence manifest
+
+`createSyntheticMarketReviewEvidenceManifest(sourcePlan, reviewResult, trail,
+context)` independently rebuilds D3's review receipt and D6's audit-trail
+receipt, then produces the compact
+`synthetic-market-review-evidence-manifest-v1`. It contains only digests of
+the product/workspace, plan/review IDs, the two reconstructed evidence
+integrity digests, and fixed synthetic/no-action state. It deliberately omits
+the market request, origin/destination, transport mode, capacity units, maker
+and reviewer identities, decision, individual audit hashes, provider details,
+offer/price data, credentials, and every action capability.
+
+`validateSyntheticMarketReviewEvidenceManifest(sourcePlan, reviewResult,
+trail, manifest, context)` accepts only an exact own-data manifest, rebuilds
+the same D3/D6 evidence, recomputes the manifest ID and SHA-256 integrity, and
+compares the whole canonical form. Unknown, hidden, symbol, accessor,
+inherited, Proxy, credential-shaped, cross-workspace, or mutated values are
+rejected without evaluating getters or Proxy traps.
+
+D7 is a library-only, read-only minimization seam. It does not read or write
+storage, consume quota, append audit, add a route, contact a provider, send a
+handoff, reserve/book/publish, or authorize execution. Its unkeyed digest is
+mutation evidence only—not a signature, credential, durable audit proof,
+replay guard, authorization, or execution token.
+
+## D8 — strict terminal-ledger ingress and retry boundary
+
+D8 hardens the injected, process-local D2 terminal ledger without broadening
+its authority. Before a decision can enter the ledger, the entry must be an
+exact plain own-data record with all and only the documented fields. Inherited
+values, null/prototype-shaped objects, hidden fields, symbol fields, accessors,
+and Proxies are rejected before any field is read or audit append is attempted.
+This keeps the maker, reviewer, decision, plan binding, and review time as
+bounded data rather than executable object behavior.
+
+The injected audit append result is likewise accepted only as an exact plain
+own-data `{ hash }` object with a lowercase SHA-256 digest. Getter- or
+Proxy-shaped results, extra fields, and malformed hashes fail closed as
+`MARKET_REVIEW_AUDIT_APPEND_INVALID`; none creates a terminal entry. A failed
+append does not decide the tuple, so a later retry may succeed, but the first
+valid terminal append still consumes the sole process-local decision. This is
+not persistence, cross-process replay prevention, authorization, or an action
+capability.
+
+D8 remains entirely in-process: it adds no route, migration, database table,
+worker, queue, provider configuration, credential, network call, quote,
+reservation, booking, publication, handoff, or sending path. Its successful
+result remains fixed at `NOT_AUTHORIZED` through the existing D2 receipt.
+
+## D9 — deep review-plan and host-ledger result boundary
+
+D9 snapshots the complete caller-held review plan into a bounded JSON-like
+own-data tree before the validator reads its binding, request, sources,
+side-effect flags, or review packet. Every object must have the normal
+`Object.prototype`; every collection must be a bounded dense
+`Array.prototype` array with only own numbered data elements. Non-enumerable
+fields, symbols, accessors, Proxies, prototype-shaped values, cyclic aliases,
+non-finite numbers, and unsupported values fail closed as
+`MARKET_REVIEW_PLAN_INTEGRITY_INVALID` before a semantic field is read. The
+existing full-plan reconstruction still rejects unknown-but-plain fields after
+that snapshot.
+
+The injected D2 ledger remains a host-owned executable seam, so D9 does not
+claim to sandbox its implementation. It obtains `recordTerminalReview` only
+from a data-property descriptor; a getter- or Proxy-shaped ledger member is
+rejected without evaluation. Its returned value must then be an exact plain
+own-data `{ hash }` record carrying a lowercase SHA-256 digest. Accessor,
+Proxy, inherited, hidden, symbol, extra, and malformed results fail closed as
+`MARKET_REVIEW_AUDIT_APPEND_INVALID` and cannot create a D2/D3 receipt.
+
+D9 is a local validation boundary only. It adds no credential, signature,
+database/migration, route, worker, queue, provider configuration, network
+call, quote, reservation, booking, publication, handoff, sending path,
+durable approval, or authorization capability. Its successful review output
+continues to be exactly `NOT_AUTHORIZED`.
+
+## D10 — strict review-context and clock boundary
+
+D10 snapshots the caller-held review context before its product, workspace,
+scopes, or clock can influence independent review or local evidence
+reconstruction. The context must be an exact own-data
+`{ product, workspaceId, scopes, now }` record. `scopes` must be a bounded,
+dense plain array containing only the three declared market scopes; accessors,
+hidden fields, symbols, sparse entries, prototype-shaped values, and Proxies
+fail closed as `INVALID_MARKET_REVIEW_CONTEXT` without evaluating those
+values.
+
+`now` remains the narrow unavoidable host seam. It must be an own data-function
+that is not Proxy-shaped. Independent review invokes that verified function
+once, only after the static owner, maker-checker, ledger, and plan gates, and
+accepts only an intrinsic finite `Date`; it copies the epoch value into a new
+local `Date`. A throwing clock,
+Promise/value of another type, invalid `Date`, or Proxy-shaped `Date` fails
+closed as `INVALID_MARKET_REVIEW_TIME`, before ledger entry or audit append.
+The first context snapshot remains the sole product/workspace/scope binding for
+that independent-review call, so a clock cannot swap caller-held context after
+validation.
+
+D10 adds no source/provider access, credential, API key, route, storage read
+or write, migration, queue, worker, quote, reservation, booking, publication,
+handoff, send, durable approval, signature, authorization, or execution path.
+Every successful result remains fixed at `NOT_AUTHORIZED`.
+
+## D11 — literal owner-approval boundary
+
+Every market owner gate accepts only the primitive boolean `true`. This rule
+applies identically to the governed runner, a direct
+`SyntheticMarketConnector.run()` call, and
+`independentlyReviewSyntheticMarketPlan()`. Falsy values and truthy lookalikes
+such as `1`, `'true'`, boxed `Boolean` values, objects, `null`, and
+`undefined` fail closed with the normal owner-gate error; no coercion,
+unboxing, or truthiness conversion occurs.
+
+Independent review checks this scalar gate before it reads the caller-held
+review context, plan, injected ledger, or clock seam. A failed D11 gate cannot
+invoke a context getter/Proxy trap, terminal-ledger method, audit append, quota
+operation, or clock. Direct execution repeats the same exact check rather than
+trusting the governed runner alone.
+
+D11 adds no credential, API key, provider, route, storage read/write,
+migration, worker, queue, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution path. Every
+successful result remains fixed at `NOT_AUTHORIZED`.
+
+## D12 — strict governed-run ingress boundary
+
+Before a market connector can run its preflight, append an audit event, or
+consume quota, `GovernedConnectorRunner` snapshots the exact own-data request
+envelope:
+
+```ts
+{
+  connectorId, input, product, workspaceId, actor, ownerApproved,
+  scopes, costCapCents, requestedItems
+}
+```
+
+The envelope must have the normal `Object.prototype`, no symbols, and all and
+only those enumerable data fields. Its `scopes` value must be a bounded dense
+plain array of own string data. Accessors, Proxies, inherited fields, hidden
+fields, symbols, sparse arrays, and every extra field—including a
+credential/provider-shaped field—fail closed as
+`INVALID_CONNECTOR_RUN_REQUEST` without evaluating the shaped member. The
+literal-`true` D11 owner gate still follows the snapshot, so ordinary falsy or
+truthy lookalikes remain an owner-gate denial rather than a coercion path.
+
+D12 copies the scalar envelope fields and scope strings; it intentionally
+leaves `input` opaque for the selected connector's existing parser. For
+`market`, that parser already accepts only its bounded synthetic request shape
+before audit/quota, and no accepted input can carry a provider credential or
+live instruction. D13 retains that parser's canonical result across the later
+async runner seams. Consequently D12 adds no input interpreter, route, storage,
+migration, queue, worker, network call, provider configuration, credential,
+quote, reservation, booking, publication, handoff, send, durable approval,
+signature, authorization, or execution capability. Every successful market
+result remains `SYNTHETIC`, `LIVE_DISABLED`, and `NOT_AUTHORIZED`.
+
+## D13 — canonical market-preflight snapshot across async runner seams
+
+`Connector.preflight()` may return a canonical input value. When it does, the
+governed runner passes that returned value—not the caller-held original—to the
+connector's later `run()` call. The synthetic `market` preflight parses its
+exact descriptor-gated request into a new scalar-only market request, so the
+same bounded request is used for preflight and the later plan construction.
+
+This closes the preflight-to-run mutation window introduced by the runner's
+asynchronous audit and quota steps. Once preflight has accepted market input,
+a caller changing the original object (including origin, item counts, capacity
+units, or an injected provider/credential-shaped field) cannot change the
+proposal, turn a successful request into a post-audit failure, or reach a live
+path. The normal parser still rejects those fields when present at ingress;
+this package simply preserves the accepted canonical copy after ingress.
+
+D13 does not add generic input interpretation: a connector that returns no
+preflight value retains the existing opaque-input behavior, while `market`
+owns its bounded synthetic schema. It adds no route, storage, migration,
+worker, queue, provider configuration, credential, network call, quote,
+reservation, booking, publication, handoff, send, durable approval,
+signature, authorization, or execution capability. The resulting plan remains
+exactly `SYNTHETIC`, `LIVE_DISABLED`, and `NOT_AUTHORIZED`.
+
+## D14 — construction-time connector configuration snapshot
+
+`SyntheticMarketConnector` copies its configuration exactly once at
+construction. Only own enumerable data fields from this bounded set are
+accepted: `liveEnabled`, `maxCostCapCents`, `maxItems`, and
+`maxCapacityUnits`. The resulting scalar-only copy is frozen internally.
+Accessor, Proxy, inherited, hidden, symbol, and extra fields—including a
+credential/provider-shaped field—make the configuration unavailable before
+preflight, audit, or quota. The normal unavailable error remains
+`MARKET_GOVERNANCE_LIMITS_NOT_CONFIGURED`; this package adds no configuration
+fallback.
+
+The runner calls market preflight before its asynchronous audit and quota
+steps, then invokes market again for the plan. D14 ensures both calls use the
+same construction-time disabled live flag and limits. Mutating the original
+configuration after `runner.run()` cannot turn a successful request into a
+post-quota limit or live-gate failure, increase a limit, inject a credential,
+or create a live path.
+
+D14 adds no route, storage, migration, worker, queue, provider configuration,
+credential, network call, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution capability.
+The resulting plan remains exactly `SYNTHETIC`, `LIVE_DISABLED`, and
+`NOT_AUTHORIZED`.
+
+## D15 — governed host-seam and clock snapshot
+
+`GovernedConnectorRunner` fixes its injected `audit.append` and
+`quota.consume` data-function members at construction. Getter- or Proxy-shaped
+hosts/members are rejected without invocation, and a later host-object mutation
+cannot replace either callback during a market run. Audit append results must
+be exact plain own-data `{ hash }` records with a lowercase SHA-256 digest.
+An invalid requested-event result stops before quota; an invalid succeeded-event
+result returns no successful connector result and does not append a misleading
+third failed event.
+
+The runner calls its clock once, after its static request/scope gates and
+before connector preflight, audit, or quota. Only a non-Proxy function that
+returns an intrinsic finite `Date` is accepted; its epoch is copied into a
+local clock. Requested/succeeded/failed audit timestamps and market provenance
+therefore use the same copied instant. A throwing, Proxy-shaped, non-Date, or
+invalid clock fails closed as `INVALID_GOVERNED_RUN_TIME` before market
+preflight, audit, or quota.
+
+D15 only bounds existing in-process host seams. It adds no route, migration,
+database table, provider configuration, credential, network call, queue,
+worker, quote, reservation, booking, publication, handoff, send, durable
+approval, signature, authorization, or execution capability. Audit/quota hosts
+remain host-owned; this package does not claim that a valid return proves
+durable storage. Every successful market result remains exactly `SYNTHETIC`,
+`LIVE_DISABLED`, and `NOT_AUTHORIZED`.
+
+## D16 — direct market-context snapshot
+
+`SyntheticMarketConnector.preflight()` and `.run()` now take their complete
+`ConnectorRunContext` through an exact own-data descriptor boundary before any
+semantic read. The only allowed fields are `product`, `workspaceId`, `actor`,
+`ownerApproved`, `scopes`, `costCapCents`, `requestedItems`, and `now`.
+Accessor-, Proxy-, inherited-, hidden-, symbol-, sparse-scope-, and extra
+fields (including credential/provider-shaped fields) fail closed as
+`INVALID_MARKET_CONTEXT` without evaluating a caller trap.
+
+For a direct `.run()`, the one allowed `now` callback is invoked only after
+the static context and request have been copied and validated. It must return
+a non-Proxy finite `Date`; its epoch is copied before binding or provenance is
+constructed. A throwing, invalid, or Proxy-shaped date fails closed as
+`INVALID_MARKET_RUN_TIME`. A clock cannot mutate the caller-owned context to
+change the product, maker, scope, limits, request, or any action flag.
+
+D16 hardens the public in-process direct-call seam only. It adds no route,
+storage, migration, provider configuration, credential, network call, queue,
+worker, quote, reservation, booking, publication, handoff, send, durable
+approval, signature, authorization, or execution capability. Successful plans
+remain exactly `SYNTHETIC`, `LIVE_DISABLED`, and `NOT_AUTHORIZED`.
+
+## D17 — fixed synthetic connector binding
+
+`SyntheticMarketConnector` now installs `preflight` and `run` as own
+data-functions, retains its construction-time configuration in an ECMAScript
+private field, and freezes the completed connector instance. Its fixed market
+scope tuple is frozen as well. Consequently, neither an own-property overwrite,
+prototype replacement, nor a visible `config` shadow can replace market's
+preflight/run behavior while `GovernedConnectorRunner` is awaiting its audit or
+quota seams.
+
+This is a local integrity boundary for the connector constructed by this
+module; it does not turn a registry into a trust boundary for arbitrary host
+connectors. It adds no provider code, credential field, network call, route,
+storage, migration, queue, worker, quote, reservation, booking, publication,
+handoff, send, durable approval, signature, authorization, or execution
+capability. The fixed methods still produce only `SYNTHETIC`, `LIVE_DISABLED`,
+and `NOT_AUTHORIZED` plans.
+
+## D18 — immutable emitted synthetic plan
+
+After `SyntheticMarketConnector.run()` has assembled the deterministic
+proposal, D18 freezes every known data branch: the root plan, binding and its
+scope tuple, integrity, request, source entries and array, optional quote,
+side-effect flags, owner-review flags, review packet, packet execution flags,
+and packet integrity. The request also remains the exact frozen value named in
+`provenance.untrustedContent`; it is still data-only, never a provider request
+or instruction.
+
+This protects the object returned by both direct and governed calls from later
+in-place addition of a credential/provider-shaped field or an action flag. A
+consumer that wants to simulate or transport a change must make a separate
+copy. That copy has no authority: the existing canonical review validator
+rejects action/packet drift, and an unchanged copy still yields only
+`NOT_AUTHORIZED` review evidence. D18 is not a signature, durable store,
+approval workflow, or execution permission.
+
+D18 adds no provider code, credential handling, network call, route, storage,
+migration, queue, worker, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution capability.
+
+## D19 — immutable review and derived-evidence egress
+
+D19 freezes every public canonical review output after it has been rebuilt:
+the D2 terminal review result and nested D3 receipt, the D3 revalidation
+result, D4 audit witness plus its event/scopes/detail, D5 audit-trail witness,
+D6 audit-trail receipt, D7 evidence manifest, and the nested scope-binding,
+execution, and integrity branches they expose. `validateSyntheticMarketPlanForReview()`
+also returns the D18-sealed canonical plan rather than a mutable reconstruction.
+
+This makes in-place addition of a provider/credential-shaped field, an action
+flag, or a prototype impossible on module-emitted review evidence. A consumer
+may still make a separate copy for transport or simulation, but every existing
+validator reconstructs the fixed `NOT_AUTHORIZED` shape and rejects action or
+integrity drift. D19 is an object-integrity boundary only: it is not a
+signature, durable audit store, approval workflow, authorization, or execution
+permission.
+
+D19 adds no provider code, credential handling, network call, route, storage,
+migration, queue, worker, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution capability.
+
+## D20 — immutable connector-result and preflight egress
+
+D20 seals the last public connector outputs. A direct `preflight()` caller
+receives a frozen canonical scalar request. A direct `run()` caller receives a
+frozen result, frozen plan, frozen provenance, and frozen
+`provenance.untrustedContent`; the governed runner keeps its final result and
+provenance frozen after it adds the local SHA-256 audit summary. The known
+market request is still the same frozen data-only value exposed through
+provenance.
+
+Consequently a caller cannot add a provider/credential-shaped field, replace
+the returned plan, relabel untrusted content as instructions, alter confidence,
+or attach an action-shaped provenance value in place. A caller may make a
+separate copy to represent transport or a new synthetic request. A
+provider-shaped request copy fails the existing exact parser, and an
+action-shaped plan copy fails canonical review; neither copy has authority.
+D20 is an object-integrity boundary, not a signature, durable store, approval,
+authorization, or execution permission.
+
+D20 adds no provider code, credential handling, network call, route, storage,
+migration, queue, worker, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution capability.
+
+## D21 — strict connector-result ingress before success audit
+
+The governed runner validates and copies the governance-visible result wrapper
+**before** it appends `connector.run.succeeded`. It accepts only an exact
+own-data `{ data, provenance, confidence }` object. Provenance must carry the
+selected connector ID, a canonical retrieval time, bounded source identifiers,
+exact data-only untrusted-content labels, a finite confidence in `[0, 1]`, and
+no connector-supplied audit hash. The runner alone attaches its final local
+SHA-256 audit hash after the succeeded append.
+
+Accessor, Proxy, inherited, hidden, symbol, extra (including
+credential/provider-shaped), malformed-time, cross-connector, forged-audit,
+instruction-labelled, and invalid-confidence result forms fail closed as
+`CONNECTOR_RESULT_INVALID`. They receive a requested/failed audit pair, never
+a succeeded audit or returned result. The already reserved quota is not
+refunded; it remains a conservative governance record, never a retry or
+action capability.
+
+`data` and `untrustedContent.value` remain opaque to the generic runner; their
+selected connector owns parsing. For `market`, D18/D20 already seal the
+canonical plan and request. D21 additionally copies the outer result,
+provenance, and untrusted-content metadata before asynchronous success audit,
+then freezes those copied egress branches after the local hash is attached. A
+connector retaining its original result wrapper cannot relabel returned market
+data as provider data or instructions while the audit is pending.
+
+D21 is result-boundary hardening only. It adds no provider code, credential
+handling, network call, route, storage, migration, queue, worker, quote,
+reservation, booking, publication, handoff, send, durable approval, signature,
+authorization, or execution capability.
+
+## D22 — immutable registered connector control plane
+
+`ConnectorRegistry` now admits only a bounded, dense own-data connector
+collection. At registration it copies and freezes each connector's visible
+control plane: ID, kind, auth kind, optional quota group, deduplicated scopes,
+and data-descriptor `preflight`/`run` method references. The resulting registry
+entry invokes the captured method against the originally admitted connector;
+later mutation cannot retarget connector identity, quota grouping, scope
+admission, preflight, or run behavior while a runner is live.
+
+Accessor, Proxy, inherited metadata, hidden/symbol/extra (including
+credential/provider-shaped) own fields, sparse or duplicate scopes, malformed
+IDs/groups, and getter- or Proxy-shaped callbacks fail closed at registry
+construction as `INVALID_CONNECTOR_REGISTRATION`. No clock, preflight, audit,
+quota, connector run, provider, or market-action seam is reached. D22 fixes a
+local in-process control plane only; it does not turn a connector entry into a
+credential, signature, durable approval, authorization, or execution token.
+
+D22 adds no provider code, credential handling, network call, route, storage,
+migration, queue, worker, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution capability.
+
+## D23 — sealed governed-run collaborators
+
+`GovernedConnectorRunner` now admits its registry resolver, audit append
+method, quota consume method, and local clock at construction, then retains
+those references only in a native private field. The resolver, audit, and
+quota methods must be bounded-prototype, descriptor-backed data functions with
+non-Proxy receivers and callbacks. D15's existing audit/quota unavailable
+errors remain stable; a malformed registry resolver or Proxy clock fails
+closed as `INVALID_GOVERNED_RUNNER_COLLABORATOR`. D15 still validates the one
+clock result at run time as an intrinsic finite `Date`.
+
+Replacing public `registry.get`, `audit.append`, `quota.consume`, or legacy
+runner fields after construction cannot retarget connector selection, audit
+append, quota reservation, or the fixed synthetic timestamp path. Proxy
+receivers, accessors, missing methods, Proxy callbacks, and Proxy clocks are
+rejected without evaluating their traps, calling the clock, appending audit,
+consuming quota, preflighting, or running the connector.
+
+D23 is an in-process control-plane snapshot, not a collaborator sandbox or a
+durability/signature claim. It adds no provider code, credential handling,
+network call, route, storage, migration, queue, worker, quote, reservation,
+booking, publication, handoff, send, durable approval, authorization, or
+execution capability. Every admitted result remains exactly `SYNTHETIC`,
+`LIVE_DISABLED`, and `NOT_AUTHORIZED`.
+
+## D24 — opaque connector-failure audit boundary
+
+After the requested audit and quota reservation, a connector rejection is
+untrusted host data. D24 does not test it with `instanceof`, read its
+`message`, stringify it, coerce it, or inspect any property before appending
+the required `connector.run.failed` event. The event always carries only the
+fixed detail `error: "CONNECTOR_RUN_FAILED"` and the already-local
+`requestedAuditHash`. This prevents an accessor-, Proxy-, or
+provider/credential-shaped thrown value from running code or being copied into
+the audit chain. The original rejection is then rethrown; if the failed-audit
+append is malformed or unavailable, that append error still fails closed.
+
+D24 is audit-metadata minimization only. It does not treat a failed run as a
+success and adds no provider code, credential handling, network call, route,
+storage, migration, queue, worker, quote, reservation, booking, publication,
+handoff, send, durable approval, authorization, or execution capability.
+
+## Synthetic-only boundary
+
+There is no URL, `fetch`, SDK, credential field, provider configuration,
+queue worker, scheduler, automatic sync, database reservation, booking, or
+publication code. A successful run returns only an owner-review plan:
+
+~~~json
+{
+  "mode": "SYNTHETIC",
+  "liveStatus": "LIVE_DISABLED",
+  "state": "OWNER_REVIEW_REQUIRED",
+  "ownerReview": {
+    "state": "PENDING_INDEPENDENT_OWNER_REVIEW",
+    "requiredScope": "market:review",
+    "makerCanReview": false,
+    "automaticAction": false,
+    "decisionAuthorizesExecution": false
+  },
+  "reviewPacket": {
+    "version": "synthetic-market-review-packet-v1",
+    "state": "PENDING_INDEPENDENT_OWNER_REVIEW",
+    "automaticAction": false,
+    "execution": {
+      "state": "NOT_AUTHORIZED",
+      "externalNetwork": false,
+      "reservation": false,
+      "booking": false,
+      "publication": false
+    }
+  },
+  "sources": [
+    { "id": "internal-capacity-market", "state": "NOT_QUERIED" },
+    { "id": "hub-connect", "state": "NOT_CONTACTED" }
+  ],
+  "sideEffects": {
+    "externalNetwork": false,
+    "reservation": false,
+    "booking": false,
+    "publication": false
+  }
+}
+~~~
+
+For `capacity-quote`, the response says `NOT_QUOTED`; it never fabricates
+an offer or price. Request values remain
+`UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`. `GCL_MARKET_LIVE_ENABLED=true`
+is not an opt-in: it fails closed with `MARKET_LIVE_DISABLED`. The only value
+that permits the synthetic adapter is the exact lowercase string `false`;
+missing, uppercase, or any other value also closes it.
+
+## Required configuration
+
+No credential is accepted or read. Every limit and the exact disabled flag are
+required; a missing or malformed value fails closed:
+
+~~~dotenv
+GCL_MARKET_LIVE_ENABLED=false
+GCL_MARKET_MAX_COST_CENTS=50
+GCL_MARKET_MAX_ITEMS=10
+GCL_MARKET_MAX_CAPACITY_UNITS=10
+GCL_MARKET_DAILY_RUN_QUOTA=10
+GCL_MARKET_DAILY_ITEM_QUOTA=20
+~~~
+
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23/D24 test evidence and ADOS 10-rule conformance
+
+`test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
+integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
+caller-held audit-witness link reconstruction, plus D5 caller-held
+requested/succeeded/owner-review continuity reconstruction, D6's minimized,
+context-bound rendering of that exact segment, and D7's compact binding of
+independently rebuilt D3 and D6 evidence, plus D8's exact-data terminal-ledger
+and audit-append boundary. D9 snapshots every caller-held review-plan branch
+before semantic reads and validates the injected ledger's member/result
+descriptors before any review receipt can be returned. D10 snapshots every
+review context and limits its clock to one verified host call whose intrinsic
+`Date` value is copied before a terminal ledger operation. D11 requires the
+literal boolean `true` at every owner-gate boundary. D12 snapshots the exact
+governed-run envelope and its scope strings before preflight, audit, or quota.
+D13 keeps market's accepted canonical input snapshot across the runner's
+asynchronous audit, quota, and run seams. D14 fixes market's exact
+construction-time configuration snapshot across those same seams. D15 fixes
+the governed audit/quota members at construction, verifies one copied runner
+clock before preflight, and accepts only an exact SHA-256 audit result. D16
+snapshots direct market preflight/run context and copies its one verified clock
+value before plan construction. D17 fixes the market connector's own
+preflight/run functions, private configuration reference, and scope tuple
+before any runner audit or quota await. D18 freezes every emitted plan branch
+and the request value exposed as data-only provenance before a caller receives
+it. D19 freezes the canonical review result and its D3–D7 receipt, audit,
+trail, and manifest evidence branches before any caller can retain them. D20
+freezes direct preflight output and direct/governed result and provenance
+egress, including data-only untrusted-content metadata after the governed
+audit summary is attached. D21 rejects shaped or forged connector-result
+wrappers before a succeeded audit, copies result/provenance metadata before
+that asynchronous append, and freezes the copied final egress. D22 snapshots
+the market registry's control-plane metadata, scope tuple, quota group, and
+method references at construction, so later connector mutation cannot retarget
+a governed run. D23 snapshots the runner's registry resolver, audit/quota
+callbacks, and local clock behind a native private field, so later public
+collaborator or legacy-runner-field replacement cannot retarget that run.
+D24 treats a connector rejection as opaque data: its fixed failed-event code
+cannot read a hostile error accessor/Proxy or persist provider/credential-like
+fault text in the audit chain.
+Negative tests reject inherited/prototype-shaped input, injected or hidden
+provider-shaped fields, sparse arrays, source-state drift, invented quote data,
+action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
+attempts, missing ledger, invalid review clock, malformed audit result,
+malformed direct-run context, malformed receipt execution/integrity, malformed
+or credential-shaped D4 witnesses, changed audit events/action flags,
+predecessor/hash drift, sequential/concurrent replay attempts, and D5
+discontinuous, semantically mismatched, time-inverted, hidden-field,
+accessor-shaped, and Proxy-shaped trail evidence. D6 additionally rejects
+mutated hashes/receipt IDs, credential-shaped, hidden, symbol, prototype,
+accessor, and Proxy-shaped receipt evidence. D7 additionally rejects a
+substituted D3/D6 integrity digest, scope-binding or manifest-ID drift, and
+credential-shaped, hidden, symbol, accessor, and Proxy-shaped manifests.
+D8 rejects inherited, hidden, symbol, accessor, and Proxy-shaped ledger
+entries before audit append, rejects accessor- and Proxy-shaped append results
+without marking a decision, and proves that a malformed append leaves the
+tuple retryable. D9 additionally rejects root/nested plan accessors, hidden or
+symbol-shaped nested values, sparse source arrays, plan Proxies, getter-shaped
+ledger members, and accessor/Proxy-shaped injected ledger results without
+evaluating those values. D3/D4/D5/D6/D7 rejection produces no extra review
+event, quota item, or local terminal entry. A D9 plan or ledger-member failure
+occurs before the ledger call; a host-owned ledger that is invoked and returns
+invalid data remains unable to create a local receipt. D10 additionally rejects
+scope accessors/Proxies/sparse arrays/oversized arrays, Proxy-shaped clocks,
+and throwing or Proxy-shaped date results without evaluating a shaped value;
+these failures occur before terminal-ledger entry or audit append. D11 rejects
+both falsy values and truthy scalar/object lookalikes before direct execution,
+review context, clock, terminal-ledger, audit, or quota seams are reached. D12
+additionally rejects extra credential-shaped fields, hidden fields, own
+accessors, root and scope-array Proxies, inherited fields, and scope accessors
+before preflight, audit, or quota; a caller mutation after runner invocation
+cannot replace the snapshotted scope binding. D13 additionally proves that a
+post-preflight mutation cannot replace an accepted market request, inject a
+provider-shaped field, or create a failed/post-quota alternate request. D14
+additionally rejects visible/hidden credential-shaped fields, accessors,
+Proxies, and inherited configuration without evaluating shaped values, and
+proves post-preflight configuration mutation cannot change a successful plan
+or create a post-quota failure. D15 additionally rejects getter- and
+Proxy-shaped audit/quota members without invocation, ignores a later mutation
+of fixed host members, rejects invalid clock values before preflight/audit/quota,
+and rejects getter- or malformed audit results before quota or a success result
+can be fabricated. D16 additionally rejects credential-shaped, hidden,
+inherited, accessor-, Proxy-, symbol-, and sparse-array direct contexts without
+evaluating them; it rejects throwing, invalid, and Proxy-shaped direct clock
+results, and proves a clock-side mutation cannot change the copied binding or
+synthetic no-action plan. D17 additionally proves an in-flight run cannot
+overwrite market's `run`/`preflight`, replace its prototype, inject a visible
+configuration property, or expand its scope tuple while the requested audit
+append is pending; the only completed result remains synthetic and no-action.
+D18 additionally proves that the emitted plan's root and nested binding,
+request, sources, quote, side-effect, owner-review, and review-packet branches
+cannot receive an action, provider, credential, or prototype mutation in
+place. A separately mutated clone remains no-action and fails canonical
+review; the original plan's audit and quota counts are unchanged. D19
+additionally proves that canonical plan reconstruction, terminal review
+results, D3 receipts, D4 audit events, D5 witnesses, D6 receipts, and D7
+manifests freeze their complete known branches. In-place action, provider,
+credential, or prototype mutation fails; a separately mutated manifest
+fails closed without adding a review event, quota item, or local terminal
+entry. D20 additionally proves that direct preflight output and every known
+direct/governed result and provenance branch are frozen. In-place provider,
+instruction-handling, confidence, root-result, or action mutation fails; a
+provider-shaped request copy is rejected before a direct plan and an
+action-shaped plan copy fails canonical review without adding audit or quota.
+D21 additionally rejects a Proxy or hidden-field connector result without
+reading its result data fields and without a succeeded audit. (The JavaScript
+Promise protocol may probe a fulfillment value's `then` member before any
+runner code can inspect it.) It proves a retained,
+mutable connector result cannot change the copied confidence, provenance
+source, or data-only instruction label while the succeeded-audit append is
+pending.
+D22 additionally rejects shaped registry collections, connector metadata,
+scope tuples, hidden credential/provider-shaped fields, and callbacks without
+evaluating their traps. It proves a later mutation of a registered connector's
+ID, quota group, scopes, preflight, or run function cannot alter the frozen
+entry's audit, quota, or synthetic no-action result.
+D23 additionally rejects Proxy and accessor registry collaborators, Proxy
+audit callbacks, missing quota methods, and Proxy clocks at construction
+without evaluating a trap, calling a clock, appending an audit event, consuming
+quota, or running a connector. It proves later replacement of public registry,
+audit, quota, clock, or legacy runner fields cannot change the selected
+synthetic, no-action path.
+D24 additionally rejects the need to inspect a connector-thrown value at all:
+an `Error.message` accessor and a Proxy rejection remain unread, while each
+requested run receives only the fixed `CONNECTOR_RUN_FAILED` failed-audit code.
+No provider/credential-shaped fault text reaches the audit detail.
+
+1. Every plan and packet is bound to exactly one product/workspace data plane.
+2. Only the bounded synthetic request is accepted; no provider response is
+   ingested.
+3. Configuration default-denies; only exact `LIVE_ENABLED=false` permits this
+   synthetic adapter.
+4. Full canonical reconstruction rejects changed, malformed, unknown,
+   prototype-shaped, and sparse packet fields; D2 permits one process-local
+   terminal receipt only after a valid audit append, D3 rechecks its local
+   receipt without a write, and D4 rechecks one caller-held audit hash link
+   without reading or writing audit storage. D5 rechecks only a caller-held
+   requested/succeeded/review segment without a write or storage lookup; D6
+   can only minimize and recheck that same segment; D7 can only bind the
+   rebuilt D3/D6 evidence into a still-smaller no-action manifest; D8 admits
+   only exact own-data ledger/audit ingress and leaves a malformed append
+   undecided; D9 snapshots all caller-held plan material and rejects shaped
+   host-ledger results before a receipt can be formed; D10 snapshots bounded
+   review context and copies one verified intrinsic clock value; D11 permits
+   only literal boolean owner approval before any market review seam; D12
+   snapshots an exact governed-run envelope before connector preflight, audit,
+   or quota can consume it; D13 retains market's canonical preflight result
+   across those later asynchronous seams; D14 fixes the connector configuration
+   before those seams; D15 fixes audit/quota host members and copies one
+   verified runner clock before those seams; D16 snapshots direct market
+   preflight/run context and copies one direct clock result before plan
+   construction; D17 fixes the selected synthetic connector instance and its
+   market scope tuple before the runner's asynchronous seams; D18 freezes every
+   emitted synthetic plan branch before it reaches a caller; D19 freezes every
+   canonical review result and D3–D7 evidence branch before it reaches a
+   caller; D20 freezes direct preflight output and direct/governed
+   result/provenance output after audit enrichment; D21 validates and copies
+   strict connector-result ingress before the succeeded-audit seam; D22 fixes
+   registry-visible connector metadata, scopes, quota group, and methods; D23
+   fixes runner collaborator references behind a native private field; D24 keeps
+   connector-thrown fault values out of the failed-audit detail.
+5. Request content is explicitly data-only, never an instruction.
+6. A literal boolean owner gate, `market:review`, and maker–checker separation
+   are mandatory.
+7. The module has no network client, provider URL, credential/API-key field,
+   scheduler, or automatic sync.
+8. Preflight, cost caps, independent grouped quotas, and the scoped SHA-256
+   audit chain bound every run; D5/D6/D7 only check a caller-held three-event
+   segment, a minimized rendering, and a further compact binding of it; D8
+   only hardens D2's in-process append seam and D9 only validates in-process
+   review inputs/results; D12 snapshots the run envelope before those governed
+   seams; D13 retains the accepted market request after preflight; D14 fixes
+   the connector configuration before preflight; D15 fixes the governed host
+   members and clock before preflight; D16 snapshots direct market context and
+   time before its plan construction; D17 fixes the selected synthetic
+   connector binding before the runner's asynchronous seams; D18 freezes the
+   emitted no-action plan before it reaches a caller; D19 freezes the review
+   result and its derived no-action evidence before they reach a caller; D20
+   freezes the direct/governed no-action preflight/result/provenance boundary;
+   D21 copies exact result/provenance metadata before the succeeded audit; D22
+   fixes the registered connector control plane; D23 fixes runner collaborator
+   references before a governed run; D24 writes only a fixed failure code rather
+   than connector-supplied fault data.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23/D24 evidence cannot quote, reserve, book,
+   publish, hand off, notify, send, or trigger an automatic action.
+10. This package has no production migration, `main`/production write, live
+    launch, or market-provider integration.
+
+## Explicit non-goals
+
+There is no real credential/API key, live/provider call, sending, capacity
+lookup, quote, reservation, booking, publication, handoff, background worker,
+durable review store, production migration, live launch, or write to
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23/D24.

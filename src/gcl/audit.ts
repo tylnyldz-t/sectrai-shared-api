@@ -7,6 +7,7 @@ import {
   validateAuditAppendReceipt,
   validateAuditChainHead,
 } from './camera-audit.js'
+import { MarketPrismaHashChainAuditLog } from './market-audit.js'
 import { validGclTenantContext } from './context.js'
 import { ConnectorUnavailableError } from './errors.js'
 import { translationArtifactReviewDigest } from './translation-artifact-review.js'
@@ -667,17 +668,24 @@ function isCameraAuditEvent(event: ConnectorAuditEvent): boolean {
     && typeof event.correlationId === 'string'
 }
 
+function isMarketAuditEvent(event: ConnectorAuditEvent): boolean {
+  return event.connectorId === 'market' && typeof event.actor === 'string'
+}
+
 /** Per product/workspace append-only SHA-256 chain. Translation text and audio
  * bytes are represented by hashes only; they never enter audit records. */
 export class PrismaHashChainAuditLog implements AuditLog {
   private readonly camera: CameraPrismaHashChainAuditLog
+  private readonly market: MarketPrismaHashChainAuditLog
 
   constructor(private readonly prisma: PrismaClient) {
     this.camera = new CameraPrismaHashChainAuditLog(prisma)
+    this.market = new MarketPrismaHashChainAuditLog(prisma)
   }
 
   async append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
     if (isCameraAuditEvent(event)) return this.camera.append(event)
+    if (isMarketAuditEvent(event)) return this.market.append(event)
     return this.prisma.$transaction((transaction) => appendAuditEvent(transaction, event))
   }
 }
@@ -693,6 +701,12 @@ export class InMemoryHashChainAuditLog implements AuditLog {
       const hash = hashAuditEvent(snapshot, previousHash)
       this.entries.push({ event: snapshot, previousHash, hash })
       return { hash, previousHash }
+    }
+    if (isMarketAuditEvent(event)) {
+      const previousHash = this.entries.at(-1)?.hash ?? null
+      const hash = hashAuditEvent(event, previousHash)
+      this.entries.push({ event, previousHash, hash })
+      return { hash }
     }
     // The durable implementation replays every stored row inside its
     // transaction. Preserve that fail-closed property in the test seam too:

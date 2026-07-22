@@ -4,6 +4,8 @@ import { productAuth, validProduct } from './auth.js'
 import { PrismaHashChainAuditLog, GCL_AUDIT_MODULE_ID } from './gcl/audit.js'
 import { ConnectorUnavailableError, GclError } from './gcl/errors.js'
 import { cameraConnectorFromEnvironment } from './gcl/camera.js'
+import { suggestExtensions, type Extension, type ExtensionInput } from './gcl/extensions.js'
+import { syntheticMarketConnectorFromEnvironment } from './gcl/market.js'
 import { EnvironmentPrismaDailyConnectorQuota, GCL_USAGE_MODULE_ID, GCL_VISION_USAGE_MODULE_ID } from './gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner, type LegacyRunConnectorRequest, type RunConnectorRequest } from './gcl/registry.js'
 import type { CameraRunConnectorRequest } from './gcl/camera-registry.js'
@@ -11,7 +13,7 @@ import { translationConnectorsFromEnvironment } from './gcl/translation.js'
 import { GCL_TRANSLATION_ARTIFACT_MODULE_ID, PrismaTranslationArtifactStore, type TranslationArtifactRecord } from './gcl/translation-artifacts.js'
 import type { AuditLog, ConnectorAuditEvent, ConnectorResult } from './gcl/types.js'
 import { serializeRecord } from './types.js'
-import { RequestValidationError, connectorRunFrom, mutationFrom, scopeFrom, translationArtifactApprovalFrom, workspaceScopeFrom } from './validation.js'
+import { RequestValidationError, connectorRunFrom, extensionFrom, extensionSuggestionFrom, mutationFrom, scopeFrom, translationArtifactApprovalFrom, workspaceScopeFrom } from './validation.js'
 
 type ConnectorRunner = { run(request: RunConnectorRequest | CameraRunConnectorRequest): Promise<ConnectorResult> }
 type ArtifactAuditContext = Pick<ConnectorAuditEvent, 'scopes' | 'costCapCents' | 'requestedItems' | 'occurredAt'>
@@ -22,7 +24,8 @@ type TranslationArtifactStore = {
 }
 type AppOptions = { prisma?: PrismaClient; now?: () => Date; gclRunner?: ConnectorRunner; gclOwnerToken?: string; gclAuditLog?: AuditLog; translationArtifactStore?: TranslationArtifactStore }
 
-const GCL_RESERVED_MODULES = new Set([GCL_AUDIT_MODULE_ID, GCL_USAGE_MODULE_ID, GCL_VISION_USAGE_MODULE_ID, GCL_TRANSLATION_ARTIFACT_MODULE_ID])
+const GCL_EXTENSION_MODULE_ID = 'gcl-extensions'
+const GCL_RESERVED_MODULES = new Set([GCL_EXTENSION_MODULE_ID, GCL_AUDIT_MODULE_ID, GCL_USAGE_MODULE_ID, GCL_VISION_USAGE_MODULE_ID, GCL_TRANSLATION_ARTIFACT_MODULE_ID])
 
 function asyncRoute(handler: (request: Request, response: Response, next: NextFunction) => Promise<unknown> | unknown): RequestHandler {
   return (request, response, next) => { void Promise.resolve(handler(request, response, next)).catch(next) }
@@ -81,6 +84,12 @@ function recordIdFrom(request: Request): string {
   return recordId
 }
 
+function storedExtension(id: string, value: unknown): Extension | null {
+  try { return { id, ...extensionFrom(value) } } catch { return null }
+}
+
+function extensionValues(input: ExtensionInput): Prisma.InputJsonValue { return input as Prisma.InputJsonValue }
+
 /** Artifact lifecycle writes get an independent, canonical clock snapshot. */
 function artifactMutationClock(now: () => Date): Date {
   try {
@@ -98,7 +107,7 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
   const app = express()
   const auditLog = gclAuditLog ?? new PrismaHashChainAuditLog(prisma)
   const governedRunner = gclRunner ?? new GovernedConnectorRunner(
-    new ConnectorRegistry([...translationConnectorsFromEnvironment(), cameraConnectorFromEnvironment()]),
+    new ConnectorRegistry([...translationConnectorsFromEnvironment(), cameraConnectorFromEnvironment(), syntheticMarketConnectorFromEnvironment()]),
     auditLog,
     new EnvironmentPrismaDailyConnectorQuota(prisma),
     now,
@@ -196,6 +205,46 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
     const persisted = await artifacts.decideAndAudit({ ...scope, id: recordIdFrom(request), actor, decision: decision.decision, reviewDigest: decision.reviewDigest, now: decisionNow, audit: artifactAuditContext })
     if (!persisted.artifact || !persisted.auditHash) return response.status(404).json({ error: 'TRANSLATION_ARTIFACT_NOT_FOUND', code: 'translation_artifact_not_found' })
     return response.json({ artifact: persisted.artifact, auditHash: persisted.auditHash })
+  }))
+
+  const extensionBase = `${gclBase}/extensions`
+  app.get(extensionBase, asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    const records = await prisma.record.findMany({ where: { ...scope, moduleId: GCL_EXTENSION_MODULE_ID }, orderBy: { createdAt: 'desc' } })
+    return response.json({ extensions: records.map((record) => storedExtension(record.id, record.values)).filter((extension): extension is Extension => extension !== null) })
+  }))
+
+  app.post(extensionBase, gclOwnerAuth(gclOwnerToken), asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    const input = extensionFrom(request.body)
+    const record = await prisma.record.create({ data: { ...scope, moduleId: GCL_EXTENSION_MODULE_ID, values: extensionValues(input), status: input.consentState, createdBy: ownerActorFrom(request) } })
+    return response.status(201).json({ extension: { id: record.id, ...input } })
+  }))
+
+  app.patch(`${extensionBase}/:recordId`, gclOwnerAuth(gclOwnerToken), asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    const input = extensionFrom(request.body)
+    const existing = await prisma.record.findFirst({ where: { ...scope, moduleId: GCL_EXTENSION_MODULE_ID, id: recordIdFrom(request) } })
+    if (!existing) return response.status(404).json({ error: 'EXTENSION_NOT_FOUND', code: 'extension_not_found' })
+    const record = await prisma.record.update({ where: { id: existing.id }, data: { values: extensionValues(input), status: input.consentState, updatedAt: now() } })
+    return response.json({ extension: { id: record.id, ...input } })
+  }))
+
+  app.delete(`${extensionBase}/:recordId`, gclOwnerAuth(gclOwnerToken), asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    const existing = await prisma.record.findFirst({ where: { ...scope, moduleId: GCL_EXTENSION_MODULE_ID, id: recordIdFrom(request) } })
+    if (!existing) return response.status(404).json({ error: 'EXTENSION_NOT_FOUND', code: 'extension_not_found' })
+    ownerActorFrom(request)
+    await prisma.record.delete({ where: { id: existing.id } })
+    return response.status(204).end()
+  }))
+
+  app.post(`${extensionBase}/suggestions`, asyncRoute(async (request, response) => {
+    const scope = workspaceScopeFrom(request)
+    const input = extensionSuggestionFrom(request.body)
+    const records = await prisma.record.findMany({ where: { ...scope, moduleId: GCL_EXTENSION_MODULE_ID }, orderBy: { createdAt: 'desc' } })
+    const extensions = records.map((record) => storedExtension(record.id, record.values)).filter((extension): extension is Extension => extension !== null)
+    return response.json({ suggestions: suggestExtensions(input, extensions), activation: 'owner-approval-required' })
   }))
 
   app.use((error: unknown, _: Request, response: Response, __: NextFunction) => {

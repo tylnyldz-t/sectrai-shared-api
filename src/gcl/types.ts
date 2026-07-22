@@ -1,6 +1,6 @@
 /** Connector input is always treated as data, never as executable instructions. */
-export type ConnectorKind = 'text-translation' | 'speech-translation' | 'document-analysis' | 'synthetic-camera'
-export type ConnectorAuthKind = 'owner-token'
+export type ConnectorKind = 'text-translation' | 'speech-translation' | 'document-analysis' | 'synthetic-camera' | 'external-data' | 'market'
+export type ConnectorAuthKind = 'owner-token' | 'oauth'
 
 export type IsolatedContent = {
   source: string
@@ -14,6 +14,9 @@ export type ConnectorProvenance = {
   source: string
   retrievedAt: string
   auditHash?: string
+  actorId?: string
+  runId?: string
+  datasetId?: string
   liveStatus?: 'LIVE_DISABLED'
   synthetic?: true
   untrustedContent: IsolatedContent
@@ -65,6 +68,7 @@ export interface Connector<TInput = unknown, TData = unknown> {
   id: string
   kind: ConnectorKind
   authKind: ConnectorAuthKind
+  quotaGroup?: string
   scopes: readonly string[]
   /**
    * Runs before audit/quota reservation so an unavailable adapter consumes
@@ -89,7 +93,7 @@ type BaseAuditEvent = {
 }
 
 export type ConnectorAuditEvent = BaseAuditEvent & ({
-  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'translation.artifact.created' | 'translation.artifact.approved' | 'translation.artifact.rejected' | 'connector.document.owner_reviewed'
+  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'translation.artifact.created' | 'translation.artifact.approved' | 'translation.artifact.rejected' | 'connector.document.owner_reviewed' | 'connector.market.owner_reviewed'
   actor: string
   requestedBy?: never
   checkedBy?: never
@@ -109,5 +113,5 @@ export interface AuditLog {
 }
 
 export interface ConnectorQuota {
-  consume(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedItems'> & { connectorId: string; occurredAt: Date }): Promise<void>
+  consume(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedItems'> & { connectorId: string; quotaGroup?: string; occurredAt: Date }): Promise<void>
 }

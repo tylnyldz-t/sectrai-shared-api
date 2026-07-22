@@ -1,6 +1,7 @@
 import { ConnectorInputError, CostCapError, ConnectorUnavailableError, GclError, OwnerGateError, ScopeError } from './errors.js'
 import { requireGclTenantContext } from './context.js'
 import { CameraConnectorRegistry, CameraGovernedConnectorRunner, type CameraRunConnectorRequest } from './camera-registry.js'
+import { MarketConnectorRegistry, MarketGovernedConnectorRunner, type MarketRunConnectorRequest } from './market-registry.js'
 import { intrinsicIsProxy, intrinsicObjectGetOwnPropertyDescriptor } from './intrinsics.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
@@ -66,18 +67,18 @@ export type LegacyRunConnectorRequest = {
 /** Backward-compatible HTTP runner request; the concrete runner also accepts camera requests. */
 export type RunConnectorRequest = LegacyRunConnectorRequest
 
-function connectorLane(value: unknown): 'legacy' | 'camera' {
+function connectorLane(value: unknown): 'legacy' | 'camera' | 'market' {
   if (!value || typeof value !== 'object' || intrinsicIsProxy(value)) return 'camera'
   const descriptor = intrinsicObjectGetOwnPropertyDescriptor(value, 'kind')
-  return descriptor && 'value' in descriptor
-    && (descriptor.value === 'text-translation' || descriptor.value === 'speech-translation' || descriptor.value === 'document-analysis')
-    ? 'legacy'
-    : 'camera'
+  if (descriptor && 'value' in descriptor && (descriptor.value === 'text-translation' || descriptor.value === 'speech-translation' || descriptor.value === 'document-analysis')) return 'legacy'
+  if (descriptor && 'value' in descriptor && (descriptor.value === 'market' || descriptor.value === 'external-data')) return 'market'
+  return 'camera'
 }
 
 export class ConnectorRegistry {
   private readonly connectors = new Map<string, Connector>()
   readonly camera?: CameraConnectorRegistry
+  readonly market?: MarketConnectorRegistry
   readonly hasLegacy: boolean
 
   constructor(connectors: readonly Connector[]) {
@@ -88,9 +89,14 @@ export class ConnectorRegistry {
     }
     const legacy: Connector[] = []
     const camera: Connector[] = []
-    for (const connector of connectors) (connectorLane(connector) === 'legacy' ? legacy : camera).push(connector)
+    const market: Connector[] = []
+    for (const connector of connectors) {
+      const lane = connectorLane(connector)
+      ;(lane === 'legacy' ? legacy : lane === 'market' ? market : camera).push(connector)
+    }
     this.hasLegacy = legacy.length > 0
     if (camera.length > 0) this.camera = new CameraConnectorRegistry(camera)
+    if (market.length > 0) this.market = new MarketConnectorRegistry(market)
     for (const connector of legacy) {
       if (this.connectors.has(connector.id)) throw new Error(`DUPLICATE_CONNECTOR:${connector.id}`)
       this.connectors.set(connector.id, connector)
@@ -99,6 +105,7 @@ export class ConnectorRegistry {
 
   get(connectorId: string): Connector {
     if (connectorId === 'camera-observation' && this.camera) return this.camera.get(connectorId)
+    if (connectorId === 'market' && this.market) return this.market.get(connectorId)
     const connector = this.connectors.get(connectorId)
     if (!connector) throw new ConnectorUnavailableError('CONNECTOR_NOT_REGISTERED')
     return connector
@@ -111,6 +118,7 @@ export class ConnectorRegistry {
    */
 export class GovernedConnectorRunner {
   private readonly camera?: CameraGovernedConnectorRunner
+  private readonly market?: MarketGovernedConnectorRunner
 
   constructor(private readonly registry: ConnectorRegistry, private readonly auditLog: AuditLog, private readonly quota: ConnectorQuota, private readonly now: () => Date = () => new Date()) {
     if (intrinsicIsProxy(registry)) {
@@ -118,12 +126,17 @@ export class GovernedConnectorRunner {
       return
     }
     if (registry.camera) this.camera = new CameraGovernedConnectorRunner(registry.camera, auditLog, quota, now)
+    if (registry.market) this.market = new MarketGovernedConnectorRunner(registry.market, auditLog, quota, now)
   }
 
-  async run(request: LegacyRunConnectorRequest | CameraRunConnectorRequest): Promise<ConnectorResult> {
+  async run(request: LegacyRunConnectorRequest | CameraRunConnectorRequest | MarketRunConnectorRequest): Promise<ConnectorResult> {
     if (intrinsicIsProxy(request) || (this.camera && !this.registry.hasLegacy) || (request && typeof request === 'object' && intrinsicObjectGetOwnPropertyDescriptor(request, 'connectorId')?.value === 'camera-observation')) {
       if (!this.camera) throw new ConnectorUnavailableError('CONNECTOR_NOT_REGISTERED')
       return this.camera.run(request as CameraRunConnectorRequest)
+    }
+    if ((this.market && !this.registry.hasLegacy && !this.registry.camera) || (request && typeof request === 'object' && intrinsicObjectGetOwnPropertyDescriptor(request, 'connectorId')?.value === 'market')) {
+      if (!this.market) throw new ConnectorUnavailableError('CONNECTOR_NOT_REGISTERED')
+      return this.market.run(request as MarketRunConnectorRequest)
     }
     const legacyRequest = request as LegacyRunConnectorRequest
     const connector = this.registry.get(legacyRequest.connectorId)

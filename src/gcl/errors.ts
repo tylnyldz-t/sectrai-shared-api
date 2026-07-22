@@ -25,6 +25,10 @@ export class QuotaError extends GclError {
   constructor(message = 'CONNECTOR_QUOTA_EXCEEDED') { super(message, 429, 'connector_quota_exceeded') }
 }
 
+export class ConnectorUpstreamError extends GclError {
+  constructor(message = 'CONNECTOR_UPSTREAM_ERROR') { super(message, 502, 'connector_upstream_error') }
+}
+
 export class ConnectorInputError extends GclError {
   constructor(message = 'INVALID_CONNECTOR_INPUT') { super(message, 422, 'invalid_connector_input') }
 }
