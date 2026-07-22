@@ -165,9 +165,12 @@ instants, with creation and any terminal decision strictly before
 `reviewExpiresAt`; a hash-valid, backdated, or post-expiry lifecycle is not
 readable. Proposal persistence checks the same requested → succeeded →
 creation timing before it inserts metadata, so a stale proposal cannot create
-an unreachable durable row. This temporal validation is a metadata-only
-integrity check and does not extend the review window or create a live
-execution path.
+an unreachable durable row. Creation has one canonical instant: the persisted
+row's `createdAt` and the `artifact.created` audit event's `occurredAt` must
+be exactly identical. A mismatch is rejected before a creation transaction
+opens; a hash-valid persisted row with a different creation time is unreadable
+and undecidable. This temporal validation is a metadata-only integrity check
+and does not extend the review window or create a live execution path.
 Metadata-shaped rows with missing, duplicate, out-of-order, cross-maker, or
 mismatched lifecycle evidence is unavailable with
 `TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID`. This check does not expose
@@ -258,8 +261,9 @@ artifact.
    both artifact storage and audit validation.
 8. One requested run has one terminal outcome, and one successful run can bind
    exactly one artifact; the SHA-256 audit chain replays these transitions.
-9. Maker/checker separation, TTL, canonical timestamps, and compare-and-set
-   terminal decisions prevent self-approval, stale review, and overwrite races.
+9. Maker/checker separation, TTL, one canonical creation/decision timestamp,
+   and compare-and-set terminal decisions prevent self-approval, stale review,
+   timestamp substitution, and overwrite races.
 10. Each durable mutation shares a transaction with its audit row; no migration,
     publication, send, provider invocation, real-data ingestion, or production
     enablement is authorized by this synthetic contract or its tests.

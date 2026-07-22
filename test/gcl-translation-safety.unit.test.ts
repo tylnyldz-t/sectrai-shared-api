@@ -499,7 +499,7 @@ test('durable proposals bind the maker, request limits, metadata envelope, and u
           { values: { event: requested, previousHash: null, hash: requestedHash } },
           { values: { event: succeeded, previousHash: requestedHash, hash: succeededHash } },
         ],
-        create: async (argument: { data: { moduleId: string; product: string; workspaceId: string; values: unknown; createdBy: string } }) => {
+        create: async (argument: { data: { moduleId: string; product: string; workspaceId: string; values: unknown; createdAt: Date; createdBy: string } }) => {
           if (argument.data.moduleId !== 'gcl-translation-artifacts') {
             auditCreates += 1
             return {}
@@ -512,7 +512,7 @@ test('durable proposals bind the maker, request limits, metadata envelope, and u
             workspaceId: argument.data.workspaceId,
             values: argument.data.values,
             status: 'pending-checker-approval',
-            createdAt: now(),
+            createdAt: argument.data.createdAt,
             createdBy: argument.data.createdBy,
           }
         },
@@ -536,7 +536,7 @@ test('durable proposals bind the maker, request limits, metadata envelope, and u
     { ...input, actor: 'other-maker@example.test' },
     { ...input, audit: { ...input.audit, costCapCents: 24 } },
     { ...input, audit: { ...input.audit, requestedItems: 2 } },
-    { ...input, audit: { ...input.audit, occurredAt: proposal.reviewExpiresAt } },
+    { ...input, now: new Date(proposal.reviewExpiresAt), audit: { ...input.audit, occurredAt: proposal.reviewExpiresAt } },
     { ...input, proposal: { ...proposal, contentHash: `sha256:${'c'.repeat(64)}` } },
   ]) {
     await assert.rejects(() => artifacts.proposeAndAudit(forged), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_RUN_AUDIT_LINK_INVALID')
@@ -547,6 +547,7 @@ test('durable proposals bind the maker, request limits, metadata envelope, and u
   const accepted = await artifacts.proposeAndAudit(input)
   assert.equal(accepted.artifact.id, 'translation-artifact-bound')
   assert.equal(accepted.artifact.contentHash, proposal.contentHash)
+  assert.equal(accepted.artifact.createdAt, input.now.toISOString())
   assert.match(accepted.auditHash, /^[a-f0-9]{64}$/)
   assert.equal(artifactCreates, 1)
   assert.equal(auditCreates, 1)
@@ -630,6 +631,26 @@ test('durable decisions reject an audit context that is not bound to the decisio
   assert.equal(transactionCalls, 0)
 })
 
+test('durable proposals reject a creation audit timestamp that is not bound to the mutation clock before opening a transaction', async () => {
+  let transactionCalls = 0
+  const artifacts = new PrismaTranslationArtifactStore({
+    $transaction: async () => { transactionCalls += 1; return null },
+  } as never)
+  const input = {
+    product,
+    workspaceId,
+    actor: 'maker@example.test',
+    connectorId: 'translation-text-synthetic',
+    proposal: runResult().artifact!,
+    runAuditHash: 'a'.repeat(64),
+    now: now(),
+    audit: { scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: '2026-07-22T12:00:01.000Z' },
+  }
+
+  await assert.rejects(() => artifacts.proposeAndAudit(input), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_CREATION_AUDIT_INVALID')
+  assert.equal(transactionCalls, 0)
+})
+
 test('durable terminal artifacts require a distinct checker, matching decision instant, and a pre-expiry chronology', async () => {
   const proposal = runResult().artifact!
   const artifactId = 'translation-artifact-terminal-lifecycle'
@@ -647,7 +668,7 @@ test('durable terminal artifacts require a distinct checker, matching decision i
   }
   const succeededHash = hashAuditEvent(succeeded, requestedHash)
 
-  function lifecycle(decisionActor: string, decisionOccurredAt: string, storedDecidedAt = now().toISOString()): PrismaTranslationArtifactStore {
+  function lifecycle(decisionActor: string, decisionOccurredAt: string, storedDecidedAt = now().toISOString(), storedCreatedAt = now().toISOString()): PrismaTranslationArtifactStore {
     const pending = { connectorId: 'translation-text-synthetic', ...proposal, runAuditHash: succeededHash }
     const reviewDigest = translationArtifactReviewDigest(pending)
     const values = {
@@ -682,7 +703,7 @@ test('durable terminal artifacts require a distinct checker, matching decision i
     }
     const approvedHash = hashAuditEvent(approved, createdHash)
     const record = {
-      id: artifactId, product, workspaceId, values, status: 'approved', createdAt: now(), createdBy: maker,
+      id: artifactId, product, workspaceId, values, status: 'approved', createdAt: new Date(storedCreatedAt), createdBy: maker,
     }
     const recordStore = {
       findFirst: async () => record,
@@ -702,6 +723,7 @@ test('durable terminal artifacts require a distinct checker, matching decision i
   await assert.doesNotReject(() => lifecycle(checker, now().toISOString()).get(product, workspaceId, artifactId))
   await assert.rejects(() => lifecycle(maker, now().toISOString()).get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
   await assert.rejects(() => lifecycle(checker, '2026-07-22T12:00:01.000Z').get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
+  await assert.rejects(() => lifecycle(checker, now().toISOString(), now().toISOString(), '2026-07-22T12:00:00.001Z').get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID')
   await assert.rejects(() => lifecycle(checker, proposal.reviewExpiresAt, proposal.reviewExpiresAt).get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
   await assert.rejects(() => lifecycle(checker, '2026-07-22T11:59:59.999Z', '2026-07-22T11:59:59.999Z').get(product, workspaceId, artifactId), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
 })
