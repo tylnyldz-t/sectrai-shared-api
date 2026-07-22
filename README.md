@@ -60,6 +60,14 @@ cannot turn a local SVG artifact into a provider URI, extend its review
 deadline, or alter a terminal output. It remains synthetic, `LIVE_DISABLED`,
 owner-only, and publication-blocked.
 
+D7 additionally seals the validated candidate-issuance proof and freezes the
+terminal review event before it reaches a review ledger. A retained mutable
+proof cannot swap lineage hashes or deadlines while an append is pending, and
+the ledger cannot change `publication: blocked` before its append/receipt
+re-read. This remains local synthetic integrity hardening only: no provider,
+network, dispatch, credential, migration, send, or publication capability is
+added.
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:

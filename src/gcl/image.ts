@@ -819,6 +819,24 @@ function assertIssuanceProof(value: unknown): asserts value is ImageCandidateIss
   if (!proof || !hasExactKeys(proof, ['issuanceAuditHash', 'runAuditHash', 'issuanceOccurredAt', 'reviewExpiresAt', 'candidateFingerprint']) || typeof proof.issuanceAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.issuanceAuditHash) || typeof proof.runAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.runAuditHash) || !canonicalTimestamp(proof.issuanceOccurredAt) || !canonicalTimestamp(proof.reviewExpiresAt) || typeof proof.candidateFingerprint !== 'string' || !DIGEST_PATTERN.test(proof.candidateFingerprint)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
 }
 
+/**
+ * A ledger proof is untrusted at the public helper boundary just like a
+ * candidate. Keep a private, immutable lineage snapshot across the later
+ * review-ledger await so a retained caller reference cannot invalidate an
+ * already-recorded terminal decision or change its returned provenance.
+ */
+function sealedIssuanceProof(value: unknown): ImageCandidateIssuanceProof {
+  try {
+    assertIssuanceProof(value)
+    const proof = structuredClone(value)
+    assertIssuanceProof(proof)
+    return freezeData(proof)
+  } catch (error) {
+    if (error instanceof ConnectorUnavailableError) throw error
+    throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
+  }
+}
+
 function assertReviewNotBeforeIssuance(occurredAt: Date, issuance: { issuanceOccurredAt: string }): void {
   if (occurredAt.getTime() < new Date(issuance.issuanceOccurredAt).getTime()) throw new ConnectorInputError('IMAGE_OWNER_REVIEW_BEFORE_CANDIDATE_ISSUANCE')
 }
@@ -835,7 +853,7 @@ function assertDecisionProof(value: unknown, auditHash: string, issuance: ImageC
 }
 
 function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected', candidate: SyntheticImageCandidate, actor: string, occurredAt: Date, context: ImageOwnerReviewContext, issuance: ImageCandidateIssuanceProof, detail: Record<string, unknown>): ImageOwnerReviewDecisionEvent {
-  return {
+  return freezeData({
     type,
     connectorId: IMAGE_TTI_CONNECTOR_ID,
     product: context.product,
@@ -856,7 +874,7 @@ function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.ar
       runAuditHash: issuance.runAuditHash,
       ...detail,
     },
-  } as const
+  } as const)
 }
 
 /**
@@ -867,8 +885,7 @@ function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.ar
 export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate, ownerApproved: boolean, actor: string, reviewLedger: ImageOwnerReviewLedger, candidateLedger: ImageCandidateLedger, context: ImageOwnerReviewContext): Promise<OwnerLikedImageArtifact> {
   const request = assertOwnerReviewRequest(candidate, ownerApproved, actor, reviewLedger, context)
   const assertIssued = candidateLedgerAssertion(candidateLedger)
-  const issuance = await assertIssued.call(candidateLedger, request.candidate)
-  assertIssuanceProof(issuance)
+  const issuance = sealedIssuanceProof(await assertIssued.call(candidateLedger, request.candidate))
   assertCandidateMatchesIssuance(request.candidate, issuance)
   assertReviewNotBeforeIssuance(request.occurredAt, issuance)
   const artifactId = `owner-liked-${request.candidate.candidateId}`
@@ -901,8 +918,7 @@ export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandida
   const request = assertOwnerReviewRequest(candidate, ownerApproved, actor, reviewLedger, context)
   const assertIssued = candidateLedgerAssertion(candidateLedger)
   if (reason !== 'NOT_SUITABLE' && reason !== 'SAFETY_CONCERN' && reason !== 'NEEDS_REVISION') throw new ConnectorInputError('INVALID_IMAGE_REJECTION_REASON')
-  const issuance = await assertIssued.call(candidateLedger, request.candidate)
-  assertIssuanceProof(issuance)
+  const issuance = sealedIssuanceProof(await assertIssued.call(candidateLedger, request.candidate))
   assertCandidateMatchesIssuance(request.candidate, issuance)
   assertReviewNotBeforeIssuance(request.occurredAt, issuance)
   const reviewId = `owner-rejected-${request.candidate.candidateId}`

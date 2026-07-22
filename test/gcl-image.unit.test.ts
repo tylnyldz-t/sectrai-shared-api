@@ -719,6 +719,47 @@ test('D6 seals terminal owner-decision candidates across an awaited ledger write
   assert.equal(Object.isFrozen(rejection.ownerReview), true)
 })
 
+test('D7 seals issuance proofs and terminal events across an owner-review ledger await', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const { candidate, candidates } = await governedIssuedRun(audit)
+  const durableIssuance = await candidates.assertIssued(candidate)
+  const mutableIssuance = structuredClone(durableIssuance)
+  let releaseAppend: (() => void) | undefined
+  const appendGate = new Promise<void>((resolve) => { releaseAppend = resolve })
+  const baseReviews = new InMemoryImageOwnerReviewLedger(audit)
+  const reviews = {
+    appendDecision: async (event: Parameters<InMemoryImageOwnerReviewLedger['appendDecision']>[0]) => {
+      assert.equal(Object.isFrozen(event), true)
+      assert.equal(Object.isFrozen(event.detail), true)
+      assert.throws(() => { ;(event.detail as { publication: string }).publication = 'unblocked' }, TypeError)
+      await appendGate
+      return baseReviews.appendDecision(event)
+    },
+    assertRecorded: async (event: Parameters<InMemoryImageOwnerReviewLedger['assertRecorded']>[0]) => baseReviews.assertRecorded(event),
+  }
+  const proofLedger = {
+    appendIssuance: (...args: Parameters<InMemoryImageCandidateLedger['appendIssuance']>) => candidates.appendIssuance(...args),
+    assertIssued: async (presented: Parameters<InMemoryImageCandidateLedger['assertIssued']>[0]) => {
+      assert.equal(presented.candidateId, candidate.candidateId)
+      return mutableIssuance
+    },
+  }
+  const pendingLike = ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, proofLedger, context)
+  await Promise.resolve()
+  await Promise.resolve()
+
+  mutableIssuance.issuanceAuditHash = 'f'.repeat(64)
+  mutableIssuance.runAuditHash = 'e'.repeat(64)
+  mutableIssuance.reviewExpiresAt = '2026-07-22T12:59:59.999Z'
+  if (!releaseAppend) throw new Error('D7_TEST_REVIEW_GATE_MISSING')
+  releaseAppend()
+  const artifact = await pendingLike
+  assert.equal(artifact.issuanceAuditHash, durableIssuance.issuanceAuditHash)
+  assert.equal(artifact.runAuditHash, durableIssuance.runAuditHash)
+  assert.equal(artifact.ownerReview.reviewExpiresAt, durableIssuance.reviewExpiresAt)
+  assert.equal(audit.entries[3]?.event.detail.publication, 'blocked')
+})
+
 test('candidate issuance and terminal review cannot be backdated across the governed lineage', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)

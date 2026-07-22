@@ -266,6 +266,24 @@ hardening only: both terminal forms stay owner-only and
 `publication: blocked`; no provider, network, GPU, dispatch, credential,
 migration, send, or publication path is added.
 
+## D7 — sealed terminal lineage proof and event
+
+The owner-decision helpers now treat the candidate-ledger issuance proof as
+untrusted across their later review-ledger await. After its closed shape is
+validated, they copy and recursively freeze the proof before using its hashes,
+deadline, and fingerprint to compose the terminal event or return provenance.
+The generated terminal event is likewise frozen before it crosses the public
+review-ledger boundary and the same immutable snapshot is used for both append
+and receipt re-read.
+
+Consequently, a custom host seam that retains and mutates a previously valid
+issuance proof while a review append is pending cannot turn a recorded decision
+into an unprovable failure, swap the returned issuance/run hash, extend the
+deadline, or rewrite `publication: blocked`. This is only local integrity
+hardening: proofs and events remain redacted, terminal output remains
+owner-only and publication-blocked, and no provider, network, GPU, dispatch,
+credential, migration, send, or publication capability is introduced.
+
 ## Negative and edge-case guarantees
 
 - Prompt fields accept only the documented four keys. Empty text, a value over
@@ -383,6 +401,11 @@ migration, send, or publication path is added.
   rejected output. A caller-owned copied candidate that changes while a review
   audit append is pending cannot introduce a provider URI, alter a deadline,
   or change the returned owner-review snapshot.
+- Owner-decision helpers also seal the validated issuance proof and their
+  generated terminal event before review-ledger work yields. A retained,
+  mutable proof cannot swap lineage hashes or deadlines after a decision is
+  composed, and a review-ledger seam cannot rewrite the event's blocked
+  publication state before its append or receipt re-read.
 - `creativeWorkerPlan.dispatch` remains exactly
   `{ performed: false, gate: "LIVE_DISABLED", network: "not-attempted" }`.
   This package does not invoke Creative Worker, ComfyUI, Docker, loopback, a
@@ -408,8 +431,9 @@ migration, send, or publication path is added.
    endpoint, or credentials.
 7. Candidate-set and candidate fingerprints are recomputed from the exact
    redacted shape before issuance or terminal review; terminal helpers seal
-   that candidate and their frozen output, while canonical review deadlines
-   are re-read from durable issuance and bound into terminal proofs.
+   the candidate, issuance proof, terminal event, and frozen output, while
+   canonical review deadlines are re-read from durable issuance and bound into
+   terminal proofs.
 8. A governed run has one bound issuance set, and each candidate has one
    replay-protected terminal outcome in the SHA-256 audit lineage.
 9. Canonical monotonic timestamps, expiry, full scope binding, and
