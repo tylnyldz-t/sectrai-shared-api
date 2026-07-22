@@ -739,8 +739,9 @@ review; the original plan's audit and quota counts are unchanged.
    the connector configuration before preflight; D15 fixes the governed host
    members and clock before preflight; D16 snapshots direct market context and
    time before its plan construction; D17 fixes the selected synthetic
-   connector binding before the runner's asynchronous seams.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 evidence cannot quote, reserve, book,
+   connector binding before the runner's asynchronous seams; D18 freezes the
+   emitted no-action plan before it reaches a caller.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -750,4 +751,4 @@ review; the original plan's audit and quota counts are unchanged.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18.
