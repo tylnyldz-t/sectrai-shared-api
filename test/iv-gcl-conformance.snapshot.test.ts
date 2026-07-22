@@ -5,7 +5,7 @@ import { posix as path } from 'node:path'
 import test from 'node:test'
 import ts from 'typescript'
 
-type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10'
+type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11'
 
 type PinnedClosureBlob = {
   path: string
@@ -46,7 +46,7 @@ const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
 const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
 
 /*
- * These are immutable local Git snapshots from the D1 through D10 audit batches.
+ * These are immutable local Git snapshots from the D1 through D11 audit batches.
  * Every source read below is `git show <revision>:<path>`, never the mutable
  * worktree file. This fixture does not import target runtime code, load an
  * env file, open a socket, or make a network request. A missing worktree,
@@ -131,6 +131,14 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D10', name: 'Translation', revision: '6f34b55', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '542a39d3ac9849469d5a39aca21dd60a58ec374a', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: 'cb6b2a1329d4fa85ecf69fc8f3282dc2c0dfdeeb' }] },
   { batch: 'D10', name: 'Language education', revision: 'e9baa02', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '5ed6ce490238a24a808074bd9e8a298c58cb42a8', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: '9b51dfaafc9ce5db4ef0313d556bf47c9a1f8c1a' }] },
   { batch: 'D10', name: 'Camera', revision: '3f5202b', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '0f8779b81972e76c15389b25fa52b8b011da4f41', registryBlob: 'b8787e9af75503bb5b1f5b0c8269545846dfaa95', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D11', name: 'RA OCR', revision: 'f8a4a85', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: '76140e91ee58ed485f1b8f331e62faa68a5f1879', registryBlob: '2407ff38734546832bd9a8e2e97fae488198e7f9', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D11', name: 'RA image', revision: '33c53f3', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: '34ec0d7bcb615775f8576dba603707fac683e3b5', registryBlob: '76221dc13d588bd7a042735badf6bc825b573ca3', hardDeniesLiveOptIn: false, quotaFailureAudited: false, pinnedClosureBlobs: [{ path: 'src/gcl/audit.ts', blob: 'f1618239ae09978cbaa079c13bccb3a028fbbef5' }, { path: 'src/gcl/image-candidate-ledger.ts', blob: 'bee9b5b184782dc5773adc2c52dd5658020558dc' }, { path: 'src/gcl/image-review-ledger.ts', blob: '1a496e0ee150b3c3a864c044e498b457cc27c6b3' }] },
+  { batch: 'D11', name: 'RA 3D/game', revision: '48117da', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: 'ab9ef5e2b668ff176c6f2aff708479b8b367fcbb', registryBlob: 'e2c97f4be56ae7db01c18c5fa33ed0d3f51a8297', hardDeniesLiveOptIn: false, quotaFailureAudited: false, pinnedClosureBlobs: [{ path: 'src/gcl/jnc-pilot.ts', blob: 'ed77b9715a54b38eddf56691f0432ccc0a4c28a6' }, { path: 'src/gcl/result-boundary.ts', blob: 'd9614e917857e448ad868089084c73261d1dbd4a' }], pinnedSupplementalBlobs: [{ path: 'src/gcl/game-engine.ts', blob: 'bdd208d9870aeb460fb50ba8e817eba62b4c4195' }] },
+  { batch: 'D11', name: 'RA market', revision: 'f2caeb2', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: '11636d2d9a96d8e1662e66324430120c77428308', registryBlob: '66f1a5872dd8ccad258fceb833476f46e9a373c8', hardDeniesLiveOptIn: true, quotaFailureAudited: false },
+  { batch: 'D11', name: 'RFID', revision: '7ee3b11', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: '688d170d830684e8c0dfd35f0d480ea7d81e4019', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D11', name: 'Translation', revision: '8bf4882', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '542a39d3ac9849469d5a39aca21dd60a58ec374a', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: '362e0dd89efe2ebfc735b9f88693736f3a8ee8d3' }, { path: 'src/gcl/translation-artifacts.ts', blob: 'b3a30c025ce226fb80dfb5ef4c37a163d3454487' }, { path: 'src/gcl/translation-artifact-review.ts', blob: 'b0f485a6542ffeb245f0811ebf858d8dd8d584b2' }] },
+  { batch: 'D11', name: 'Language education', revision: '24b3c4a', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: 'c8a83355a2f6a468b3443cc56121b416f859ac12', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: 'be5f2d160d16f27f1d3edda58cce044a011a62d5' }] },
+  { batch: 'D11', name: 'Camera', revision: '2359558', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '539d5df89194e0326810789d2b2255386a592108', registryBlob: 'addf058761d48e2da8d0664137c68e6d460fb456', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
 ]
 
 function repositoryFor(snapshot: Snapshot): string {
@@ -156,11 +164,18 @@ function gitBlobId(source: string): string {
   return createHash('sha1').update(`blob ${Buffer.byteLength(source, 'utf8')}\0`).update(source).digest('hex')
 }
 
+function parsedTypeScriptSource(source: string): ts.SourceFile {
+  const sourceFile = ts.createSourceFile('gcl-audit.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  if (sourceFile.parseDiagnostics.length > 0) throw new Error('GCL_AUDIT_INVALID_TYPESCRIPT_SOURCE')
+  return sourceFile
+}
+
 function staticModuleSpecifiers(source: string): readonly string[] {
   const imports = new Set<string>()
-  for (const match of source.matchAll(/\b(?:import|export)\s+(?:type\s+)?(?:[^'"\n]*?\s+from\s+)?['"]([^'"]+)['"]/g)) {
-    const importedPath = match[1]
-    if (importedPath) imports.add(importedPath)
+  for (const statement of parsedTypeScriptSource(source).statements) {
+    if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) continue
+    const moduleSpecifier = statement.moduleSpecifier
+    if (moduleSpecifier && ts.isStringLiteral(moduleSpecifier)) imports.add(moduleSpecifier.text)
   }
   return [...imports]
 }
@@ -232,11 +247,42 @@ function typeOnlyFunctionReferencePositions(code: string): ReadonlySet<number> {
   return positions
 }
 
+/**
+ * A descriptor-safe data walker may stop before the built-in function
+ * prototype. This exact strict comparison is structural only: it neither
+ * obtains the Function constructor nor invokes a function. Every other
+ * value-position reference remains a prohibited evaluation capability.
+ */
+function safeFunctionPrototypeComparisonPositions(code: string): ReadonlySet<number> {
+  // `assertNoRuntimeEscape` first removes comments so prohibited capability
+  // words in comments cannot trigger a finding. That lexical transform can
+  // intentionally leave a URL-shaped string fragment incomplete, so this
+  // local structural classifier must be tolerant of parser diagnostics.
+  const sourceFile = ts.createSourceFile('gcl-audit.ts', code, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
+  const positions = new Set<number>()
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isPropertyAccessExpression(node)
+      && !node.questionDotToken
+      && ts.isIdentifier(node.expression)
+      && node.expression.text === 'Function'
+      && node.name.text === 'prototype'
+      && ts.isBinaryExpression(node.parent)
+      && node.parent.operatorToken.kind === ts.SyntaxKind.ExclamationEqualsEqualsToken
+      && (node.parent.left === node ? ts.isIdentifier(node.parent.right) : node.parent.right === node && ts.isIdentifier(node.parent.left))
+    ) positions.add(node.expression.getStart(sourceFile))
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
+  return positions
+}
+
 function assertNoFunctionCapability(code: string, name: string): void {
   const typeOnlyPositions = typeOnlyFunctionReferencePositions(code)
+  const safePrototypeComparisonPositions = safeFunctionPrototypeComparisonPositions(code)
   for (const match of code.matchAll(/\bFunction\b/g)) {
     const index = match.index
-    if (index === undefined || typeOnlyPositions.has(index)) continue
+    if (index === undefined || typeOnlyPositions.has(index) || safePrototypeComparisonPositions.has(index)) continue
     assert.fail(`${name} must not retain a Function runtime capability`)
   }
 }
@@ -259,23 +305,26 @@ function assertNoRuntimeEscape(source: string, name: string): void {
   assert.doesNotMatch(code, /(?:\b[A-Za-z_$][A-Za-z0-9_$]*|\{[^}\n]*\}|\[[^\]\n]*\])\s*=\s*\(?\s*process\b(?!\s*(?:\.|\?\.))/, `${name} must not assign a Node runtime for later capability recovery`)
 }
 
-function allImportsOf(source: string, importedPath: string): readonly string[] {
-  const escapedPath = importedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-  const imports = [...sourceCode(source).matchAll(new RegExp(`\\b(?:import|export)\\s+([^;'"\\n]+?)\\s+from\\s+['"]${escapedPath}['"]`, 'g'))]
-  return imports.map((match) => match[1]?.trim() ?? '')
+function moduleDeclarationsOf(source: string, importedPath: string): readonly (ts.ImportDeclaration | ts.ExportDeclaration)[] {
+  return parsedTypeScriptSource(source).statements.filter((statement): statement is ts.ImportDeclaration | ts.ExportDeclaration => {
+    if (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) return false
+    return Boolean(statement.moduleSpecifier && ts.isStringLiteral(statement.moduleSpecifier) && statement.moduleSpecifier.text === importedPath)
+  })
 }
 
-function isTypeOnlyImportClause(clause: string): boolean {
-  if (clause.startsWith('type ')) return true
-  if (!clause.startsWith('{') || !clause.endsWith('}')) return false
-  const namedImports = clause.slice(1, -1).split(',').map((item) => item.trim()).filter(Boolean)
-  return namedImports.length > 0 && namedImports.every((item) => /^type\s+[A-Za-z_$][A-Za-z0-9_$]*(?:\s+as\s+[A-Za-z_$][A-Za-z0-9_$]*)?$/.test(item))
+function isTypeOnlyModuleDeclaration(declaration: ts.ImportDeclaration | ts.ExportDeclaration): boolean {
+  if (ts.isExportDeclaration(declaration)) return declaration.isTypeOnly
+  const importClause = declaration.importClause
+  if (!importClause) return false
+  if (importClause.isTypeOnly) return true
+  const namedBindings = importClause.namedBindings
+  return Boolean(namedBindings && ts.isNamedImports(namedBindings) && namedBindings.elements.length > 0 && namedBindings.elements.every((element) => element.isTypeOnly))
 }
 
 function isAllowedTypeOnlyImport(source: string, importedPath: string): boolean {
   if (!ALLOWED_TYPE_ONLY_GCL_IMPORTS.has(importedPath)) return false
-  const imports = allImportsOf(source, importedPath)
-  return imports.length > 0 && imports.every(isTypeOnlyImportClause)
+  const declarations = moduleDeclarationsOf(source, importedPath)
+  return declarations.length > 0 && declarations.every(isTypeOnlyModuleDeclaration)
 }
 
 function assertAllowedImports(source: string, name: string): void {
@@ -323,7 +372,7 @@ function ownerDenialPrecedesReservations(registry: string): boolean {
   return ownerGate >= 0 && ownerGate < preflight && preflight < requestedAudit && requestedAudit < quota
 }
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10 source fixture pins every audited connector and its governance runner to local Git objects', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
     assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
@@ -340,7 +389,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10 source fixture pins every audited connector
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
     const closure = [...sourceClosure(snapshot).values()].join('\n')
@@ -359,7 +408,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10 synthetic source closure has no egress, pri
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
@@ -464,4 +513,27 @@ test('D10 fail-closed safety checks reject computed CommonJS loader recovery', (
     "const factory = new Function('return process')",
   ]) assert.throws(() => assertNoRuntimeEscape(source, `D10 negative probe: ${source}`))
   assert.doesNotThrow(() => assertNoRuntimeEscape('function typeOnly(callback: Function): void { callback }', 'D10 allowed erased Function type'))
+})
+
+test('D11 fail-closed static module parsing covers multiline imports and exports', () => {
+  const multilineNodeImport = "import {\n  request\n} from 'node:https'"
+  const multilineNodeExport = "export {\n  request\n} from 'node:https'"
+  const multilineBoundaryEscape = "import {\n  credential\n} from '../auth.js'"
+  const multilineTypeOnlyImport = "import {\n  type PrismaClient\n} from '@prisma/client'"
+
+  assert.throws(() => assertAllowedImports(multilineNodeImport, 'D11 multiline import probe'))
+  assert.throws(() => assertAllowedImports(multilineNodeExport, 'D11 multiline export probe'))
+  assert.throws(() => localGclImportPaths('src/gcl/connector.ts', multilineBoundaryEscape))
+  assert.doesNotThrow(() => assertAllowedImports(multilineTypeOnlyImport, 'D11 allowed erased multiline type import'))
+  assert.throws(() => staticModuleSpecifiers("import {\n  request from 'node:https'"))
+})
+
+test('D11 permits only a strict descriptor-walker comparison to Function.prototype', () => {
+  assert.doesNotThrow(() => assertNoRuntimeEscape('const terminal = target !== Function.prototype', 'D11 descriptor-walker terminal comparison'))
+  for (const source of [
+    'const prototype = Function.prototype',
+    'const factory = Function.prototype.constructor',
+    'const terminal = target !== Function?.prototype',
+    'const terminal = target === Function.prototype',
+  ]) assert.throws(() => assertNoRuntimeEscape(source, `D11 Function capability probe: ${source}`))
 })
