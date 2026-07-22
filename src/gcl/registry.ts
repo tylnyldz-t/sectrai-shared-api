@@ -250,23 +250,26 @@ function snapshotRunRequest(value: unknown): SnapshottedRunConnectorRequest {
 }
 
 /**
- * D15 keeps the runner's three unavoidable host seams deliberately narrow.
- * Members are obtained from data descriptors only, so a getter or Proxy cannot
- * execute while governance is being assembled. The callback itself is fixed at
- * runner construction; later host-object mutation cannot replace it mid-run.
+ * D15/D23 admit runner collaborators through data descriptors only. The
+ * captured callback is always invoked with the originally admitted receiver,
+ * so a later public-property replacement cannot retarget an in-flight or a
+ * later governed run. This remains an in-process boundary: it does not attest
+ * to private mutable state inside an already-admitted collaborator.
  */
-function hostMethod<TArgument>(value: unknown, member: string, error: string): (argument: TArgument) => Promise<unknown> {
+function runnerCollaboratorMethod(value: unknown, member: string, error: string): (...arguments_: readonly unknown[]) => unknown {
   try {
-    if (!value || typeof value !== 'object' || nodeTypes.isProxy(value)) throw new ConnectorUnavailableError(error)
-    let current: object | null = value
-    for (let depth = 0; current && depth < 8; depth += 1) {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) throw new ConnectorUnavailableError(error)
+    const receiver = value as object
+    let current: object | null = receiver
+    for (let depth = 0; current && current !== Object.prototype && depth < 8; depth += 1) {
       if (nodeTypes.isProxy(current)) throw new ConnectorUnavailableError(error)
       const descriptor = Object.getOwnPropertyDescriptor(current, member)
       if (descriptor) {
         if (!('value' in descriptor) || typeof descriptor.value !== 'function' || nodeTypes.isProxy(descriptor.value)) {
           throw new ConnectorUnavailableError(error)
         }
-        return async (argument) => Reflect.apply(descriptor.value, value, [argument]) as unknown
+        const method = descriptor.value
+        return (...arguments_: readonly unknown[]) => Reflect.apply(method, receiver, arguments_)
       }
       current = Object.getPrototypeOf(current)
     }
@@ -274,6 +277,32 @@ function hostMethod<TArgument>(value: unknown, member: string, error: string): (
     if (cause instanceof ConnectorUnavailableError) throw cause
   }
   throw new ConnectorUnavailableError(error)
+}
+
+type GovernedRunnerCollaborators = Readonly<{
+  resolve: (connectorId: string) => RegisteredConnector
+  auditAppend: (event: ConnectorAuditEvent) => Promise<unknown>
+  quotaConsume: (context: Parameters<ConnectorQuota['consume']>[0]) => Promise<unknown>
+  runClock: () => Date
+}>
+
+/**
+ * D23 fixes the whole governed-run control plane at construction. D15 already
+ * validates the audit/quota callbacks and the clock result; this boundary also
+ * captures the registry resolver and keeps every reference behind a native
+ * private field so public legacy fields cannot retarget a run later.
+ */
+function governedRunnerCollaborators(registry: ConnectorRegistry, auditLog: AuditLog, quota: ConnectorQuota, now: () => Date): GovernedRunnerCollaborators {
+  const resolve = runnerCollaboratorMethod(registry, 'get', 'INVALID_GOVERNED_RUNNER_COLLABORATOR')
+  const auditAppend = runnerCollaboratorMethod(auditLog, 'append', 'CONNECTOR_AUDIT_LOG_UNAVAILABLE')
+  const quotaConsume = runnerCollaboratorMethod(quota, 'consume', 'CONNECTOR_QUOTA_UNAVAILABLE')
+  if (typeof now !== 'function' || nodeTypes.isProxy(now)) throw new ConnectorUnavailableError('INVALID_GOVERNED_RUNNER_COLLABORATOR')
+  return Object.freeze({
+    resolve: (connectorId: string) => resolve(connectorId) as RegisteredConnector,
+    auditAppend: (event: ConnectorAuditEvent) => auditAppend(event) as Promise<unknown>,
+    quotaConsume: (context: Parameters<ConnectorQuota['consume']>[0]) => quotaConsume(context) as Promise<unknown>,
+    runClock: now,
+  })
 }
 
 /** A runner audit append may return only an exact SHA-256-shaped data record. */
