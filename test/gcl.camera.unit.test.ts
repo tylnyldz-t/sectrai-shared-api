@@ -9,10 +9,11 @@ import type { ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../sr
 import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION, CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, CAMERA_REVIEW_AUDIT_WITNESS_VERSION, CAMERA_REVIEW_EVIDENCE_MANIFEST_VERSION, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, createCameraReviewAuditTrailReceipt, createCameraReviewEvidenceManifest, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewAuditTrailReceipt, validateCameraReviewAuditTrailWitness, validateCameraReviewAuditWitness, validateCameraReviewEvidenceManifest, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
-const context: ConnectorRunContext = {
+const runContext = {
   product: 'sectrai-gcl-camera-test', workspaceId: 'ws-camera', requestedBy: 'maker@example.test', checkedBy: 'checker@example.test',
-  correlationId: 'synthetic-camera-correlation-001', ownerApproved: true, scopes: ['camera:observe'], costCapCents: 25, requestedItems: 1, now,
+  correlationId: 'synthetic-camera-correlation-001', ownerApproved: true, scopes: ['camera:observe'], costCapCents: 25, requestedItems: 1,
 }
+const context: ConnectorRunContext = { ...runContext, now }
 const loadingDockInput = {
   synthetic: true,
   cameraFixtureId: 'synthetic-loading-dock-001',
@@ -132,7 +133,7 @@ test('admitted synthetic observation contains no media, device identifier, ident
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
-  const result = await runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
 
   assert.equal(result.data.mode, 'SYNTHETIC')
   assert.equal(result.data.liveStatus, 'LIVE_DISABLED')
@@ -160,7 +161,7 @@ test('admitted synthetic observation contains no media, device identifier, ident
 
 test('D1 review packet permits only an independent owner decision and records no handoff or extra quota use', async () => {
   const setup = runnerFor()
-  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
   const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
 
   assert.equal(reviewed.ownerReview.state, 'APPROVED_FOR_SYNTHETIC_OBSERVATION_ONLY')
@@ -194,7 +195,7 @@ test('D1 review packet permits only an independent owner decision and records no
 
 test('D2 receipt validation rejects mutated, raw-shaped, cross-scope, and prototype-shaped review evidence without writes', async () => {
   const setup = runnerFor()
-  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
   const reviewed = await independentlyReviewCameraObservation(result.data, 'rejected', true, 'reviewer@example.test', setup.audit, context)
   const clone = () => structuredClone(reviewed)
 
@@ -235,7 +236,7 @@ test('D2 receipt validation rejects mutated, raw-shaped, cross-scope, and protot
 
 test('D3 strict data boundary rejects hidden, symbol, proxy, and accessor-shaped review evidence without writes', async () => {
   const setup = runnerFor()
-  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
   const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
   const clone = () => structuredClone(reviewed)
 
@@ -287,7 +288,7 @@ test('D3 strict data boundary rejects hidden, symbol, proxy, and accessor-shaped
 
 test('D4 audit witness matches only the supplied review event and rejects hash, semantic, and shaped evidence without writes', async () => {
   const setup = runnerFor()
-  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
   const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
   const storedAuditEntry = setup.audit.entries[2]
   assert.ok(storedAuditEntry)
@@ -368,7 +369,7 @@ test('D4 audit witness matches only the supplied review event and rejects hash, 
 
 test('D5 audit-trail witness matches the supplied requested/succeeded/review segment and rejects discontinuous or shaped evidence without writes', async () => {
   const setup = runnerFor()
-  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
   const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
   const requestedEntry = setup.audit.entries[0]
   const succeededEntry = setup.audit.entries[1]
@@ -455,7 +456,7 @@ test('D5 audit-trail witness matches the supplied requested/succeeded/review seg
 
 test('D6 audit-trail receipt is minimized, context-bound, and rejects mutated or shaped evidence without writes', async () => {
   const setup = runnerFor()
-  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
   const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
   const requestedEntry = setup.audit.entries[0]
   const succeededEntry = setup.audit.entries[1]
@@ -553,7 +554,7 @@ test('D6 audit-trail receipt is minimized, context-bound, and rejects mutated or
 
 test('D7 evidence manifest binds independently rebuilt D2 and D6 evidence and rejects mutated or shaped evidence without writes', async () => {
   const setup = runnerFor()
-  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
   const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
   const requestedEntry = setup.audit.entries[0]
   const succeededEntry = setup.audit.entries[1]
@@ -655,7 +656,7 @@ test('D7 evidence manifest binds independently rebuilt D2 and D6 evidence and re
 
 test('D8 caller review context rejects hidden, symbol, inherited, accessor, Proxy, and media-shaped values without reads or writes', async () => {
   const setup = runnerFor()
-  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
   const reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
   const requestedEntry = setup.audit.entries[0]
   const succeededEntry = setup.audit.entries[1]
@@ -741,7 +742,7 @@ test('D8 caller review context rejects hidden, symbol, inherited, accessor, Prox
 
 test('D9 review clock accepts only a finite native Date and fails closed before audit append', async () => {
   const setup = runnerFor()
-  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
 
   await assert.rejects(
     () => independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, { ...context, now: () => { throw new Error('CLOCK_MUST_FAIL_CLOSED') } }),
@@ -892,7 +893,7 @@ test('D11 governed runner freezes one trusted local timestamp and rejects malfor
     return value
   }
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), audit, quota, clock)
-  const result = await runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
 
   assert.equal(clockCalls, 1)
   assert.equal(forgedToISOStringRead, false)
@@ -910,7 +911,7 @@ test('D11 governed runner freezes one trusted local timestamp and rejects malfor
     const rejectedQuota = new TestQuota()
     const rejectedRunner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), rejectedAudit, rejectedQuota, clockCandidate)
     await assert.rejects(
-      () => rejectedRunner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }),
+      () => rejectedRunner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
       (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_GOVERNED_CONNECTOR_CLOCK',
     )
     assert.equal(rejectedAudit.entries.length, 0)
@@ -925,7 +926,7 @@ test('D11 governed runner freezes one trusted local timestamp and rejects malfor
   const proxyQuota = new TestQuota()
   const proxyRunner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), proxyAudit, proxyQuota, proxyClock)
   await assert.rejects(
-    () => proxyRunner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }),
+    () => proxyRunner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_GOVERNED_CONNECTOR_CLOCK',
   )
   assert.equal(proxyClockApplied, false)
@@ -938,7 +939,7 @@ test('D11 governed runner freezes one trusted local timestamp and rejects malfor
   })
   const proxyDateRunner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), new InMemoryHashChainAuditLog(), new TestQuota(), () => proxyDate)
   await assert.rejects(
-    () => proxyDateRunner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }),
+    () => proxyDateRunner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_GOVERNED_CONNECTOR_CLOCK',
   )
   assert.equal(proxyDateTrapRead, false)
@@ -946,7 +947,7 @@ test('D11 governed runner freezes one trusted local timestamp and rejects malfor
 
 test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
   const setup = runnerFor()
-  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
   const clone = (): CameraObservationResult => structuredClone(result.data)
 
   const alteredFinding = clone()
@@ -1014,11 +1015,11 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
 test('missing, revoked, mismatched, or fixture-unbound consent is denied and audit-recorded before quota reservation', async () => {
   const setup = runnerFor()
   await assert.rejects(
-    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: { ...loadingDockInput, consent: { ...loadingDockInput.consent, state: 'revoked' } }, ...context }),
+    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: { ...loadingDockInput, consent: { ...loadingDockInput.consent, state: 'revoked' } }, ...runContext }),
     (error: unknown) => error instanceof CameraConsentError && error.message === 'CAMERA_CONSENT_REQUIRED',
   )
   await assert.rejects(
-    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: { ...loadingDockInput, purpose: 'site-security' }, ...context }),
+    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: { ...loadingDockInput, purpose: 'site-security' }, ...runContext }),
     (error: unknown) => error instanceof CameraConsentError && error.message === 'CAMERA_CONSENT_SCOPE_DENIED',
   )
   assert.equal((setup.quota as TestQuota).requests.length, 0)
@@ -1031,11 +1032,11 @@ test('missing, revoked, mismatched, or fixture-unbound consent is denied and aud
 test('owner gate and maker-checker separation deny before quota reservation and leave auditable decisions', async () => {
   const setup = runnerFor()
   await assert.rejects(
-    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context, ownerApproved: false }),
+    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext, ownerApproved: false }),
     (error: unknown) => error instanceof OwnerGateError,
   )
   await assert.rejects(
-    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context, checkedBy: context.requestedBy }),
+    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext, checkedBy: context.requestedBy }),
     (error: unknown) => error instanceof MakerCheckerError,
   )
   assert.equal((setup.quota as TestQuota).requests.length, 0)
@@ -1046,7 +1047,7 @@ test('owner gate and maker-checker separation deny before quota reservation and 
 test('an unregistered connector is denied and audit-recorded without consuming quota', async () => {
   const setup = runnerFor()
   await assert.rejects(
-    () => setup.runner.run({ connectorId: 'not-registered', input: loadingDockInput, ...context }),
+    () => setup.runner.run({ connectorId: 'not-registered', input: loadingDockInput, ...runContext }),
     (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_NOT_REGISTERED',
   )
   assert.equal((setup.quota as TestQuota).requests.length, 0)
@@ -1058,7 +1059,7 @@ test('an unregistered connector is denied and audit-recorded without consuming q
 test('quota rejection is recorded as a failed decision after a requested audit event', async () => {
   const setup = runnerFor(enabledConnector(), new RejectingQuota())
   await assert.rejects(
-    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }),
+    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
     (error: unknown) => error instanceof QuotaError,
   )
   assert.deepEqual(setup.audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.failed'])

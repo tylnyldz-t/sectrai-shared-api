@@ -242,7 +242,7 @@ existing fixed `SYNTHETIC` / `LIVE_DISABLED` fixture result.
 ## D11 — governed-run local-time snapshot
 
 `GovernedConnectorRunner` takes exactly one native, finite local `Date` from
-its injected process-local clock at the start of a run. It rejects a thrown,
+its injected process-local clock at the start of an admitted run. It rejects a thrown,
 invalid, forged, or Proxy-shaped clock/date without invoking a Proxy trap. The
 trusted instant is copied for adapter preflight/provenance, quota reservation,
 and every audit event in that one run, closing a multi-call time-of-check/
@@ -260,21 +260,44 @@ D11 adds no time-service, route, storage read/write, migration, camera/device
 or media connection, credential, handoff, notification, publication, action,
 or durable state. It accepts no caller time value at the HTTP boundary.
 
+## D12 — governed-run request-envelope boundary
+
+Before the runner consults its D11 clock, registry, audit log, quota, or
+adapter, it requires a direct library `RunConnectorRequest` to have exactly
+the documented own, enumerable data fields. The envelope has bounded primitive
+scope/actor/correlation values and a dense ordinary scope-string array; its
+generic `input` remains opaque until the selected adapter applies its own
+strict input contract. This preserves the camera adapter's D3 input boundary
+without accidentally treating an arbitrary future connector input as camera
+data.
+
+Unknown, hidden, symbol, inherited, accessor/getter, Proxy, sparse-array, or
+malformed envelope fields fail closed without evaluating a getter or Proxy
+trap. A malformed envelope therefore produces no clock read, connector lookup,
+audit append, quota reservation, fixture resolution, or adapter call. The
+normal HTTP route is already shape-validated; D12 protects the separately
+callable in-process runner seam as well.
+
+D12 adds no HTTP route, storage read/write, migration, provider or time-service
+call, camera/device/media connection, credential, handoff, notification,
+publication, action, or durable state. It is not an authorization capability
+and does not inspect, send, or retain input data.
+
 ## Audit and storage boundary
 
-The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1–D11 add no migration and no new persistence model.
+The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1–D12 add no migration and no new persistence model.
 
 ## ADOS 10-rule conformance
 
 1. Product/workspace digest binding keeps each run and review packet scoped to one data plane.
 2. Only minimized built-in synthetic fixture metadata is accepted.
 3. The front door default-denies absent configuration; `LIVE_DISABLED` is permanent.
-4. Unknown, hidden, symbol, Proxy, and accessor-shaped input, evidence, D8 review context, D10 execution context/provenance-clock values, and the D11 runner clock—plus media, device identifiers, personal identity, and biometric inference—are excluded.
+4. Unknown, hidden, symbol, Proxy, and accessor-shaped input, evidence, D8 review context, D10 execution context/provenance-clock values, the D11 runner clock, and the D12 governed-run request envelope—plus media, device identifiers, personal identity, and biometric inference—are excluded.
 5. Purpose-bound synthetic KVKK consent must match the fixture.
 6. Owner approval plus maker–checker separation are required; D1 rejects the original maker as reviewer and D2 minimizes that review evidence.
 7. The code has no device SDK, transport, network client, credential, or provider interface.
-8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, D6/D7 only minimize and recheck evidence derived from it, D8/D9 protect review context and its local clock, D10 rejects shaped execution context or an invalid provenance clock before a fixture result, and D11 freezes one safe runner timestamp before any governed operation.
-9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate evidence, D8/D9 validate review context and its local clock, D10 validates only synthetic provenance, and D11 validates only the local runner timestamp without evaluating accessors, Proxy traps, or adding a write path.
+8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, D6/D7 only minimize and recheck evidence derived from it, D8/D9 protect review context and its local clock, D10 rejects shaped execution context or an invalid provenance clock before a fixture result, D11 freezes one safe runner timestamp, and D12 seals direct run envelopes before any collaborator is used.
+9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate evidence, D8/D9 validate review context and its local clock, D10 validates only synthetic provenance, D11 validates only the local runner timestamp, and D12 validates only the request envelope without evaluating accessors, Proxy traps, or adding a write path.
 10. This branch contains no live launch, production migration, main/prod write, or camera hardware path.
 
 ## Explicit non-goals

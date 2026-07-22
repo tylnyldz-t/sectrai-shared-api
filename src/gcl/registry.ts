@@ -18,6 +18,83 @@ export type RunConnectorRequest = {
 
 function isSafePositiveInteger(value: number): boolean { return Number.isSafeInteger(value) && value > 0 }
 
+const GOVERNED_RUN_REQUEST_FIELDS = [
+  'connectorId', 'input', 'product', 'workspaceId', 'requestedBy', 'checkedBy',
+  'correlationId', 'ownerApproved', 'scopes', 'costCapCents', 'requestedItems',
+] as const
+
+/**
+ * D12's runner boundary accepts only a dense, ordinary array of own enumerable
+ * data strings. It deliberately keeps the generic connector input opaque: the
+ * selected adapter remains responsible for its own input contract.
+ */
+function governedRunScopes(value: unknown): string[] {
+  if (!Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) {
+    throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
+  }
+  if (value.length > 12 || Object.getOwnPropertySymbols(value).length > 0) {
+    throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
+  }
+  const names = Object.getOwnPropertyNames(value)
+  if (names.length !== value.length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+    throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const scopes: string[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = descriptors[String(index)]
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'string' || !descriptor.value || descriptor.value.length > 80) {
+      throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
+    }
+    scopes.push(descriptor.value)
+  }
+  return scopes
+}
+
+/**
+ * D12 seals direct library calls at the governed-run envelope before the
+ * runner can consult its clock, registry, audit, quota, or adapter. Every
+ * field must be an allowlisted own enumerable data property; descriptors are
+ * copied before use so getters and Proxy traps are never evaluated.
+ */
+function governedRunRequest(value: unknown): RunConnectorRequest {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) {
+    throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
+  const names = Object.getOwnPropertyNames(value)
+  if (Object.getOwnPropertySymbols(value).length > 0 || names.length !== GOVERNED_RUN_REQUEST_FIELDS.length || names.some((name) => !GOVERNED_RUN_REQUEST_FIELDS.includes(name as typeof GOVERNED_RUN_REQUEST_FIELDS[number]))) {
+    throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const normalized = Object.create(null) as Record<string, unknown>
+  for (const field of GOVERNED_RUN_REQUEST_FIELDS) {
+    const descriptor = descriptors[field]
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
+    normalized[field] = descriptor.value
+  }
+
+  const { connectorId, input, product, workspaceId, requestedBy, checkedBy, correlationId, ownerApproved, scopes, costCapCents, requestedItems } = normalized
+  if (typeof connectorId !== 'string' || !/^[a-z0-9][a-z0-9-]{0,79}$/.test(connectorId) || typeof product !== 'string' || !/^[a-zA-Z0-9:_-]{1,120}$/.test(product) || typeof workspaceId !== 'string' || !/^[a-zA-Z0-9:_-]{1,120}$/.test(workspaceId) || typeof requestedBy !== 'string' || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(requestedBy) || typeof checkedBy !== 'string' || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(checkedBy) || typeof correlationId !== 'string' || !/^[a-zA-Z0-9:_-]{1,120}$/.test(correlationId) || typeof ownerApproved !== 'boolean' || typeof costCapCents !== 'number' || !isSafePositiveInteger(costCapCents) || typeof requestedItems !== 'number' || !isSafePositiveInteger(requestedItems)) {
+    throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
+  }
+
+  return {
+    connectorId,
+    input,
+    product,
+    workspaceId,
+    requestedBy,
+    checkedBy,
+    correlationId,
+    ownerApproved,
+    scopes: governedRunScopes(scopes),
+    costCapCents,
+    requestedItems,
+  }
+}
+
 /**
  * D11 freezes one trusted local timestamp for an entire governed run. The
  * runner's clock is internal infrastructure, never a provider or network time
@@ -85,24 +162,25 @@ export class GovernedConnectorRunner {
   }
 
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
+    const normalizedRequest = governedRunRequest(request)
     const occurredAt = governedRunTimeSnapshot(this.now)
     const context: ConnectorRunContext = {
-      product: request.product,
-      workspaceId: request.workspaceId,
-      requestedBy: request.requestedBy,
-      checkedBy: request.checkedBy,
-      correlationId: request.correlationId,
-      ownerApproved: request.ownerApproved,
-      scopes: [...new Set(request.scopes)].sort(),
-      costCapCents: request.costCapCents,
-      requestedItems: request.requestedItems,
+      product: normalizedRequest.product,
+      workspaceId: normalizedRequest.workspaceId,
+      requestedBy: normalizedRequest.requestedBy,
+      checkedBy: normalizedRequest.checkedBy,
+      correlationId: normalizedRequest.correlationId,
+      ownerApproved: normalizedRequest.ownerApproved,
+      scopes: [...new Set(normalizedRequest.scopes)].sort(),
+      costCapCents: normalizedRequest.costCapCents,
+      requestedItems: normalizedRequest.requestedItems,
       now: snapshotClock(occurredAt),
     }
     let connector: Connector
     try {
-      connector = this.registry.get(request.connectorId)
+      connector = this.registry.get(normalizedRequest.connectorId)
     } catch (error) {
-      await this.auditLog.append(this.event('connector.run.denied', request.connectorId, context, occurredAt, auditFailureDetail(error, 'admission')))
+      await this.auditLog.append(this.event('connector.run.denied', normalizedRequest.connectorId, context, occurredAt, auditFailureDetail(error, 'admission')))
       throw error
     }
 
@@ -112,7 +190,7 @@ export class GovernedConnectorRunner {
       if (!isSafePositiveInteger(context.costCapCents)) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
       if (!isSafePositiveInteger(context.requestedItems)) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
       if (context.scopes.length === 0 || context.scopes.some((scope) => !connector.scopes.includes(scope))) throw new ScopeError()
-      await connector.preflight?.(request.input, context)
+      await connector.preflight?.(normalizedRequest.input, context)
     } catch (error) {
       await this.auditLog.append(this.event('connector.run.denied', connector.id, context, occurredAt, auditFailureDetail(error, 'admission')))
       throw error
@@ -121,7 +199,7 @@ export class GovernedConnectorRunner {
     const requestedAudit = await this.auditLog.append(this.event('connector.run.requested', connector.id, context, occurredAt, {}))
     try {
       await this.quota.consume({ ...context, connectorId: connector.id, occurredAt: snapshotClock(occurredAt)() })
-      const result = await connector.run(request.input, context)
+      const result = await connector.run(normalizedRequest.input, context)
       const succeededAudit = await this.auditLog.append(this.event('connector.run.succeeded', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash }))
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
     } catch (error) {
