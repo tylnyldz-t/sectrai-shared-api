@@ -16,7 +16,10 @@ backdated; every chain event also has a canonical, monotonic UTC timestamp. A
 successful governed run must first receive a durable, redacted
 candidate-issuance receipt whose candidate-set digest is bound to the success
 audit event; generic CRUD never exposes the reserved `gcl-*`
-system records. The ledgers reuse existing Records and add no migration. See
+system records. The runner accepts only a closed owner-approved request
+envelope, validates its synthetic result/provenance and injected clock, and
+records only a fixed failure code after reservation—never an adapter error
+message. The ledgers reuse existing Records and add no migration. See
 [the GM3 contract](docs/GM3_IMAGE_TTI_CONTRACT.md).
 
 ## Record contract

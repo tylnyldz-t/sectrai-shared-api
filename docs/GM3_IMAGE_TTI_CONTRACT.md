@@ -16,7 +16,13 @@ only accepted mode.
 
 1. `GovernedConnectorRunner` requires `ownerApproved`, bounded identity and
    correlation ID, an allowed scope, positive cost cap, and positive requested
-   item count.
+   item count. Its public run request is an exact own-data envelope with only
+   `connectorId`, `input`, `product`, `workspaceId`, `actor`, `correlationId`,
+   `ownerApproved`, `scopes`, `costCapCents`, and `requestedItems`. Scope
+   arrays must be dense, unique, bounded identifiers; extra fields, accessors,
+   a truthy non-boolean owner flag, or a caller-supplied clock are rejected
+   before connector lookup, audit, or quota activity. The runner copies and
+   validates its injected clock; it never takes audit time from a request.
 2. `SyntheticImageTtiConnector` requires `GCL_IMAGE_LIVE_MODE=LIVE_DISABLED`,
    `GCL_IMAGE_MAX_COST_CENTS`, `GCL_IMAGE_MAX_ITEMS`, and
    `GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS`; missing or malformed limits reject the
@@ -24,12 +30,18 @@ only accepted mode.
 3. The synchronous `FamilySafetyFilter` hook runs in preflight before audit or
    quota reservation. The included baseline filter is deliberately conservative
    and is not a production moderation policy.
-4. The runner appends request/success/failure events, with a correlation ID,
-   to the per-workspace SHA-256 chain and reserves daily usage through
+4. The runner resolves connector, audit, and quota operations only from
+   data-method descriptors, then appends request/success/failure events with a
+   correlation ID to the per-workspace SHA-256 chain and reserves daily usage through
    `PrismaDailyConnectorQuota`. For `image-tti`, the success event contains
    only `syntheticCandidateSetDigest`: a SHA-256 fingerprint of candidate IDs
    and their redacted full-shape fingerprints. It contains no prompt, preview
-   bytes, endpoint, checkpoint, or credential.
+   bytes, endpoint, checkpoint, or credential. Any failure after the request
+   reservation writes only `CONNECTOR_RUN_FAILED`, never arbitrary adapter
+   error text. A connector result is also a closed result/provenance envelope:
+   its connector ID, canonical retrieval time, `data-only` content treatment,
+   and finite `0..1` confidence are rechecked before a success audit or result
+   response is produced.
 5. The trusted host must then call
    `issueSyntheticImageCandidates(governedResult, candidateLedger, context)`.
    It accepts only a successful governed result with its success audit hash,
@@ -142,6 +154,14 @@ decision and must be implemented behind its own bounded approval path.
 - Prompt fields accept only the documented four keys. Empty text, a value over
   1,000 characters, ASCII/Unicode control or formatting characters, and every
   size other than `512` or `1024` fail closed.
+- The governed-run boundary accepts only its documented own-data fields and a
+  dense, unique scope array. Request accessors, unknown fields, sparse scope
+  arrays, non-boolean owner approval, accessor-backed connector/audit/quota
+  methods, malformed audit hash responses, malformed clocks, and
+  accessor-shaped connector results fail before they can authorize a success.
+  A post-reservation adapter failure remains auditable with the fixed
+  `CONNECTOR_RUN_FAILED` code, but its raw message—including any prompt-like
+  text—never enters the chain.
 - The baseline local family filter tokenizes Unicode text, including Turkish
   terms such as `şiddet`, while avoiding substring false positives such as
   `gunmetal`. An injected filter must have a bounded identifier and may return
