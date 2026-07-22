@@ -240,10 +240,11 @@ read a credential, execute a process, write an artifact, or publish anything.
 One GM5/GM6 governed request is bounded to a positive cost cap no greater than
 10,000,000 synthetic cents and no more than 100,000 requested items. The same
 two ceilings are enforced by the HTTP parser, direct governed runner, direct
-GM5/GM6 adapter context, quota consumption, audit append/historic
-verification, and final review-binding helper. A direct/internal caller
-therefore cannot create an audit row, quota reservation, or frozen review
-snapshot with accounting values that the public route would reject.
+GM5/GM6 adapter context, audit append/historic verification, and final
+review-binding helper. The `requestedItems` ceiling is additionally repeated
+at quota consumption. A direct/internal caller therefore cannot create an
+audit row, quota reservation, or frozen review snapshot with accounting values
+that the public route would reject.
 
 HTTP input reports `INVALID_CONNECTOR_COST_CAP` or
 `INVALID_CONNECTOR_REQUESTED_ITEMS`. Direct runner and adapter calls fail
