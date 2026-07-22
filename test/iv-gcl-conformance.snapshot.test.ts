@@ -5,7 +5,7 @@ import { posix as path } from 'node:path'
 import test from 'node:test'
 import ts from 'typescript'
 
-type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16' | 'D17' | 'D18' | 'D19' | 'D20'
+type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16' | 'D17' | 'D18' | 'D19' | 'D20' | 'D21'
 
 type PinnedClosureBlob = {
   path: string
@@ -52,7 +52,7 @@ const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
 const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
 
 /*
- * These are immutable local Git snapshots from the D1 through D20 audit batches.
+ * These are immutable local Git snapshots from the D1 through D21 audit batches.
  * Every source read below is `git show <revision>:<path>`, never the mutable
  * worktree file. This fixture does not import target runtime code, load an
  * env file, open a socket, or make a network request. A missing worktree,
@@ -217,6 +217,14 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D20', name: 'Translation', revision: '2443f1d', parentRevision: '946871b', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: 'c0bf86902ed32af1b65352ad4fc6f891916db859', registryBlob: '34e9d79cf1a748e63c2b0de8ac65d351e2339c21', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: false, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: 'c0206818c4ed80290314bf5cdeab09580582dfdb' }] },
   { batch: 'D20', name: 'Language education', revision: 'a48bd08', parentRevision: '2b402f7', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '85e851b2b208a3599dc6adb526385c49014834d8', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: '237e8ba6883594baaff2492036ed05b23d53b390' }] },
   { batch: 'D20', name: 'Camera', revision: '79f758c', parentRevision: '76f2aed', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '026b562153205103028e0eb36ca12350869f9995', registryBlob: '73ca0e2e92278d64dc4f74c339a8875481a5d663', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/audit.ts', blob: '6ba529e7abaf06a29677f3724316cb75d4818d48' }, { path: 'src/gcl/errors.ts', blob: 'd91f8939d3d63d76aa016b1957e717a740fce5f4' }] },
+  { batch: 'D21', name: 'RA OCR', revision: '361c978', parentRevision: 'c1d330c', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: '8d73725aeca31e8f69b68883ae2468ef456fcec8', registryBlob: '2407ff38734546832bd9a8e2e97fae488198e7f9', hardDeniesLiveOptIn: false, quotaFailureAudited: false, strictOwnerApproval: false, proxyArrayIngressSafe: true },
+  { batch: 'D21', name: 'RA image', revision: 'a68c433', parentRevision: '988c41b', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: '57ad4a906b2012c9802fd454787490b5db637b22', registryBlob: 'adebd1bde90230779827b9ee05d1d5f5507eda83', hardDeniesLiveOptIn: false, quotaFailureAudited: true, strictOwnerApproval: true },
+  { batch: 'D21', name: 'RA 3D/game', revision: 'd739681', parentRevision: 'e2aca2f', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: 'eccfc749f420702b6c7f206f72d54241a71ce05d', registryBlob: '0dcac2afddd3e6f133481f8b3735aa7ef8d2ffbc', hardDeniesLiveOptIn: false, quotaFailureAudited: false, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/result-boundary.ts', blob: 'cf6127caa4fb7549a73f92acdff69e6d7d7cf172' }], pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: '1530216aa8873f4b3df9ffe5ebc97086b6cc605c' }] },
+  { batch: 'D21', name: 'RA market', revision: '112b3d8', parentRevision: '9b993a6', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: '6f25a2e074fbfe963e478da767bde91c001ed6aa', registryBlob: '43c6e166fb53af3607b811414a420ab1a4230cb2', hardDeniesLiveOptIn: true, quotaFailureAudited: false, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: 'af015f263316247e31302ae615ae02cef03d06f0' }] },
+  { batch: 'D21', name: 'RFID', revision: 'f77a7f6', parentRevision: '5727465', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: '2420ab9384d05f09425e61ef7de1e407c8609819', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true, strictOwnerApproval: false },
+  { batch: 'D21', name: 'Translation', revision: '702b63f', parentRevision: '2443f1d', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: 'c0bf86902ed32af1b65352ad4fc6f891916db859', registryBlob: '28201ca26a3885b16b7658145d85be09e2dae60b', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: false, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: 'cf58248599246a754c9af6049b45b1534a363447' }, { path: 'src/gcl/context.ts', blob: '5a8e210cffd41158685d8598ca96f138f0b036ac' }, { path: 'src/gcl/errors.ts', blob: '3ab9868a21d80e7eecb2607a0aef7e9c9d554dd1' }, { path: 'src/gcl/translation-artifacts.ts', blob: '94f335e26920b64e979b069df71f98e49b3314ea' }] },
+  { batch: 'D21', name: 'Language education', revision: '13b8963', parentRevision: 'a48bd08', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: 'ced2bb38ddc6e02f11d104eb93a1d69d5088ce49', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: '3a5b036186c03ac36d6b74ebaf8b2237ed9fc9db' }] },
+  { batch: 'D21', name: 'Camera', revision: 'd896224', parentRevision: '79f758c', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '026b562153205103028e0eb36ca12350869f9995', registryBlob: 'd2987b1c4dc1bd17114834f7c4bcb49c6474ccc9', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/audit.ts', blob: '988edeffb4f2895df9ffe4c114f36e99892003a3' }, { path: 'src/gcl/errors.ts', blob: 'd91f8939d3d63d76aa016b1957e717a740fce5f4' }, { path: 'src/gcl/types.ts', blob: 'ece0b7cecbc4815b812f0d91aaca4d4debe605b5' }] },
 ]
 
 function repositoryFor(snapshot: Snapshot): string {
@@ -540,7 +548,9 @@ function hardDeniesLiveOptIn(connector: string): boolean {
   const directRejection = /if \((?:this\.)?config\.liveEnabled(?:\)| !== false\)) throw new ConnectorUnavailableError/.test(connector)
   const environmentPoisonPill = /Object\.hasOwn\(environment, 'GCL_[A-Z0-9_]+_LIVE_ENABLED'\)/.test(connector)
     && /syntheticEnabled:\s*environment\.GCL_[A-Z0-9_]+_SYNTHETIC_ENABLED\s*===\s*'true'\s*&&\s*!liveOptInWasProvided/.test(connector)
-  return directRejection || environmentPoisonPill
+  const descriptorBoundPoisonPill = /const liveOptIn = ownEnvironmentSetting\(environment, 'GCL_[A-Z0-9_]+_LIVE_ENABLED'\)/.test(connector)
+    && /syntheticEnabled:\s*syntheticEnabled\.value\s*===\s*'true'\s*&&\s*!liveOptIn\.provided/.test(connector)
+  return directRejection || environmentPoisonPill || descriptorBoundPoisonPill
 }
 
 function ownerDenialPrecedesReservations(registry: string): boolean {
@@ -570,7 +580,7 @@ function proxyArrayIngressRejectedBeforeInspection(source: string): boolean {
   return /isProxyObject\(value\.syntheticFields\)\s*\|\|\s*!Array\.isArray\(value\.syntheticFields\)/.test(source)
 }
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20 source fixture pins every audited connector and its governance runner to local Git objects', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
     assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
@@ -591,7 +601,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20 sou
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
     const closure = [...sourceClosure(snapshot).values()].join('\n')
@@ -610,7 +620,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20 syn
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
@@ -1007,4 +1017,92 @@ test('D20 new immutable boundaries reject deadline overflow, mutable configurati
   assert.match(cameraAudit, /if \(hash !== hashAuditEvent\(event, previousHash\)\) throw new AuditChainError\(\)/, 'D20 camera must bind a durable head to its sealed event and predecessor')
   assert.match(cameraAudit, /const previousHash = previous \? validateAuditChainHead\(previous\.values\)\.hash : null/, 'D20 camera must reject a malformed durable head before a successor write')
   assert.match(cameraRegistry, /error instanceof AuditReceiptError \|\| error instanceof AuditEventError \|\| error instanceof AuditChainError/, 'D20 camera must not manufacture a follow-up failed transition after a malformed durable audit head')
+})
+
+test('D21 direct-successor package preserves immutable lineage and inherited governance classifications', () => {
+  const d21 = snapshots.filter((snapshot) => snapshot.batch === 'D21')
+  assert.equal(d21.length, 8, 'D21 must cover the eight direct successor packages')
+
+  for (const snapshot of d21) {
+    const parent = snapshots.find((candidate) => candidate.batch === 'D20' && candidate.name === snapshot.name)
+    assert.ok(parent, `D21 ${snapshot.name} must have a D20 package counterpart`)
+    assert.equal(snapshot.parentRevision, parent.revision, `D21 ${snapshot.name} must name the exact D20 parent`)
+    assert.equal(snapshot.hardDeniesLiveOptIn, parent.hardDeniesLiveOptIn, `D21 ${snapshot.name} must not reclassify its live-disable boundary`)
+    assert.equal(snapshot.quotaFailureAudited, parent.quotaFailureAudited, `D21 ${snapshot.name} must not reclassify its quota-failure audit boundary`)
+    assert.equal(snapshot.strictOwnerApproval, parent.strictOwnerApproval, `D21 ${snapshot.name} must not reclassify its owner-gate boundary`)
+    assert.equal(strictOwnerApprovalGate(sourceAt(snapshot, 'src/gcl/registry.ts')), snapshot.strictOwnerApproval, `${snapshot.name} strict owner-approval classification changed`)
+  }
+
+  const d20Image = snapshots.find((snapshot) => snapshot.batch === 'D20' && snapshot.name === 'RA image')
+  const d21Image = d21.find((snapshot) => snapshot.name === 'RA image')
+  assert.ok(d20Image && d21Image, 'D20 and D21 RA image snapshots must be present')
+  assert.equal(sourceAt(d21Image, d21Image.connectorPath), sourceAt(d20Image, d20Image.connectorPath), 'D21 RA image must not overstate a documentation-only change as new connector behaviour')
+  assert.equal(sourceAt(d21Image, 'src/gcl/registry.ts'), sourceAt(d20Image, 'src/gcl/registry.ts'), 'D21 RA image must not overstate a documentation-only change as new runner behaviour')
+})
+
+test('D21 immutable boundaries reject omitted integrity bindings, shaped host seams, decision inputs, and malformed append witnesses', () => {
+  const snapshot = (name: string): Snapshot => {
+    const found = snapshots.find((candidate) => candidate.batch === 'D21' && candidate.name === name)
+    assert.ok(found, `D21 ${name} snapshot must be present`)
+    return found
+  }
+
+  const ocr = sourceAt(snapshot('RA OCR'), 'src/gcl/vision.ts')
+  assert.match(ocr, /exactKeys\(proposal\.reviewPacket, \[[^\]]*'dateArithmeticBoundaryBinding'/, 'D21 OCR must reject a review packet that omits or hides the checked-date-arithmetic binding')
+  assert.match(ocr, /const dateArithmeticBoundaryBinding = reviewedDateArithmeticBoundaryBinding\(proposal\.reviewPacket\.dateArithmeticBoundaryBinding\)/, 'D21 OCR must independently validate the date-arithmetic binding before review')
+  assert.match(ocr, /reviewPacket\.proxyBoundaryBinding, reviewPacket\.dateArithmeticBoundaryBinding, reviewPacket\.evidenceBinding/, 'D21 OCR must include date-arithmetic evidence in the recomputed review-packet digest')
+
+  const threeDAudit = sourceAt(snapshot('RA 3D/game'), 'src/gcl/audit.ts')
+  assert.match(threeDAudit, /const requestedEvents = new Map<string, \{ event: ConnectorAuditEvent; occurredAt: number \}>\(\)/, 'D21 3D must retain a per-request temporal audit boundary')
+  assert.match(threeDAudit, /occurredAt < requested\.occurredAt/, 'D21 3D must reject a terminal audit event that predates its own request')
+  assert.match(threeDAudit, /terminalRequests\.has\(requestedAuditHash\)/, 'D21 3D must still reject a second terminal event for one request')
+  assert.doesNotMatch(threeDAudit, /previousOccurredAt/, 'D21 3D must not reject a valid concurrent run merely because another run has a later wall-clock event')
+
+  const market = snapshot('RA market')
+  const marketRegistry = sourceAt(market, 'src/gcl/registry.ts')
+  assert.match(marketRegistry, /function hostMethod<TArgument>\(value: unknown, member: string, error: string\)/, 'D21 market must bind host collaborators at construction')
+  assert.match(marketRegistry, /nodeTypes\.isProxy\(value\)/, 'D21 market must reject a Proxy host collaborator before member lookup')
+  assert.match(marketRegistry, /Object\.getOwnPropertyDescriptor\(current, member\)/, 'D21 market must read a host method only from a data descriptor')
+  assert.match(marketRegistry, /function auditAppendResult\(value: unknown\): \{ hash: string \}/, 'D21 market must validate a host audit receipt before use')
+  assert.match(marketRegistry, /names\.length !== 1 \|\| names\[0\] !== 'hash'/, 'D21 market must reject a shaped, accessor, or extra-field audit receipt')
+  assert.match(marketRegistry, /const occurredAt = governedRunTime\(this\.runClock\)\s+const localNow = \(\) => new Date\(occurredAt\.getTime\(\)\)/, 'D21 market must copy one validated clock before preflight, audit, or quota')
+  assert.match(marketRegistry, /auditAppendResult\(await this\.auditAppend\(\{/, 'D21 market must fail closed on an invalid audit result before treating a lifecycle transition as valid')
+
+  const rfid = sourceAt(snapshot('RFID'), 'src/gcl/rfid.ts')
+  assert.match(rfid, /exactObject\(value, \['synthetic', 'scenario', 'siteRef', 'ownerDecisionBoundaryFixture'\]/, 'D21 RFID must accept only a fixed owner-decision-boundary fixture pointer')
+  assert.match(rfid, /execution: 'SYNTHETIC_OWNER_DECISION_BOUNDARY_REVIEW_PROPOSAL_ONLY_NOT_EXECUTED'/, 'D21 RFID owner-decision boundary must remain proposal-only')
+  assert.match(rfid, /ownerDecisionInput: 'NOT_ACCEPTED'/, 'D21 RFID must reject owner-decision or attestation input')
+  assert.match(rfid, /pilotLiveOrProductionEnablement: 'FORBIDDEN'/, 'D21 RFID must not authorize a pilot, live mode, or production')
+  assert.match(rfid, /automaticAction: false/, 'D21 RFID owner-decision boundary must not execute an action')
+
+  const translation = snapshot('Translation')
+  const translationContext = sourceAt(translation, 'src/gcl/context.ts')
+  const translationRegistry = sourceAt(translation, 'src/gcl/registry.ts')
+  const translationAudit = sourceAt(translation, 'src/gcl/audit.ts')
+  const translationArtifacts = sourceAt(translation, 'src/gcl/translation-artifacts.ts')
+  assert.match(translationContext, /const PRODUCT_ID = \^sectrai-/, 'D21 translation must use a dedicated Sectrai product authority envelope')
+  assert.match(translationContext, /export function requireGclTenantContext\(/, 'D21 translation must expose one fail-closed tenant-context assertion')
+  assert.doesNotMatch(translationContext, /\.trim\(/, 'D21 translation must not broaden product/workspace authority by trimming it')
+  assert.match(translationRegistry, /requireGclTenantContext\(request\)\s+if \(!request\.ownerApproved\)/, 'D21 translation must reject malformed tenant context before owner/preflight processing')
+  assert.match(translationAudit, /!validGclTenantContext\(value\)/, 'D21 translation must reject malformed tenant data before an audit event is accepted')
+  assert.match(translationArtifacts, /requireGclTenantContext\(input\)/, 'D21 translation artifact mutation paths must reject malformed tenant context')
+
+  const language = sourceAt(snapshot('Language education'), 'src/gcl/language-education.ts')
+  assert.match(language, /const input = exact\(value, \['synthetic', 'safetyRef', 'safetyHash', 'locale', 'activity'\]\)/, 'D21 language education must accept only a bounded safety-fixture pointer')
+  assert.match(language, /readonly scopes = \['langedu:learning-safety:review'\] as const/, 'D21 language education must require a distinct safety review scope')
+  assert.match(language, /safeguarding: 'NO_INCIDENT_REPORT_RISK_CLASSIFICATION_OR_ESCALATION'/, 'D21 language education must not process incidents, classify risk, or escalate')
+  assert.match(language, /function ownEnvironmentSetting\(environment: unknown, name: string\)/, 'D21 language education must isolate environment configuration behind an own-data boundary')
+  assert.match(language, /types\.isProxy\(environment\)/, 'D21 language education must reject a Proxy environment before reading a gate')
+  assert.match(language, /syntheticEnabled: syntheticEnabled\.value === 'true' && !liveOptIn\.provided/, 'D21 language education must make a present live-enable field a fail-closed poison pill')
+  assert.doesNotMatch(language, /environment\.GCL_LANGEDU_/, 'D21 language education must not read an inherited or accessor-backed environment gate directly')
+
+  const camera = snapshot('Camera')
+  const cameraAudit = sourceAt(camera, 'src/gcl/audit.ts')
+  const cameraRegistry = sourceAt(camera, 'src/gcl/registry.ts')
+  assert.match(cameraAudit, /const AUDIT_APPEND_RECEIPT_FIELDS = \['hash', 'previousHash'\] as const/, 'D21 camera append receipts must bind both the event hash and predecessor')
+  assert.match(cameraAudit, /return Object\.freeze\(\{ hash: hash\.value, previousHash: previousHash\.value \}\)/, 'D21 camera must copy a bounded append witness before use')
+  assert.match(cameraAudit, /receipt\.hash !== hashAuditEvent\(sealedEvent, receipt\.previousHash\)/, 'D21 camera must re-hash the sealed event against the returned predecessor')
+  assert.match(cameraRegistry, /requestedAudit\.hash\)\s+return \{ \.\.\.result/, 'D21 camera success must pin its append witness to the requested event')
+  assert.match(cameraRegistry, /requestedAudit\.hash\)\s+throw error/, 'D21 camera failure must pin its append witness to the requested event')
+  assert.match(cameraRegistry, /error instanceof AuditReceiptError \|\| error instanceof AuditEventError \|\| error instanceof AuditChainError/, 'D21 camera must stop after an invalid append witness instead of inventing a follow-up transition')
 })
