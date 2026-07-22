@@ -16,7 +16,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v15' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v16' as const
 const SYNTHETIC_DOCUMENT_DATA_BOUNDARY = {
   evidenceSource: 'synthetic-fixture',
   inputShape: 'plain-own-data-only',
@@ -61,6 +61,11 @@ const SYNTHETIC_DOCUMENT_INTEGRITY_ENCODING_BOUNDARY = {
   objectKeyOrder: 'utf16-code-unit-ascending',
   toJsonHooksAccepted: false,
   inheritedSerializationAccepted: false,
+} as const
+const SYNTHETIC_DOCUMENT_INTRINSIC_BOUNDARY = {
+  runtimeIntrinsics: 'module-captured-ecmascript-structural-temporal-and-encoding-intrinsics',
+  latePatchedGlobalsAccepted: false,
+  prototypeMethodHooksAccepted: false,
 } as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
@@ -194,6 +199,12 @@ export type SyntheticDocumentReviewPacket = {
     toJsonHooksAccepted: typeof SYNTHETIC_DOCUMENT_INTEGRITY_ENCODING_BOUNDARY.toJsonHooksAccepted
     inheritedSerializationAccepted: typeof SYNTHETIC_DOCUMENT_INTEGRITY_ENCODING_BOUNDARY.inheritedSerializationAccepted
   }
+  /** Structural, temporal, and encoding checks use module-captured intrinsics. */
+  intrinsicBoundaryBinding: {
+    runtimeIntrinsics: typeof SYNTHETIC_DOCUMENT_INTRINSIC_BOUNDARY.runtimeIntrinsics
+    latePatchedGlobalsAccepted: typeof SYNTHETIC_DOCUMENT_INTRINSIC_BOUNDARY.latePatchedGlobalsAccepted
+    prototypeMethodHooksAccepted: typeof SYNTHETIC_DOCUMENT_INTRINSIC_BOUNDARY.prototypeMethodHooksAccepted
+  }
   /** Metadata-only freshness limit for the synthetic evidence reference. */
   evidenceBinding: {
     capturedAt: string
@@ -261,8 +272,34 @@ export type SyntheticVisionConnectorConfig = {
   maxEvidenceAgeSeconds?: number
 }
 
-/** Captured scalar encoder; canonical packet encoding never stringifies an object graph. */
+/** Captured intrinsics keep late runtime monkey patches outside the review boundary. */
 const intrinsicJsonStringify = JSON.stringify
+const intrinsicObjectGetPrototypeOf = Object.getPrototypeOf
+const intrinsicObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor
+const intrinsicReflectOwnKeys = Reflect.ownKeys
+const intrinsicObjectPrototype = Object.prototype
+const intrinsicArrayIsArray = Array.isArray
+const intrinsicArrayPrototype = Array.prototype
+const intrinsicArrayIncludes = Array.prototype.includes
+const intrinsicArrayJoin = Array.prototype.join
+const intrinsicArrayMap = Array.prototype.map
+const intrinsicArraySlice = Array.prototype.slice
+const intrinsicArraySort = Array.prototype.sort
+const IntrinsicDate = Date
+const intrinsicDatePrototype = Date.prototype
+const intrinsicDateGetTime = Date.prototype.getTime
+const intrinsicDateToISOString = Date.prototype.toISOString
+const intrinsicNumber = Number
+const intrinsicNumberIsFinite = Number.isFinite
+const intrinsicNumberIsSafeInteger = Number.isSafeInteger
+const intrinsicMathAbs = Math.abs
+const intrinsicMathMin = Math.min
+const IntrinsicSet = Set
+const intrinsicSetAdd = Set.prototype.add
+const intrinsicSetHas = Set.prototype.has
+const intrinsicStringCharCodeAt = String.prototype.charCodeAt
+const intrinsicStringToLowerCase = String.prototype.toLowerCase
+const intrinsicStringTrim = String.prototype.trim
 
 function digest(value: string): string { return createHash('sha256').update(value, 'utf8').digest('hex') }
 /**
@@ -276,22 +313,28 @@ function isProxyObject(value: unknown): value is object {
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object') return false
   if (isProxyObject(value)) return false
-  if (Array.isArray(value)) return false
-  const prototype = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
+  if (intrinsicArrayIsArray(value)) return false
+  const prototype = intrinsicObjectGetPrototypeOf(value)
+  return prototype === intrinsicObjectPrototype || prototype === null
 }
-function positiveInteger(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 }
+function positiveInteger(value: unknown): value is number { return typeof value === 'number' && intrinsicNumberIsSafeInteger(value) && value > 0 }
 function environmentPositiveInteger(value: string | undefined): number | undefined {
   if (!value || !/^[1-9][0-9]*$/.test(value)) return undefined
-  const parsed = Number(value)
-  return Number.isSafeInteger(parsed) ? parsed : undefined
+  const parsed = intrinsicNumber(value)
+  return intrinsicNumberIsSafeInteger(parsed) ? parsed : undefined
 }
-function hasControlCharacter(value: string): boolean { return Array.from(value).some((character) => (character.codePointAt(0) ?? 0) < 32 || character === '\u007f') }
+function hasControlCharacter(value: string): boolean {
+  for (let index = 0; index < value.length; index += 1) {
+    const codeUnit = intrinsicStringCharCodeAt.call(value, index)
+    if (codeUnit < 32 || codeUnit === 0x7f) return true
+  }
+  return false
+}
 function hasUnpairedSurrogate(value: string): boolean {
   for (let index = 0; index < value.length; index += 1) {
-    const codeUnit = value.charCodeAt(index)
+    const codeUnit = intrinsicStringCharCodeAt.call(value, index)
     if (codeUnit >= 0xd800 && codeUnit <= 0xdbff) {
-      const next = value.charCodeAt(index + 1)
+      const next = intrinsicStringCharCodeAt.call(value, index + 1)
       if (!(next >= 0xdc00 && next <= 0xdfff)) return true
       index += 1
     } else if (codeUnit >= 0xdc00 && codeUnit <= 0xdfff) {
@@ -301,14 +344,14 @@ function hasUnpairedSurrogate(value: string): boolean {
   return false
 }
 function exactKeys(value: Record<string, unknown>, allowed: readonly string[], error: string): void {
-  const ownKeys = Reflect.ownKeys(value)
-  if (ownKeys.some((key) => typeof key !== 'string' || !allowed.includes(key))) throw new ConnectorInputError(error)
+  const ownKeys = intrinsicReflectOwnKeys(value)
+  if (ownKeys.some((key) => typeof key !== 'string' || !intrinsicArrayIncludes.call(allowed, key))) throw new ConnectorInputError(error)
   for (const key of ownKeys) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    const descriptor = intrinsicObjectGetOwnPropertyDescriptor(value, key)
     if (!descriptor || !descriptor.enumerable || descriptor.get || descriptor.set) throw new ConnectorInputError(error)
   }
   for (const key of allowed) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    const descriptor = intrinsicObjectGetOwnPropertyDescriptor(value, key)
     if (descriptor && (!descriptor.enumerable || descriptor.get || descriptor.set)) throw new ConnectorInputError(error)
     if (!descriptor && key in value) throw new ConnectorInputError(error)
   }
