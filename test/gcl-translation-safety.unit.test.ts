@@ -46,11 +46,16 @@ function runResult(): ConnectorResult {
   }
 }
 
-async function running(): Promise<{ server: Server; base: string; audit: InMemoryHashChainAuditLog; runnerCalls: () => number } | null> {
+type RunningOptions = {
+  now?: () => Date
+  runner?: (audit: InMemoryHashChainAuditLog, count: () => void) => { run(request: RunConnectorRequest): Promise<ConnectorResult> }
+}
+
+async function running(options: RunningOptions = {}): Promise<{ server: Server; base: string; audit: InMemoryHashChainAuditLog; artifacts: InMemoryTranslationArtifactStore; runnerCalls: () => number } | null> {
   const audit = new InMemoryHashChainAuditLog()
   const artifacts = new InMemoryTranslationArtifactStore(audit)
   let calls = 0
-  const runner = {
+  const defaultRunner = {
     async run(request: RunConnectorRequest): Promise<ConnectorResult> {
       calls += 1
       const requested = await audit.append({
@@ -66,9 +71,10 @@ async function running(): Promise<{ server: Server; base: string; audit: InMemor
       return { ...result, provenance: { ...result.provenance, auditHash: succeeded.hash } }
     },
   }
+  const runner = options.runner?.(audit, () => { calls += 1 }) ?? defaultRunner
   const app = createApp({
     prisma: {} as PrismaClient,
-    now,
+    now: options.now ?? now,
     gclRunner: runner,
     gclOwnerToken: ownerToken,
     gclAuditLog: audit,
@@ -89,7 +95,7 @@ async function running(): Promise<{ server: Server; base: string; audit: InMemor
   }
   const address = server.address()
   if (!address || typeof address === 'string') return null
-  return { server, audit, runnerCalls: () => calls, base: `http://127.0.0.1:${address.port}/api/products/${product}/workspaces/${workspaceId}/gcl` }
+  return { server, audit, artifacts, runnerCalls: () => calls, base: `http://127.0.0.1:${address.port}/api/products/${product}/workspaces/${workspaceId}/gcl` }
 }
 
 async function close(server: Server): Promise<void> {
@@ -209,6 +215,80 @@ test('HTTP connector route rejects a whitespace-padded scope instead of rewritin
     assert.equal((await response.json() as { error: string }).error, 'INVALID_CONNECTOR_SCOPES')
     assert.equal(service.runnerCalls(), 0)
     assert.equal(service.audit.entries.length, 0)
+  } finally {
+    await close(service.server)
+    if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+    else process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = oldProductKey
+  }
+})
+
+test('HTTP GCL boundary never returns a raw runtime exception or owner fixture', async (context) => {
+  const oldProductKey = process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+  process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = productKey
+  const rawFixture = 'owner fixture text must never leave an unexpected exception'
+  const service = await running({
+    runner: (_audit, count) => ({
+      async run(): Promise<ConnectorResult> {
+        count()
+        throw new Error(rawFixture)
+      },
+    }),
+  })
+  if (!service) {
+    if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+    else process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = oldProductKey
+    return context.skip('sandbox disallows loopback listeners')
+  }
+  try {
+    const response = await fetch(`${service.base}/connectors/translation-text-synthetic/runs`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-sectrai-product-key': productKey,
+        'x-sectrai-owner-token': ownerToken,
+        'x-sectrai-owner-actor': 'maker@example.test',
+      },
+      body: JSON.stringify({ input: { synthetic: true }, scopes: ['translation:text'], costCapCents: 25, requestedItems: 1 }),
+    })
+    const body = await response.json() as { error: string; code: string }
+    assert.equal(response.status, 500)
+    assert.deepEqual(body, { error: 'INTERNAL_ERROR', code: 'internal_error' })
+    assert.equal(JSON.stringify(body).includes(rawFixture), false)
+    assert.equal(service.runnerCalls(), 1)
+    assert.equal(service.audit.entries.length, 0)
+    assert.equal(service.artifacts.entries.length, 0)
+  } finally {
+    await close(service.server)
+    if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+    else process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = oldProductKey
+  }
+})
+
+test('HTTP artifact creation rejects an invalid lifecycle clock without metadata or a creation audit row', async (context) => {
+  const oldProductKey = process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+  process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = productKey
+  const service = await running({ now: () => new Date('invalid') })
+  if (!service) {
+    if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+    else process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = oldProductKey
+    return context.skip('sandbox disallows loopback listeners')
+  }
+  try {
+    const response = await fetch(`${service.base}/connectors/translation-text-synthetic/runs`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-sectrai-product-key': productKey,
+        'x-sectrai-owner-token': ownerToken,
+        'x-sectrai-owner-actor': 'maker@example.test',
+      },
+      body: JSON.stringify({ input: { synthetic: true }, scopes: ['translation:text'], costCapCents: 25, requestedItems: 1 }),
+    })
+    assert.equal(response.status, 503)
+    assert.deepEqual(await response.json(), { error: 'TRANSLATION_ARTIFACT_CLOCK_INVALID', code: 'connector_unavailable' })
+    assert.equal(service.runnerCalls(), 1)
+    assert.equal(service.audit.entries.length, 2)
+    assert.equal(service.artifacts.entries.length, 0)
   } finally {
     await close(service.server)
     if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST

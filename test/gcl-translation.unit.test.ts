@@ -96,6 +96,25 @@ test('a present live-enable environment key is a configuration poison pill, even
   }
 })
 
+test('in-memory audit snapshots caller events and rejects a manually corrupted prior link', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const requested: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: TEXT_TRANSLATION_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
+    scopes: ['translation:text'], costCapCents: context.costCapCents, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+  await audit.append(requested)
+
+  requested.detail = { rawFixture: 'must not mutate stored audit metadata' }
+  assert.deepEqual(audit.entries[0]?.event.detail, {})
+
+  audit.entries[0]!.event.detail = { rawFixture: 'manually corrupted test seam' }
+  await assert.rejects(() => audit.append({
+    type: 'connector.run.requested', connectorId: TEXT_TRANSLATION_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
+    scopes: ['translation:text'], costCapCents: context.costCapCents, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(audit.entries.length, 1)
+})
+
 test('governed text translation returns only the owner-supplied fixture, reserves quota, and chains audit hashes without raw text', async () => {
   const connector = new SyntheticTextTranslationConnector(config)
   const audit = new InMemoryHashChainAuditLog()

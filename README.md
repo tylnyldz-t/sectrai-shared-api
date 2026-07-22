@@ -68,9 +68,11 @@ or `*_LIVE_ENABLED` setting.
 - Durable proposal creation and checker decisions are each one transaction with their audit append; no audit-less production artifact mutation API exists. Blank actors and malformed status/maker storage envelopes fail closed.
 - Durable artifact reads and decisions also require a complete, ordered run → creation → optional single-decision audit lifecycle; metadata-shaped rows without that proof are unavailable.
 - Artifact creation uses the same one-clock rule: the row's `createdAt` and its creation audit event share one canonical instant; a mismatch fails closed before write and during later lifecycle replay.
+- The HTTP artifact creation and decision boundaries each take their own valid native-clock snapshot. A throwing, non-Date, or invalid clock returns `TRANSLATION_ARTIFACT_CLOCK_INVALID` before metadata mutation or lifecycle audit append; no review authority is broadened.
 - Terminal decisions are bound to a distinct checker and one canonical timestamp shared by the artifact row and its audit event; malformed decision-audit context fails before any durable mutation.
 - Hash-valid durable lifecycles must also be temporally consistent and within the review TTL; backdated or post-expiry audit decisions fail closed.
 - Audit records bind each connector to its one canonical scope and exactly one requested artifact; a hash-valid scope or item-count forgery invalidates the chain.
 - Audit history is transition-verified: each request has one exact terminal outcome, creation binds to that success, and only one linked, distinct-checker decision can follow.
+- Only explicit request-validation and GCL errors are exposed by HTTP. Unexpected adapter, storage, or runtime exceptions return stable `INTERNAL_ERROR`, never raw synthetic fixture content, credentials, or provider detail.
 
 See [the interpreter contract](docs/GCL_TRANSLATION_CONTRACT.md) for the exact shapes and safety boundary.

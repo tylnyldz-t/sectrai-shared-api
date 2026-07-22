@@ -89,6 +89,14 @@ after that same canonical run instant. A success whose review is already
 expired (or expires at exactly the run instant) is rejected before it becomes
 an audit-chain link or can reach artifact persistence.
 
+Artifact creation and checker decision each obtain a separate native `Date`
+snapshot for their own metadata mutation. A throwing, non-`Date`, or invalid
+clock returns `TRANSLATION_ARTIFACT_CLOCK_INVALID` before an artifact row or
+the corresponding creation/decision audit event is written. A successful run
+may remain terminally audited if the later artifact-creation clock is invalid,
+but it creates no metadata, review authority, publication, send, provider, or
+live-execution path.
+
 ## Connector routes
 
 ```text
@@ -246,6 +254,14 @@ example source text, translated text, transcript, audio, provider output, or a
 raw exception) is still invalid: it returns `GCL_AUDIT_CHAIN_INVALID` and no
 new entry is appended. Run failures retain only a stable error code, never an
 exception message.
+
+The HTTP error boundary follows the same data-minimization rule. It exposes
+only deliberate request-validation identifiers and `GclError` codes. Any
+unexpected connector, persistence, or runtime exception is returned as
+`500 { "error": "INTERNAL_ERROR", "code": "internal_error" }`; its message is
+not returned, audited, or treated as translation content. This includes an
+exception that embeds owner-supplied fixture text. The rule does not create a
+fallback connector or alter permanent `LIVE_DISABLED` status.
 
 Audit provenance also binds the event's semantics, not merely its field
 shapes: text runs and their creation event must have exactly
