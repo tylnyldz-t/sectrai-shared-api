@@ -1,0 +1,414 @@
+# Synthetic interpreter — governed translation connector contract
+
+This module is a **synthetic contract**, not a translation service. It does not
+call a language, speech, TTS, STT, cloud, or third-party provider. There is no
+credential field, provider URL, HTTP client, or live-enable configuration.
+`LIVE_DISABLED` is the permanent runtime state.
+
+There is deliberately no `GCL_TRANSLATION_LIVE_ENABLED` setting. If that
+environment key is present at all (including with the value `false`), the
+connector is unavailable with `TRANSLATION_LIVE_EXECUTION_FORBIDDEN`. This is
+a configuration poison pill, not a future live-mode compatibility switch.
+
+## Fail-closed gates
+
+Each route is unavailable until all synthetic-only gates are configured:
+
+- a valid product key and `X-Sectrai-Owner-Token`;
+- a valid `X-Sectrai-Owner-Actor`;
+- `GCL_TRANSLATION_SYNTHETIC_ENABLED=true`;
+- `GCL_TRANSLATION_LIVE_DISABLED=true`;
+- positive cost, text-size, audio-duration, review-TTL, daily-run, and daily-item limits;
+- matching scope, a positive cost cap, and exactly one requested item.
+
+Missing or invalid configuration returns a visible `503`; owner, input, scope,
+cost, and quota failures happen before the adapter runs. There is no fallback.
+Once a valid request has its `requested` audit entry, a quota reservation
+rejection is also terminally recorded as `connector.run.failed` with only the
+stable `connector_quota_exceeded` code. The adapter is not invoked and no raw
+input is placed in that audit record. Preflight failures remain before the
+first audit entry and quota reservation.
+
+The scope list itself is canonical: it must be nonempty, duplicate-free, and
+contain only recognized scope identifiers. Translation accepts exactly its one
+connector scope (`translation:text` or `translation:speech`). A repeated or
+noncanonical scope is rejected before the run clock, preflight, audit, quota,
+or adapter. `GCL_TRANSLATION_REVIEW_TTL_MS` must also produce a representable
+UTC expiry from that run clock; a date-range overflow is unavailable with
+`TRANSLATION_REVIEW_TTL_INVALID` before any reservation or audit entry.
+
+The HTTP boundary applies the same rule to the exact JSON scope strings. It
+does not trim or otherwise rewrite a padded scope into an accepted authority;
+such a request returns `INVALID_CONNECTOR_SCOPES` before the runner, artifact
+store, audit log, or quota can observe it.
+
+The owner actor is likewise a canonical audit identity, not display text. GCL
+code never trims a received `X-Sectrai-Owner-Actor` into a different maker or
+checker; blank or noncanonical received values return `INVALID_OWNER_ACTOR`.
+HTTP parsers normalize grammar-level header whitespace before application code
+receives it, so the auditable identity is the canonical value made available by
+that parser. Direct GCL callers cannot use a padded actor identity. The
+connector configuration is equally closed: the presence of a
+`liveOptInRequested` construction field, even `false`, is a poison pill. This
+keeps programmatic construction aligned with the environment rule for
+`GCL_TRANSLATION_LIVE_ENABLED`.
+
+## Canonical tenant envelope
+
+The connector runner, audit validator, and both artifact stores require the
+same product/workspace envelope before touching preflight, quota, audit, or
+metadata. Product must match `sectrai-[a-z0-9-]{1,80}` and workspace must
+match `[a-zA-Z0-9:_-]{1,120}` exactly. No caller is allowed to trim, broaden,
+or substitute either value. This protects direct programmatic use as well as
+the HTTP route: a malformed tenant envelope returns
+`INVALID_CONNECTOR_TENANT_CONTEXT` with no connector, quota, audit, or durable
+artifact side effect.
+
+## Canonical synthetic run clock
+
+Before connector preflight, the runner takes one valid native `Date` snapshot.
+That snapshot is copied rather than exposed as the ambient clock: the
+`requested` and terminal (`succeeded` or `failed`) audit entries, quota
+reservation context, provenance `retrievedAt`, and proposal review-expiry
+calculation all use the same instant. This prevents a changing clock from
+making one synthetic run appear to have conflicting audit and review times.
+An invalid or non-Date clock result fails closed with
+`CONNECTOR_RUN_CLOCK_INVALID` before preflight, audit append, quota
+reservation, adapter execution, or artifact creation. This is a local
+metadata-integrity boundary only; it makes no provider call and grants no live
+execution capability.
+
+The audit transition replay treats that instant as a binding, not merely an
+ordering hint: the terminal `succeeded` or `failed` record must exactly echo
+its linked `requested` record's timestamp. A hash-valid record that is later
+than its request—even by one millisecond—invalidates the audit chain and
+cannot authorize an artifact or another audit append.
+
+An artifact-producing success must also carry a `reviewExpiresAt` strictly
+after that same canonical run instant. A success whose review is already
+expired (or expires at exactly the run instant) is rejected before it becomes
+an audit-chain link or can reach artifact persistence.
+
+Artifact creation and checker decision each obtain a separate native `Date`
+snapshot for their own metadata mutation. A throwing, non-`Date`, or invalid
+clock returns `TRANSLATION_ARTIFACT_CLOCK_INVALID` before an artifact row or
+the corresponding creation/decision audit event is written. A successful run
+may remain terminally audited if the later artifact-creation clock is invalid,
+but it creates no metadata, review authority, publication, send, provider, or
+live-execution path.
+
+This native snapshot rule also applies to direct programmatic artifact-store
+calls, not only the HTTP boundary. The store reads the intrinsic `Date` time
+slot once and works from a fresh native copy; it never calls caller-overridden
+`valueOf()` or `toISOString()` while creating or deciding an artifact. A
+proxied, non-Date, or invalid clock is rejected before a transaction or
+in-memory metadata change. A valid `Date` subclass therefore cannot substitute
+a later timestamp through an override, and does not broaden review authority.
+
+## Connector routes
+
+```text
+POST /api/products/:product/workspaces/:workspaceId/gcl/connectors/translation-text-synthetic/runs
+POST /api/products/:product/workspaces/:workspaceId/gcl/connectors/translation-speech-synthetic/runs
+```
+
+Both routes need these headers:
+
+```text
+X-Sectrai-Product-Key: product boundary key
+X-Sectrai-Owner-Token: owner gate
+X-Sectrai-Owner-Actor: auditable maker identity
+```
+
+Text translation accepts only an explicitly supplied synthetic fixture. The
+adapter does not infer or generate `translatedText`:
+
+```json
+{
+  "input": {
+    "synthetic": true,
+    "sourceText": "Merhaba dünya.",
+    "translatedText": "Hello world.",
+    "sourceLocale": "tr-TR",
+    "targetLocale": "en-US"
+  },
+  "scopes": ["translation:text"],
+  "costCapCents": 25,
+  "requestedItems": 1
+}
+```
+
+Speech translation accepts only a synthetic metadata descriptor and the same
+explicit translation fixture. It neither accepts raw files/base64/HTTP URLs nor
+returns sound bytes:
+
+```json
+{
+  "input": {
+    "synthetic": true,
+    "sourceAudio": {
+      "synthetic": true,
+      "sourceRef": "synthetic://translation/audio/fixture-1",
+      "contentHash": "sha256:<64 lowercase hex chars>",
+      "mimeType": "audio/wav",
+      "durationMs": 1200
+    },
+    "sourceTranscript": "Merhaba dünya.",
+    "translatedText": "Hello world.",
+    "sourceLocale": "tr-TR",
+    "targetLocale": "en-US",
+    "targetVoice": "synthetic-en-neutral"
+  },
+  "scopes": ["translation:speech"],
+  "costCapCents": 25,
+  "requestedItems": 1
+}
+```
+
+Both inputs reject personal-data-shaped fixtures before any audit or quota
+reservation. The guard covers TCKN-shaped values, Turkish mobile-phone values,
+Turkish IBAN-shaped values, and email-shaped data. Detection uses NFKC plus a
+Unicode-decimal-digit, separator, and zero-width-character-insensitive
+comparison. Therefore formatting an identifier with Arabic-Indic, extended
+Arabic-Indic, full-width, or other Unicode decimal digits; spaces; punctuation;
+or Unicode format characters does not turn it into an acceptable fixture. The
+same check applies to the synthetic audio `sourceRef` and `targetVoice`
+identifiers before their descriptor grammar is accepted: they are metadata,
+not a path for personal data. Rejections do not redact, rewrite, persist,
+audit, or send the supplied value. Their content is `data-only` under
+`UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`; it is never a command, action,
+message, notification, or publication.
+
+Fixture text also rejects non-rendering or directional Unicode formatting
+before audit or quota. This includes bidi overrides/isolates, zero-width space,
+word joiner, soft hyphen, byte-order mark, C0/C1 controls, and lone UTF-16
+surrogates, which could make the reviewed value visually ambiguous. Newline,
+carriage return, and tab remain the only permitted control whitespace. The
+contract keeps ZWNJ and ZWJ so ordinary Arabic-script text is not rewritten or
+needlessly rejected; they remain part of the personal-data normalization check.
+Fixture text is also canonical review data: leading or trailing whitespace is
+rejected rather than trimmed, so the adapter never silently changes a value
+whose hash and checker review must agree. The input envelope must be an
+ordinary JSON object with only own, enumerable data properties. Prototype
+fields, accessors, symbols, and hidden properties are rejected before any
+field read, audit, quota reservation, or adapter result; this prevents a
+programmatic caller from changing a checked fixture through inheritance or a
+getter after preflight.
+
+## Checked-fixture handoff
+
+The governed runner uses a connector's non-`undefined` preflight return as
+the exact input for the later adapter call. The translation connectors return
+a freshly copied, immutable, canonical text or speech fixture (including the
+synthetic audio descriptor). Therefore a programmatic caller that retains and
+mutates its original input while requested-audit or quota work is awaiting
+cannot swap in different text, a personal-data-shaped value, or different
+audio metadata after preflight. The adapter revalidates that prepared fixture
+and the audit remains metadata-only. This is an in-process integrity boundary:
+it does not retain raw input, initiate a provider request, or alter permanent
+`LIVE_DISABLED` behavior. Connectors that have no canonical prepared value
+continue to return `undefined` and are validate-only; this translation module
+does not use that fallback.
+
+## Canonical connector configuration
+
+Programmatic configuration is also a governance boundary. At connector
+construction it is copied once from an ordinary object containing only the
+documented synthetic gates and limits. It must use own, enumerable data
+properties only; inherited fields, accessors, symbols, hidden fields, throwing
+Proxies, and unknown fields fail closed as `TRANSLATION_CONFIGURATION_INVALID`
+before preflight, audit, or quota reservation. The captured configuration is
+immutable, so changing the object retained by a caller after construction
+cannot lower a cap, add a live-mode surface, or otherwise change a run between
+preflight and adapter execution. `liveOptInRequested` remains an explicit
+poison pill when present on an otherwise canonical configuration.
+
+## Metadata-only checker workflow
+
+Successful runs create a proposal with:
+
+```text
+synthetic = true
+approvalState = pending-checker-approval
+autoPublish = false
+reviewPolicyVersion = gcl-translation-synthetic-v1
+reviewExpiresAt = canonical UTC timestamp
+reviewDigest = sha256:<64 lowercase hex chars> (stored proposal response)
+```
+
+The service stores only connector/artifact metadata, hashes, run-audit hash,
+maker/checker identity, and lifecycle state. It does not store source text,
+translated text, transcript text, or audio bytes in the artifact or hash-chain
+audit records. Normal record CRUD cannot access `gcl-audit`, `gcl-usage`, or
+`gcl-translation-artifacts`.
+
+```text
+GET  /api/products/:product/workspaces/:workspaceId/gcl/translation-artifacts/:recordId
+POST /api/products/:product/workspaces/:workspaceId/gcl/translation-artifacts/:recordId/approval
+```
+
+An approval body is exactly `{ "decision": "approved", "reviewDigest": "sha256:..." }` or
+`{ "decision": "rejected", "reviewDigest": "sha256:..." }`. The digest is
+computed from the immutable, metadata-only proposal binding (connector, artifact
+binding, hashes, policy version, expiry, and linked run audit), not raw text or
+audio. The maker of the proposal is rejected with
+`maker_checker_separation_required`; only a distinct checker can decide it. A
+non-pending proposal, a mismatched digest, or an expired review returns a
+conflict. No decision can publish content.
+
+## Artifact integrity and decision race boundary
+
+Before metadata is stored, the registry accepts only one of these complete
+bindings; fields cannot be mixed across rows:
+
+| Connector | Artifact kind | Media type | Source |
+| --- | --- | --- | --- |
+| `translation-text-synthetic` | `translated-text` | `text/plain` | `synthetic-text-translation` |
+| `translation-speech-synthetic` | `translated-speech` | `audio/wav` | `synthetic-speech-translation` |
+
+`contentHash` is an explicitly prefixed, lowercase `sha256:<64 hex>` value;
+the linked run-audit hash is the lowercase 64-hex chain value. The metadata
+object is exact: additional fields (including source text, translated text,
+transcripts, audio, URLs, provider details, or credentials) cause the proposal
+to be rejected. A malformed stored artifact fails closed as unavailable rather
+than being returned or decided.
+
+Each approval is a conditional `pending-checker-approval` → `approved` or
+`rejected` transition. If two distinct checkers race, one can win; the other
+gets a conflict and cannot overwrite the first decision. A terminal decision
+must retain a canonical UTC decision time and checker identity; a pending
+artifact cannot carry either field. This is lifecycle integrity only: it never
+creates a publish, send, provider, media-byte, or live execution path.
+
+Every durable artifact read and decision replays the relevant verified audit
+chain before returning or mutating metadata. It must prove the same maker's
+requested → successful synthetic run, one matching `artifact.created` entry,
+and, for a terminal row, exactly one matching checker decision after creation.
+The creation event must retain the run's canonical scope and budget; a decision
+must use only `translation:artifact:approve` with zero cost/items, a checker
+different from the maker, and the same canonical UTC instant as the row's
+`decidedAt`. The durable store rejects a missing, noncanonical, mismatched, or
+out-of-scope decision audit context before it opens the decision transaction.
+It also requires nondecreasing requested → succeeded → creation → decision
+instants, with creation and any terminal decision strictly before
+`reviewExpiresAt`; a hash-valid, backdated, or post-expiry lifecycle is not
+readable. Proposal persistence checks the same requested → succeeded →
+creation timing before it inserts metadata, so a stale proposal cannot create
+an unreachable durable row. Creation has one canonical instant: the persisted
+row's `createdAt` and the `artifact.created` audit event's `occurredAt` must
+be exactly identical. A mismatch is rejected before a creation transaction
+opens; a hash-valid persisted row with a different creation time is unreadable
+and undecidable. This temporal validation is a metadata-only integrity check
+and does not extend the review window or create a live execution path.
+Metadata-shaped rows with missing, duplicate, out-of-order, cross-maker, or
+mismatched lifecycle evidence is unavailable with
+`TRANSLATION_ARTIFACT_AUDIT_LIFECYCLE_INVALID`. This check does not expose
+fixture text or audio and does not add an execution or publication path.
+
+`GCL_TRANSLATION_REVIEW_TTL_MS` is required and must be a positive integer.
+The connector derives `reviewExpiresAt` from its synthetic run clock; it is not
+caller-controlled. A checker has to resubmit a newly generated synthetic
+fixture after expiry. Before adding an audit entry, the durable audit writer
+captures the caller event once as a bounded, ordinary JSON-data snapshot, then
+uses that same snapshot for schema validation, hashing, and persistence. An
+accessor, hidden or symbol field, custom prototype, non-finite value, oversized
+envelope, or throwing proxy is rejected as `GCL_AUDIT_EVENT_INVALID` before a
+hash or row is written. A proxy that can later present different data cannot
+alter the captured event or introduce raw fixture data after validation. The
+writer also revalidates the whole product/workspace SHA-256 chain and the
+exact, metadata-only audit-event schema. A hash-valid row with unknown fields
+(for example source text, translated text, transcript, audio, provider output,
+or a raw exception) is still invalid: it returns `GCL_AUDIT_CHAIN_INVALID` and
+no new entry is appended. Run failures retain only a stable error code, never
+an exception message.
+
+The HTTP error boundary follows the same data-minimization rule. It exposes
+only deliberate request-validation identifiers and `GclError` codes. Any
+unexpected connector, persistence, or runtime exception is returned as
+`500 { "error": "INTERNAL_ERROR", "code": "internal_error" }`; its message is
+not returned, audited, or treated as translation content. This includes an
+exception that embeds owner-supplied fixture text. The rule does not create a
+fallback connector or alter permanent `LIVE_DISABLED` status.
+
+Audit provenance also binds the event's semantics, not merely its field
+shapes: text runs and their creation event must have exactly
+`["translation:text"]`; speech runs and their creation event must have exactly
+`["translation:speech"]`; and checker decisions must have exactly
+`["translation:artifact:approve"]` with zero cost/items. Every run and
+creation event has exactly one requested item. A hash-valid persisted row that
+uses another syntactically valid scope or a multi-item run is an invalid chain
+(`GCL_AUDIT_CHAIN_INVALID`), so no new audit row, proposal, or decision can be
+written from it.
+
+The audit writer also replays transition semantics while it validates the
+existing chain. A run outcome must reference its one earlier, otherwise
+identical request and no second success/failure outcome may reuse that request.
+An artifact creation must reference the exact successful run and proposal
+envelope, carry the canonical metadata-only review digest, and be the only
+creation that uses that successful-run hash. A checker decision must be the
+first terminal event after the matching creation, from a different actor,
+before the shared expiry. A hash-valid persisted row that breaks one of these
+predecessor, digest, or single-binding links makes the whole chain unavailable
+as `GCL_AUDIT_CHAIN_INVALID`; a newly submitted orphan, invented-digest,
+duplicate outcome, duplicate artifact binding, or unlinked decision is
+rejected before append as `GCL_AUDIT_EVENT_INVALID`. Neither path stores raw
+fixture data or creates a publication, send, provider, or live-execution
+capability.
+
+For an artifact-producing success, the `succeeded` audit event contains the
+complete metadata-only proposal envelope (binding, content hash, synthetic
+marker, review policy, and expiry), never fixture content. A durable artifact
+proposal must link to a matching prior `requested` → `succeeded` pair and must
+match its product, workspace, connector, maker, canonical scopes, cost cap,
+item count, and every proposal-envelope value. A successful run cannot be
+reused by another actor, request budget, or content hash, and can authorize
+only one stored artifact. Missing, legacy unbound, or mismatched success
+metadata returns `TRANSLATION_RUN_AUDIT_LINK_INVALID`; a second use of the same
+successful run returns `TRANSLATION_RUN_AUDIT_ALREADY_BOUND`, before metadata
+storage. In the durable Prisma store, artifact creation and a successful
+compare-and-set decision each share one database transaction with their audit
+row; an audit failure rolls back that metadata mutation.
+
+## Durable mutation boundary
+
+The production artifact store exposes only `proposeAndAudit` and
+`decideAndAudit`; there is no durable metadata-only `propose` or `decide`
+write path that can bypass its corresponding audit event. The HTTP routes use
+these atomic operations exclusively. The in-memory store retains direct helper
+methods only as a test seam; when it is used through the application it also
+requires an audit log and restores its prior in-memory state if audit append
+fails.
+
+An artifact row is valid only when its database `status` exactly matches the
+metadata `approvalState`, and its maker identity is a nonblank canonical owner
+actor. A blank owner actor is rejected before the connector runner, quota,
+artifact, or audit can execute. A status/maker mismatch in durable storage is
+treated as `TRANSLATION_ARTIFACT_STORAGE_INVALID`, never as a recoverable
+artifact.
+
+## ADOS boundary checklist (10 rules)
+
+1. Product/workspace scope is retained; no cross-product DB query, runtime
+   import, or shared in-process state is introduced. Every GCL entry point
+   validates the canonical tenant envelope before preflight or persistence.
+2. The connector stays `LIVE_DISABLED`; it has no credential, provider URL,
+   HTTP client, or outbound request capability.
+3. Synthetic enablement, owner token, and canonical owner actor default to
+   deny; a present live-enable flag is a poison pill.
+4. Scope, positive cost cap, one-item limit, and daily quota are enforced
+   before adapter execution.
+5. Fixture input is untrusted data only, never instructions; basic personal
+   data is rejected.
+6. Artifacts and audit contain only metadata, hashes, and provenance—never
+   translated text, transcripts, audio bytes, URLs, provider output, or secrets.
+7. The review digest is recomputed from the exact metadata-only envelope in
+   both artifact storage and audit validation.
+8. One requested run has one terminal outcome, and one successful run can bind
+   exactly one artifact; the SHA-256 audit chain replays these transitions.
+9. One canonical, representable run/creation/decision timestamp, a
+   duplicate-free scope envelope, maker/checker separation, TTL, and
+   compare-and-set terminal decisions prevent self-approval, stale review,
+   timestamp substitution, scope ambiguity, and overwrite races.
+10. Each durable mutation shares a transaction with its audit row; no migration,
+    publication, send, provider invocation, real-data ingestion, or production
+    enablement is authorized by this synthetic contract or its tests.

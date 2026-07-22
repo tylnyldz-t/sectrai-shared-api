@@ -50,3 +50,33 @@ DATABASE_URL='your Neon URL' SHARED_API_KEY_HEALTH='...' npm start
 ## Safety boundary
 
 The service stores only product-owned synthetic demo records. It does not make AI calls, execute product actions, or interpret `values`. Product-level Vercel admin gates remain the outer authentication layer; this API key is a second product boundary, not a replacement for user authentication.
+
+## Interpreter GCL (synthetic-only)
+
+The interpreter module is a fail-closed contract for owner-supplied synthetic
+translation fixtures. It has no translation provider, HTTP client, credential,
+or `*_LIVE_ENABLED` setting.
+
+- `translation-text-synthetic` returns only the explicitly supplied synthetic text-translation fixture.
+- `translation-speech-synthetic` accepts a synthetic audio descriptor plus an explicitly supplied fixture and returns only a deterministic `synthetic://` audio reference—never audio bytes.
+- Both require the product key, owner token, owner actor, matching scope, positive cost cap, daily quota, and `GCL_TRANSLATION_LIVE_DISABLED=true`.
+- `GCL_TRANSLATION_LIVE_ENABLED` is intentionally unsupported: if it exists at all, the connector is unavailable. A quota rejection after a request audit is recorded as a stable failure code; neither path reaches a provider or adapter fallback.
+- Every governed run snapshots one valid native clock before preflight. Its request/outcome audit timestamps, quota context, synthetic provenance, and review-expiry calculation share that snapshot; audit replay rejects even hash-valid terminal timestamps that diverge from the linked request, and an invalid clock fails closed before audit or quota reservation.
+- Scope envelopes are duplicate-free and canonical before the clock starts, including at the HTTP boundary where padded JSON scope strings are rejected rather than rewritten; a review TTL that cannot form a real UTC expiry also fails closed before audit or quota reservation.
+- Product/workspace tenant envelopes are canonical at every GCL entry point, including direct programmatic calls; malformed or cross-contract tenant IDs fail before preflight, audit, quota, or adapter execution. Owner actors are never trimmed by GCL code, even though HTTP parsers normalize grammar-level header whitespace before the application receives it. An explicit programmatic `liveOptInRequested: false` surface disables the connector, and a successful artifact run must have a review expiry strictly after its canonical run instant.
+- Synthetic fixture privacy checks reject TCKN-, Turkish mobile-, Turkish IBAN-, and email-shaped values even when Unicode decimal digits, spaces, punctuation, or Unicode format characters obscure them; the same rule covers synthetic audio references and voices before descriptor parsing, audit, quota, or artifact persistence.
+- Successful runs create metadata-only proposals, bound to the successful run's maker, quota context, and safe hash-only envelope. The maker cannot approve or reject their own proposal; a distinct checker must echo the returned review digest before its configured review TTL expires. Approval never permits publication.
+- Durable proposal creation and checker decisions are each one transaction with their audit append; no audit-less production artifact mutation API exists. Blank actors and malformed status/maker storage envelopes fail closed.
+- Durable artifact reads and decisions also require a complete, ordered run → creation → optional single-decision audit lifecycle; metadata-shaped rows without that proof are unavailable.
+- Artifact creation uses the same one-clock rule: the row's `createdAt` and its creation audit event share one canonical instant; a mismatch fails closed before write and during later lifecycle replay.
+- The HTTP artifact creation and decision boundaries each take their own valid native-clock snapshot. A throwing, non-Date, or invalid clock returns `TRANSLATION_ARTIFACT_CLOCK_INVALID` before metadata mutation or lifecycle audit append; no review authority is broadened.
+- Terminal decisions are bound to a distinct checker and one canonical timestamp shared by the artifact row and its audit event; malformed decision-audit context fails before any durable mutation.
+- Hash-valid durable lifecycles must also be temporally consistent and within the review TTL; backdated or post-expiry audit decisions fail closed.
+- Audit records bind each connector to its one canonical scope and exactly one requested artifact; a hash-valid scope or item-count forgery invalidates the chain.
+- Audit history is transition-verified: each request has one exact terminal outcome, creation binds to that success, and only one linked, distinct-checker decision can follow.
+- Audit events are copied once from a bounded ordinary data envelope before validation, hashing, or persistence. Accessors, hidden/symbol fields, custom prototypes, non-finite values, and throwing proxies fail closed; a stateful proxy cannot alter the captured event or inject raw fixture content after validation.
+- Only explicit request-validation and GCL errors are exposed by HTTP. Unexpected adapter, storage, or runtime exceptions return stable `INTERNAL_ERROR`, never raw synthetic fixture content, credentials, or provider detail.
+- Connector governance configuration is captured once from a canonical, allowlisted data-only envelope. Later caller mutation, getters/Proxies, hidden or inherited fields, and undeclared provider-like settings fail closed or cannot alter a governed run.
+- A translation connector's immutable, canonical preflight fixture is the exact object the governed runner later gives its adapter; mutating the caller's retained input while audit/quota awaits cannot swap reviewed synthetic content.
+
+See [the interpreter contract](docs/GCL_TRANSLATION_CONTRACT.md) for the exact shapes and safety boundary.
