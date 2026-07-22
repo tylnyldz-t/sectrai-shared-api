@@ -238,6 +238,7 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
     const planPayload = {
       connectorId: this.id,
       scope: { product: validatedContext.product, workspaceId: validatedContext.workspaceId },
+      actor: validatedContext.actor,
       governance: {
         scopes: [...validatedContext.scopes].sort(),
         costCapCents: validatedContext.costCapCents,

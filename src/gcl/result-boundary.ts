@@ -18,9 +18,11 @@ const BLENDER_ARTIFACT_REQUIREMENTS = ['BLEND', 'GLB', 'ASSET_MANIFEST_JSON', 'V
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const PRODUCT_PATTERN = /^sectrai-[a-z0-9-]{1,80}$/
 const WORKSPACE_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
+const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 
 export type SyntheticResultReviewBinding = {
   scope: { product: string; workspaceId: string }
+  actor: string
   governance: { scopes: readonly string[]; costCapCents: number; requestedItems: number }
 }
 
@@ -80,9 +82,10 @@ function strictStringArray(value: unknown): string[] | null {
  * allowed to represent. This is data only; it neither reserves quota nor
  * authorises any execution, transport, artifact write, or publication.
  */
-export function syntheticResultReviewBinding(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'scopes' | 'costCapCents' | 'requestedItems'>): SyntheticResultReviewBinding {
+export function syntheticResultReviewBinding(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'actor' | 'scopes' | 'costCapCents' | 'requestedItems'>): SyntheticResultReviewBinding {
   return deepFreeze({
     scope: { product: context.product, workspaceId: context.workspaceId },
+    actor: context.actor,
     governance: {
       scopes: [...context.scopes].sort(),
       costCapCents: context.costCapCents,
@@ -93,17 +96,19 @@ export function syntheticResultReviewBinding(context: Pick<ConnectorRunContext, 
 
 function normalizedReviewBinding(value: unknown): SyntheticResultReviewBinding | null {
   const binding = ownDataRecord(value)
-  if (!binding || !exactKeys(binding, ['scope', 'governance'])) return null
+  if (!binding || !exactKeys(binding, ['scope', 'actor', 'governance'])) return null
   const scope = ownDataRecord(binding.scope)
   const governance = ownDataRecord(binding.governance)
   if (!scope || !exactKeys(scope, ['product', 'workspaceId']) || typeof scope.product !== 'string' || !PRODUCT_PATTERN.test(scope.product) ||
     typeof scope.workspaceId !== 'string' || !WORKSPACE_PATTERN.test(scope.workspaceId) ||
+    typeof binding.actor !== 'string' || !ACTOR_PATTERN.test(binding.actor) ||
     !governance || !exactKeys(governance, ['scopes', 'costCapCents', 'requestedItems']) ||
     typeof governance.costCapCents !== 'number' || !Number.isSafeInteger(governance.costCapCents) || governance.costCapCents < 1 ||
     typeof governance.requestedItems !== 'number' || !Number.isSafeInteger(governance.requestedItems) || governance.requestedItems < 1) return null
   const scopes = strictStringArray(governance.scopes)
   return scopes === null ? null : {
     scope: { product: scope.product, workspaceId: scope.workspaceId },
+    actor: binding.actor,
     governance: { scopes, costCapCents: governance.costCapCents, requestedItems: governance.requestedItems },
   }
 }
@@ -244,7 +249,7 @@ function snapshotAndCoreData(data: DataRecord, connectorId: string, submission: 
   if (!snapshot || !sameCanonicalData(data.integrity, snapshot.integrity) || !sameCanonicalData(data.reviewReceipt, snapshot.reviewReceipt)) return null
   const payload = ownDataRecord(snapshot.payload)
   if (!payload || payload.connectorId !== connectorId || payload.submittedInputSha256 !== submission.sha256 ||
-    !sameCanonicalData(payload.scope, binding.scope) || !sameCanonicalData(payload.governance, binding.governance) ||
+    !sameCanonicalData(payload.scope, binding.scope) || payload.actor !== binding.actor || !sameCanonicalData(payload.governance, binding.governance) ||
     !sameCanonicalData(payload.input, submission.normalizedInput)) return null
   return payload
 }
@@ -370,6 +375,7 @@ function gameResultMatchesSnapshot(data: DataRecord, connectorId: string, submis
       input: payload.input,
       product: binding.scope.product,
       workspaceId: binding.scope.workspaceId,
+      actor: binding.actor,
       scopes: [...binding.governance.scopes].sort(),
       costCapCents: binding.governance.costCapCents,
       requestedItems: binding.governance.requestedItems,

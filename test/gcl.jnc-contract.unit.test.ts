@@ -627,7 +627,7 @@ test('final egress binds normalized GM5/GM6 plan input to the original submissio
   assert.equal(forgedGameRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
 })
 
-test('final egress binds GM5/GM6 review scope and reservation governance to the governed request', async () => {
+test('final egress binds GM5/GM6 review scope, owner actor, and reservation governance to the governed request', async () => {
   const threeDInput = { prompt: 'A scope-bound synthetic 3D proposal', outputFormat: 'glb' as const }
   const scopeReplay = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
     threeDInput,
@@ -641,6 +641,16 @@ test('final egress binds GM5/GM6 review scope and reservation governance to the 
   await assert.rejects(scopeReplayRun.run.run(request({ input: threeDInput })), SyntheticResultIntegrityError)
   assert.equal(scopeReplayRun.quota.reservations.length, 1)
   assert.equal(scopeReplayRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+
+  const actorReplay = await new SyntheticTextToThreeDConnector(threeDConfig()).run(threeDInput, directContext())
+  const actorReplayConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return actorReplay },
+  }
+  const actorReplayRun = runner(actorReplayConnector)
+  await assert.rejects(actorReplayRun.run.run(request({ input: threeDInput, actor: 'other-owner' })), SyntheticResultIntegrityError)
+  assert.equal(actorReplayRun.quota.reservations.length, 1)
+  assert.equal(actorReplayRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
 
   const governanceReplay = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
     threeDInput,
@@ -667,6 +677,24 @@ test('final egress binds GM5/GM6 review scope and reservation governance to the 
   await assert.rejects(gameReplayRun.run.run(gameRequest(premiumUnreal)), SyntheticResultIntegrityError)
   assert.equal(gameReplayRun.quota.reservations.length, 1)
   assert.equal(gameReplayRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+
+  const gameActorReplay = await new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 30 }).run(
+    premiumUnreal,
+    directContext({ scopes: ['game:project:build'], costCapCents: 100, requestedItems: 12 }),
+  )
+  const gameOtherActor = await new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 30 }).run(
+    premiumUnreal,
+    directContext({ actor: 'other-owner', scopes: ['game:project:build'], costCapCents: 100, requestedItems: 12 }),
+  )
+  assert.notEqual(gameActorReplay.data.buildId, gameOtherActor.data.buildId)
+  const gameActorReplayConnector: Connector = {
+    id: 'game-engine', kind: 'game-engine', authKind: 'owner-approval', scopes: ['game:project:build'],
+    async run() { return gameActorReplay },
+  }
+  const gameActorReplayRun = runner(gameActorReplayConnector)
+  await assert.rejects(gameActorReplayRun.run.run({ ...gameRequest(premiumUnreal), actor: 'other-owner' }), SyntheticResultIntegrityError)
+  assert.equal(gameActorReplayRun.quota.reservations.length, 1)
+  assert.equal(gameActorReplayRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
 })
 
 test('registry admission seals connector metadata and rejects accessor-backed runner methods', () => {

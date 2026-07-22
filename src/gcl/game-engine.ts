@@ -120,7 +120,7 @@ function submittedInput(value: unknown): GameEngineBuildInput {
 }
 
 function buildId(input: GameEngineBuildInput, context: ConnectorRunContext): string {
-  const digest = syntheticPlanSha256({ input, product: context.product, workspaceId: context.workspaceId, scopes: [...context.scopes].sort(), costCapCents: context.costCapCents, requestedItems: context.requestedItems })
+  const digest = syntheticPlanSha256({ input, product: context.product, workspaceId: context.workspaceId, actor: context.actor, scopes: [...context.scopes].sort(), costCapCents: context.costCapCents, requestedItems: context.requestedItems })
   return `synthetic-game-${digest.slice(0, 20)}`
 }
 
@@ -205,6 +205,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
     const planPayload = {
       connectorId: this.id,
       scope: { product: validatedContext.product, workspaceId: validatedContext.workspaceId },
+      actor: validatedContext.actor,
       governance: {
         scopes: [...validatedContext.scopes].sort(),
         costCapCents: validatedContext.costCapCents,

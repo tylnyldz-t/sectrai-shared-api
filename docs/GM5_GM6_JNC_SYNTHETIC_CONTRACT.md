@@ -282,6 +282,22 @@ This is a local review-correlation and accounting-consistency check. It does
 not grant a GPU lease, contact JNC, run Blender/Unreal/Godot, resolve a path,
 read a credential, write an artifact, send a message, or publish an output.
 
+### D1 owner-actor binding
+
+The snapshot payload also records the exact owner actor that submitted the
+governed request. Final egress requires that actor to equal the current
+owner-approved request actor, in addition to the scope and reservation data.
+Consequently, a frozen plan cannot be replayed under a different owner inside
+the same product/workspace with otherwise identical scopes, cost cap, and item
+count. GM6 also includes that actor in its synthetic build-ID digest, keeping
+its review correlation distinct across owner identities. A failed replay is
+accounted for by the existing requested/failed audit pair and is never returned
+as a result.
+
+This is an in-memory identity-correlation control only. It does not create an
+authentication system, read a credential, contact a provider or JNC, launch an
+engine, write an artifact, send a message, or publish an output.
+
 ## Non-secret configuration
 
 `.env.example` shows only placeholders and governance limits. The owner-gate
