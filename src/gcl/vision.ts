@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { types as nodeUtilTypes } from 'node:util'
 import { ConnectorInputError, ConnectorUnavailableError, ConsentError, CostCapError, MakerCheckerError, OwnerGateError } from './errors.js'
 import type { AuditLog, Connector, ConnectorResult, ConnectorRunContext } from './types.js'
 
@@ -15,7 +16,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v12' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v13' as const
 const SYNTHETIC_DOCUMENT_DATA_BOUNDARY = {
   evidenceSource: 'synthetic-fixture',
   inputShape: 'plain-own-data-only',
@@ -44,6 +45,11 @@ const SYNTHETIC_DOCUMENT_FIELD_RECORD_BOUNDARY = {
   fieldRecordShape: 'plain-own-enumerable-data-only',
   fieldDescriptorsValidatedBeforeValues: true,
   accessorFieldPropertiesAccepted: false,
+} as const
+const SYNTHETIC_DOCUMENT_PROXY_BOUNDARY = {
+  proxyDetection: 'node-util-types-isProxy',
+  proxyObjectsAccepted: false,
+  proxyArraysAccepted: false,
 } as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
@@ -156,6 +162,12 @@ export type SyntheticDocumentReviewPacket = {
     fieldDescriptorsValidatedBeforeValues: typeof SYNTHETIC_DOCUMENT_FIELD_RECORD_BOUNDARY.fieldDescriptorsValidatedBeforeValues
     accessorFieldPropertiesAccepted: typeof SYNTHETIC_DOCUMENT_FIELD_RECORD_BOUNDARY.accessorFieldPropertiesAccepted
   }
+  /** Node-detected Proxy wrappers are rejected before reflection or value reads. */
+  proxyBoundaryBinding: {
+    proxyDetection: typeof SYNTHETIC_DOCUMENT_PROXY_BOUNDARY.proxyDetection
+    proxyObjectsAccepted: typeof SYNTHETIC_DOCUMENT_PROXY_BOUNDARY.proxyObjectsAccepted
+    proxyArraysAccepted: typeof SYNTHETIC_DOCUMENT_PROXY_BOUNDARY.proxyArraysAccepted
+  }
   /** Metadata-only freshness limit for the synthetic evidence reference. */
   evidenceBinding: {
     capturedAt: string
@@ -224,8 +236,17 @@ export type SyntheticVisionConnectorConfig = {
 }
 
 function digest(value: string): string { return createHash('sha256').update(value).digest('hex') }
+/**
+ * A Proxy may run arbitrary traps during even supposedly structural checks
+ * such as Object.getPrototypeOf() or Reflect.ownKeys(). Detect it first with
+ * Node's intrinsic inspector so an untrusted object graph stays data-only.
+ */
+function isProxyObject(value: unknown): value is object {
+  return value !== null && typeof value === 'object' && nodeUtilTypes.isProxy(value)
+}
 function isRecord(value: unknown): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  if (isProxyObject(value)) return false
   const prototype = Object.getPrototypeOf(value)
   return prototype === Object.prototype || prototype === null
 }
@@ -268,7 +289,7 @@ function exactKeys(value: Record<string, unknown>, allowed: readonly string[], e
  * cannot influence a synthetic proposal or review.
  */
 function denseOwnDataArray(value: unknown, error: string, maximumLength: number): asserts value is unknown[] {
-  if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new ConnectorInputError(error)
+  if (isProxyObject(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new ConnectorInputError(error)
   const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
   if (!lengthDescriptor || lengthDescriptor.enumerable || lengthDescriptor.get || lengthDescriptor.set || !('value' in lengthDescriptor)) throw new ConnectorInputError(error)
   const length = lengthDescriptor.value
@@ -327,6 +348,7 @@ function reviewPacketIntegrityMaterial(
   stringBoundaryBinding: SyntheticDocumentReviewPacket['stringBoundaryBinding'],
   timeBoundaryBinding: SyntheticDocumentReviewPacket['timeBoundaryBinding'],
   fieldRecordBoundaryBinding: SyntheticDocumentReviewPacket['fieldRecordBoundaryBinding'],
+  proxyBoundaryBinding: SyntheticDocumentReviewPacket['proxyBoundaryBinding'],
   evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
   reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): Record<string, unknown> {
@@ -350,6 +372,7 @@ function reviewPacketIntegrityMaterial(
     stringBoundaryBinding,
     timeBoundaryBinding,
     fieldRecordBoundaryBinding,
+    proxyBoundaryBinding,
     evidenceBinding,
     reviewWindow,
   }
@@ -397,11 +420,12 @@ function reviewPacketFor(
   const stringBoundaryBinding = { ...SYNTHETIC_DOCUMENT_STRING_BOUNDARY }
   const timeBoundaryBinding = { ...SYNTHETIC_DOCUMENT_TIME_BOUNDARY }
   const fieldRecordBoundaryBinding = { ...SYNTHETIC_DOCUMENT_FIELD_RECORD_BOUNDARY }
+  const proxyBoundaryBinding = { ...SYNTHETIC_DOCUMENT_PROXY_BOUNDARY }
   const evidenceBinding = evidenceBindingFor(proposal.evidence, issuedAt, maxEvidenceAgeSeconds)
   const reviewWindow = { issuedAt: issuedAt.toISOString(), reviewBy: reviewByFor(issuedAt, consent.expiresAt, evidenceBinding.expiresAt, maxReviewAgeSeconds).toISOString() }
   return {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
-    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, evidenceBinding, reviewWindow))),
+    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, evidenceBinding, reviewWindow))),
     scopeBinding,
     consentBinding,
     governanceBinding,
@@ -411,6 +435,7 @@ function reviewPacketFor(
     stringBoundaryBinding,
     timeBoundaryBinding,
     fieldRecordBoundaryBinding,
+    proxyBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
