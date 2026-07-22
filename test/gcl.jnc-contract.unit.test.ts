@@ -82,6 +82,8 @@ test('GM5 returns only a synthetic proposal, an unleased GPU contract card, and 
   assert.equal(result.data.gpuResourceCard.dispatchState, 'NOT_DISPATCHED')
   assert.equal(result.data.gpuResourceCard.executionAuthorization, 'NOT_AUTHORIZED')
   assert.equal(result.data.gpuResourceCard.leaseState, 'NOT_ACQUIRED')
+  const plannedInput = result.data.reviewSnapshot.payload.input as { gpuResourceRequest?: unknown }
+  assert.deepEqual(result.data.gpuResourceCard.request, plannedInput.gpuResourceRequest)
   assert.equal(result.data.blenderPilotHandoff.state, 'SYNTHETIC_HANDOFF_ONLY_NOT_SENT')
   assert.equal(result.data.blenderPilotHandoff.gpu.compute, 'CPU_ONLY_PILOT')
   assert.equal(result.data.blenderPilotHandoff.gpu.exclusiveGpu, false)
@@ -94,7 +96,7 @@ test('GM5 returns only a synthetic proposal, an unleased GPU contract card, and 
   assert.equal(quota.reservations.length, 1)
 })
 
-test('GM5 proposal ids are scope-bound, canonical across input key order, and immutable', async () => {
+test('GM5 proposal ids are governed-context-bound, canonical across input key order, and immutable', async () => {
   const first = await runner(new SyntheticTextToThreeDConnector(threeDConfig())).run.run(request({
     input: { prompt: 'Low-poly learning globe', outputFormat: 'glb', style: 'educational' },
   })) as ConnectorResult<SyntheticThreeDResult>
@@ -105,13 +107,76 @@ test('GM5 proposal ids are scope-bound, canonical across input key order, and im
     workspaceId: 'another-gm-workspace',
     input: { prompt: 'Low-poly learning globe', outputFormat: 'glb', style: 'educational' },
   })) as ConnectorResult<SyntheticThreeDResult>
+  const otherOwner = await runner(new SyntheticTextToThreeDConnector(threeDConfig())).run.run(request({
+    actor: 'another-synthetic-owner',
+    input: { prompt: 'Low-poly learning globe', outputFormat: 'glb', style: 'educational' },
+  })) as ConnectorResult<SyntheticThreeDResult>
+  const otherReservation = await runner(new SyntheticTextToThreeDConnector(threeDConfig())).run.run(request({
+    costCapCents: 75,
+    input: { prompt: 'Low-poly learning globe', outputFormat: 'glb', style: 'educational' },
+  })) as ConnectorResult<SyntheticThreeDResult>
 
   assert.equal(first.data.artifact.artifactId, reordered.data.artifact.artifactId)
   assert.equal(first.data.integrity.payloadSha256, reordered.data.integrity.payloadSha256)
   assert.notEqual(first.data.artifact.artifactId, otherScope.data.artifact.artifactId)
   assert.notEqual(first.data.integrity.payloadSha256, otherScope.data.integrity.payloadSha256)
+  assert.notEqual(first.data.artifact.artifactId, otherOwner.data.artifact.artifactId)
+  assert.notEqual(first.data.artifact.artifactId, otherReservation.data.artifact.artifactId)
   assert.throws(() => { (first.data.artifact as { publicationState: string }).publicationState = 'PUBLISHED' }, TypeError)
   assert.equal(first.data.artifact.publicationState, 'NOT_PUBLISHED')
+})
+
+test('GM5 final egress binds the optional GPU contract card to the submitted plan input', async () => {
+  const input = {
+    prompt: 'A synthetic GPU-bound 3D proposal',
+    gpuResourceRequest: { computeTier: 'premium' as const, estimatedVramMiB: 'UNKNOWN' as const, maximumRuntimeSeconds: 900, budgetEnvelopeRef: 'budget:owner-approved-gm5' },
+  }
+  const genuine = await new SyntheticTextToThreeDConnector(threeDConfig()).run(input, directContext())
+  const mapper = new ContractOnlyJncPilotMapper()
+  const substitutedCard = mapper.createGpuResourceCard({ ...input.gpuResourceRequest, budgetEnvelopeRef: 'budget:another-synthetic-plan' })
+  const substitutedPayload = { ...genuine.data.reviewSnapshot.payload, gpuResourceCard: substitutedCard }
+  const substitutedSnapshot = createSyntheticReviewSnapshot({
+    connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, payload: substitutedPayload,
+  })
+  const substitutedData = deepFreeze({
+    ...genuine.data,
+    gpuResourceCard: substitutedCard,
+    integrity: substitutedSnapshot.integrity,
+    reviewReceipt: substitutedSnapshot.reviewReceipt,
+    reviewSnapshot: substitutedSnapshot,
+  }) as unknown as SyntheticThreeDResult
+  const substitutedConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return { data: substitutedData, provenance: genuine.provenance, confidence: 0 } },
+  }
+  const substitutedRun = runner(substitutedConnector)
+  await assert.rejects(substitutedRun.run.run(request({ input })), SyntheticResultIntegrityError)
+  assert.equal(substitutedRun.quota.reservations.length, 1)
+  assert.equal(substitutedRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+
+  const withoutGpu = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
+    { prompt: 'A synthetic proposal without a GPU request' }, directContext(),
+  )
+  const unexpectedCard = mapper.createGpuResourceCard(input.gpuResourceRequest)
+  const unexpectedPayload = { ...withoutGpu.data.reviewSnapshot.payload, gpuResourceCard: unexpectedCard }
+  const unexpectedSnapshot = createSyntheticReviewSnapshot({
+    connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, payload: unexpectedPayload,
+  })
+  const unexpectedData = deepFreeze({
+    ...withoutGpu.data,
+    gpuResourceCard: unexpectedCard,
+    integrity: unexpectedSnapshot.integrity,
+    reviewReceipt: unexpectedSnapshot.reviewReceipt,
+    reviewSnapshot: unexpectedSnapshot,
+  }) as unknown as SyntheticThreeDResult
+  const unexpectedConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return { data: unexpectedData, provenance: withoutGpu.provenance, confidence: 0 } },
+  }
+  const unexpectedRun = runner(unexpectedConnector)
+  await assert.rejects(unexpectedRun.run.run(request({ input: { prompt: 'A synthetic proposal without a GPU request' } })), SyntheticResultIntegrityError)
+  assert.equal(unexpectedRun.quota.reservations.length, 1)
+  assert.equal(unexpectedRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
 })
 
 test('synthetic review receipts are scope-bound, verify their plan digest, and fail closed on corruption', () => {

@@ -178,8 +178,26 @@ function isolatedContent(source: string, value: unknown): IsolatedContent {
   return { source, value, handling: 'data-only', instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS' }
 }
 
-function artifactId(connectorKind: SyntheticThreeDResult['connectorKind'], input: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): string {
-  const digest = syntheticPlanSha256({ connectorKind, input, product: context.product, workspaceId: context.workspaceId })
+/**
+ * A synthetic URI is still a review handle, so it must not alias a proposal
+ * made by another owner or under a different reservation envelope.  This is
+ * correlation data only; it neither names a file nor authorises a hand-off.
+ */
+function artifactId(
+  connectorKind: SyntheticThreeDResult['connectorKind'],
+  input: unknown,
+  context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'actor' | 'scopes' | 'costCapCents' | 'requestedItems'>,
+): string {
+  const digest = syntheticPlanSha256({
+    connectorKind,
+    input,
+    product: context.product,
+    workspaceId: context.workspaceId,
+    actor: context.actor,
+    scopes: [...context.scopes].sort(),
+    costCapCents: context.costCapCents,
+    requestedItems: context.requestedItems,
+  })
   return `synthetic-3d-${connectorKind}-${digest.slice(0, 24)}`
 }
 

@@ -54,12 +54,14 @@ other JavaScript-only values are rejected rather than being silently collapsed
 to a potentially colliding digest. Verifier predicates return `false` for such
 data; asserting variants fail closed.
 
-GM5 synthetic artifact IDs and integrity hashes include the product and
-workspace scope. The same validated input therefore produces a stable proposal
-inside one scope but cannot be correlated through the same synthetic artifact
-ID across workspaces. Reordered JSON keys normalise to the same result. Neither
-the digest nor freezing creates an asset, starts a process, or permits a plan
-to be changed into a publication instruction.
+GM5 synthetic artifact IDs and integrity hashes include the product/workspace
+scope, owner actor, approved scopes, cost cap, and requested-item reservation
+units. The same governed input therefore produces a stable proposal only inside
+one identical review context; it cannot be correlated through the same
+synthetic artifact ID across workspaces, owners, or reservation envelopes.
+Reordered JSON keys normalise to the same result. Neither the digest nor
+freezing creates an asset, starts a process, or permits a plan to be changed
+into a publication instruction.
 
 The durable audit append path takes the workspace lock and verifies every prior
 SHA-256 link before writing its next link. A malformed, reordered, or hash-
@@ -297,6 +299,28 @@ as a result.
 This is an in-memory identity-correlation control only. It does not create an
 authentication system, read a credential, contact a provider or JNC, launch an
 engine, write an artifact, send a message, or publish an output.
+
+### D1 GM5 proposal and GPU-request binding
+
+GM5 now derives its synthetic artifact ID from the normalized proposal input
+and the same owner/scope/reservation binding already checked at final egress.
+An otherwise identical proposal under another actor, cost cap, item count, or
+approved scope therefore receives a different review handle. This is not a
+file name, content address, or execution token; it is only a stricter
+in-memory review-correlation value.
+
+When GM5 contains an optional GPU resource request, final egress additionally
+requires the contract card's `request` to equal the frozen normalized
+`input.gpuResourceRequest` exactly. If no GPU request was submitted, the card
+must contain `request: null`. A newly re-hashed snapshot cannot substitute a
+different budget-envelope reference, compute tier, VRAM estimate, or runtime
+value, and it cannot add a card to a plan that had none. Such a result fails as
+`synthetic_result_integrity_invalid` after the normal requested audit and
+quota reservation; it is never returned.
+
+The bounded budget-envelope reference remains opaque synthetic review data.
+This package does not resolve it against a ledger, reserve GPU capacity,
+contact JNC, read a credential, or grant later execution authority.
 
 ## Non-secret configuration
 

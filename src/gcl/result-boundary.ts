@@ -306,17 +306,41 @@ function validUnrealPilotHandoff(value: unknown): boolean {
     handoff.destination === 'INCOMING_STAGING_ONLY' && handoff.productionPromotion === 'DISABLED_OWNER_APPROVAL_REQUIRED')
 }
 
-function validThreeDArtifact(value: unknown, connectorId: string, payload: DataRecord): boolean {
+function validThreeDArtifact(value: unknown, connectorId: string, payload: DataRecord, binding: SyntheticResultReviewBinding): boolean {
   const artifact = ownDataRecord(value)
   const scope = ownDataRecord(payload.scope)
   const expectedArtifactId = scope && exactKeys(scope, ['product', 'workspaceId']) && typeof scope.product === 'string' && typeof scope.workspaceId === 'string'
-    ? `synthetic-3d-${connectorId}-${syntheticPlanSha256({ connectorKind: connectorId, input: payload.input, product: scope.product, workspaceId: scope.workspaceId }).slice(0, 24)}`
+    ? `synthetic-3d-${connectorId}-${syntheticPlanSha256({
+      connectorKind: connectorId,
+      input: payload.input,
+      product: scope.product,
+      workspaceId: scope.workspaceId,
+      actor: binding.actor,
+      scopes: [...binding.governance.scopes].sort(),
+      costCapCents: binding.governance.costCapCents,
+      requestedItems: binding.governance.requestedItems,
+    }).slice(0, 24)}`
     : null
   return Boolean(artifact && exactKeys(artifact, ['artifactId', 'syntheticUri', 'generation', 'outputFormat', 'lifecycle', 'reviewState', 'publicationState']) &&
     typeof artifact.artifactId === 'string' && artifact.artifactId === expectedArtifactId &&
     artifact.syntheticUri === `synthetic://gcl-3d/${connectorId}/${artifact.artifactId}` && artifact.generation === 'SYNTHETIC_PROPOSAL_ONLY' &&
     (artifact.outputFormat === 'glb' || artifact.outputFormat === 'obj') && artifact.lifecycle === 'GENERATED_CANDIDATE_NOT_A_FILE' &&
     artifact.reviewState === 'OWNER_REVIEW_REQUIRED' && artifact.publicationState === 'NOT_PUBLISHED')
+}
+
+/**
+ * The optional GPU request is submitted as review data.  Its card must be the
+ * exact normalized request from that plan (or null when none was submitted),
+ * so a valid-looking card cannot swap in another budget reference, tier, or
+ * runtime envelope after preflight.
+ */
+function threeDGpuCardMatchesSnapshotInput(value: unknown, payload: DataRecord): boolean {
+  if (!validGpuResourceCard(value)) return false
+  const card = ownDataRecord(value)
+  const input = ownDataRecord(payload.input)
+  if (!card || !input) return false
+  const expectedRequest = Object.hasOwn(input, 'gpuResourceRequest') ? input.gpuResourceRequest : null
+  return sameCanonicalData(card.request, expectedRequest)
 }
 
 function threeDResultMatchesSnapshot(data: DataRecord, connectorId: string, submission: SubmissionBinding, binding: SyntheticResultReviewBinding): boolean {
@@ -326,7 +350,8 @@ function threeDResultMatchesSnapshot(data: DataRecord, connectorId: string, subm
     sameCanonicalData(data.artifact, payload.artifact) &&
     sameCanonicalData(data.gpuResourceCard, payload.gpuResourceCard) &&
     sameCanonicalData(data.blenderPilotHandoff, payload.blenderPilotHandoff) &&
-    validThreeDArtifact(data.artifact, connectorId, payload) && validGpuResourceCard(data.gpuResourceCard) && validBlenderPilotHandoff(data.blenderPilotHandoff))
+    validThreeDArtifact(data.artifact, connectorId, payload, binding) &&
+    threeDGpuCardMatchesSnapshotInput(data.gpuResourceCard, payload) && validBlenderPilotHandoff(data.blenderPilotHandoff))
 }
 
 type GameInputPolicy = { tier: 'economic' | 'premium'; engine: 'godot' | 'unreal' | 'blender'; target: 'desktop' | 'mobile' | 'web'; gpuMinutes?: number }
