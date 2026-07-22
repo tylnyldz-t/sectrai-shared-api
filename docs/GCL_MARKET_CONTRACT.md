@@ -306,6 +306,33 @@ worker, queue, provider configuration, credential, network call, quote,
 reservation, booking, publication, handoff, or sending path. Its successful
 result remains fixed at `NOT_AUTHORIZED` through the existing D2 receipt.
 
+## D9 — deep review-plan and host-ledger result boundary
+
+D9 snapshots the complete caller-held review plan into a bounded JSON-like
+own-data tree before the validator reads its binding, request, sources,
+side-effect flags, or review packet. Every object must have the normal
+`Object.prototype`; every collection must be a bounded dense
+`Array.prototype` array with only own numbered data elements. Non-enumerable
+fields, symbols, accessors, Proxies, prototype-shaped values, cyclic aliases,
+non-finite numbers, and unsupported values fail closed as
+`MARKET_REVIEW_PLAN_INTEGRITY_INVALID` before a semantic field is read. The
+existing full-plan reconstruction still rejects unknown-but-plain fields after
+that snapshot.
+
+The injected D2 ledger remains a host-owned executable seam, so D9 does not
+claim to sandbox its implementation. It obtains `recordTerminalReview` only
+from a data-property descriptor; a getter- or Proxy-shaped ledger member is
+rejected without evaluation. Its returned value must then be an exact plain
+own-data `{ hash }` record carrying a lowercase SHA-256 digest. Accessor,
+Proxy, inherited, hidden, symbol, extra, and malformed results fail closed as
+`MARKET_REVIEW_AUDIT_APPEND_INVALID` and cannot create a D2/D3 receipt.
+
+D9 is a local validation boundary only. It adds no credential, signature,
+database/migration, route, worker, queue, provider configuration, network
+call, quote, reservation, booking, publication, handoff, sending path,
+durable approval, or authorization capability. Its successful review output
+continues to be exactly `NOT_AUTHORIZED`.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -370,7 +397,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -378,7 +405,9 @@ caller-held audit-witness link reconstruction, plus D5 caller-held
 requested/succeeded/owner-review continuity reconstruction, D6's minimized,
 context-bound rendering of that exact segment, and D7's compact binding of
 independently rebuilt D3 and D6 evidence, plus D8's exact-data terminal-ledger
-and audit-append boundary.
+and audit-append boundary. D9 snapshots every caller-held review-plan branch
+before semantic reads and validates the injected ledger's member/result
+descriptors before any review receipt can be returned.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -395,8 +424,13 @@ credential-shaped, hidden, symbol, accessor, and Proxy-shaped manifests.
 D8 rejects inherited, hidden, symbol, accessor, and Proxy-shaped ledger
 entries before audit append, rejects accessor- and Proxy-shaped append results
 without marking a decision, and proves that a malformed append leaves the
-tuple retryable. D3/D4/D5/D6/D7 rejection produces no extra review event,
-quota item, or local terminal entry.
+tuple retryable. D9 additionally rejects root/nested plan accessors, hidden or
+symbol-shaped nested values, sparse source arrays, plan Proxies, getter-shaped
+ledger members, and accessor/Proxy-shaped injected ledger results without
+evaluating those values. D3/D4/D5/D6/D7 rejection produces no extra review
+event, quota item, or local terminal entry. A D9 plan or ledger-member failure
+occurs before the ledger call; a host-owned ledger that is invoked and returns
+invalid data remains unable to create a local receipt.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -412,7 +446,8 @@ quota item, or local terminal entry.
    can only minimize and recheck that same segment; D7 can only bind the
    rebuilt D3/D6 evidence into a still-smaller no-action manifest; D8 admits
    only exact own-data ledger/audit ingress and leaves a malformed append
-   undecided.
+   undecided; D9 snapshots all caller-held plan material and rejects shaped
+   host-ledger results before a receipt can be formed.
 5. Request content is explicitly data-only, never an instruction.
 6. Owner gate, `market:review`, and maker–checker separation are mandatory.
 7. The module has no network client, provider URL, credential/API-key field,
@@ -420,8 +455,9 @@ quota item, or local terminal entry.
 8. Preflight, cost caps, independent grouped quotas, and the scoped SHA-256
    audit chain bound every run; D5/D6/D7 only check a caller-held three-event
    segment, a minimized rendering, and a further compact binding of it; D8
-   only hardens D2's in-process append seam.
-9. A review and its D3/D4/D5/D6/D7/D8 evidence cannot quote, reserve, book,
+   only hardens D2's in-process append seam and D9 only validates in-process
+   review inputs/results.
+9. A review and its D3/D4/D5/D6/D7/D8/D9 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -431,4 +467,4 @@ quota item, or local terminal entry.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9.

@@ -898,6 +898,99 @@ test('D8 terminal ledger rejects accessor- and Proxy-shaped audit append results
   assert.equal(proxyLedger.entries.length, 0)
 })
 
+test('D9 snapshots every caller-held review-plan branch before semantic reads and blocks shaped host-ledger seams without a review audit', async () => {
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const plan = result.data as SyntheticMarketPlan
+  const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
+  const mustRejectPlan = (candidate: unknown, read: () => boolean = () => false) => {
+    assert.throws(
+      () => validateSyntheticMarketPlanForReview(candidate, reviewContext),
+      (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID',
+    )
+    assert.equal(read(), false)
+  }
+
+  const accessorRoot = structuredClone(plan)
+  let rootRead = false
+  Object.defineProperty(accessorRoot, 'binding', {
+    enumerable: true,
+    get() { rootRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  mustRejectPlan(accessorRoot, () => rootRead)
+
+  const accessorNested = structuredClone(plan)
+  let nestedRead = false
+  Object.defineProperty(accessorNested.sources[0]!, 'state', {
+    enumerable: true,
+    get() { nestedRead = true; throw new Error('ACCESSOR_MUST_NOT_RUN') },
+  })
+  mustRejectPlan(accessorNested, () => nestedRead)
+
+  const hiddenNested = structuredClone(plan)
+  Object.defineProperty(hiddenNested.reviewPacket, 'providerCredential', { value: 'synthetic-not-accepted' })
+  mustRejectPlan(hiddenNested)
+
+  const symbolArray = structuredClone(plan)
+  Object.defineProperty(symbolArray.sources, Symbol('provider-token'), { value: 'synthetic-not-accepted', enumerable: true })
+  mustRejectPlan(symbolArray)
+
+  const sparseSources = structuredClone(plan)
+  delete (sparseSources.sources as unknown[])[1]
+  mustRejectPlan(sparseSources)
+
+  let proxyTrapRead = false
+  const proxyPlan = new Proxy(structuredClone(plan), { get() { proxyTrapRead = true; throw new Error('PROXY_TRAP_MUST_NOT_RUN') } })
+  mustRejectPlan(proxyPlan, () => proxyTrapRead)
+
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(accessorNested, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID',
+  )
+  assert.equal(setup.reviews.entries.length, 0)
+  assert.equal(setup.audit.entries.length, 2)
+
+  let ledgerMemberRead = false
+  const getterLedger = {}
+  Object.defineProperty(getterLedger, 'recordTerminalReview', {
+    get() { ledgerMemberRead = true; throw new Error('LEDGER_GETTER_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', getterLedger as never, reviewContext),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_REVIEW_LEDGER_REQUIRED',
+  )
+  assert.equal(ledgerMemberRead, false)
+
+  let resultAccessorRead = false
+  const accessorResult = {}
+  Object.defineProperty(accessorResult, 'hash', {
+    enumerable: true,
+    get() { resultAccessorRead = true; throw new Error('RESULT_ACCESSOR_MUST_NOT_RUN') },
+  })
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', { recordTerminalReview: async () => accessorResult as never }, reviewContext),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_REVIEW_AUDIT_APPEND_INVALID',
+  )
+  assert.equal(resultAccessorRead, false)
+
+  let resultProxyRead = false
+  const proxyResult = new Proxy({ hash: 'a'.repeat(64) }, {
+    get(target, property, receiver) {
+      if (property === 'then') return undefined
+      resultProxyRead = true
+      return Reflect.get(target, property, receiver)
+    },
+  })
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', { recordTerminalReview: async () => proxyResult as never }, reviewContext),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'MARKET_REVIEW_AUDIT_APPEND_INVALID',
+  )
+  assert.equal(resultProxyRead, false)
+  assert.equal(setup.reviews.entries.length, 0)
+  assert.equal(setup.audit.entries.length, 2)
+  assert.equal(setup.quota.requests.length, 1)
+})
+
 test('D3 refuses an injected ledger result whose audit hash is malformed before it can return a receipt', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })

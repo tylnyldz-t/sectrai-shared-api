@@ -83,4 +83,8 @@ a signature, credential, authorization, nor execution capability. D8 accepts
 only exact own-data records/results at the injected D2 terminal-ledger seam;
 accessor-, Proxy-, inherited-, hidden-, and symbol-shaped values fail closed.
 A malformed audit append leaves that process-local tuple undecided for a later
-retry, never creating an action or durable approval.
+retry, never creating an action or durable approval. D9 snapshots every
+caller-held review-plan branch into bounded own data before semantic review and
+checks host-ledger members/results by descriptor before a receipt can be built;
+shaped plans and ledger results remain fail-closed and cannot authorize any
+action.

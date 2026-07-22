@@ -38,12 +38,12 @@ export const ADOS_10_MARKET_CONTROLS: readonly AdosMarketControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every plan and review packet is digest-bound to one product and workspace.' },
   { id: 'ADOS-02', control: 'SYNTHETIC_DATA_ONLY', enforcement: 'Only the bounded market request shape is accepted; no market response or provider payload is ingested.' },
   { id: 'ADOS-03', control: 'FAIL_CLOSED_CONFIGURATION', enforcement: 'Only literal GCL_MARKET_LIVE_ENABLED=false permits the synthetic adapter; absent, malformed, and true values deny.' },
-  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, D8 admits only exact own-data terminal-ledger/audit results, and D3/D4/D5/D6/D7 recheck caller-held evidence without a write.' },
+  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, D8 hardens its local ledger seam, D9 admits only deeply own-data caller-held plans and ledger results, and D3/D4/D5/D6/D7 recheck evidence without a write.' },
   { id: 'ADOS-05', control: 'UNTRUSTED_CONTENT_IS_DATA', enforcement: 'Request values are labelled data-only and cannot become connector instructions.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'A separate canonical owner actor with market:review is required; the plan maker cannot self-review.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIALS', enforcement: 'No network client, provider URL, credential, API key, scheduler, or automatic sync exists in this connector.' },
-  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory; D5 reconstructs one caller-supplied segment, D6/D7 only minimize and recheck derived evidence, and D8 leaves a malformed append undecided.' },
-  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet, review receipt, and D4/D5/D6/D7 evidence permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
+  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory; D5 reconstructs one caller-supplied segment, D6/D7 only minimize and recheck derived evidence, D8 leaves a malformed append undecided, and D9 cannot turn a shaped host result into a receipt.' },
+  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet, review receipt, and D4/D5/D6/D7/D8/D9 evidence permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or market-provider integration is part of this connector.' },
 ])
 
@@ -308,6 +308,10 @@ export type SyntheticMarketReviewEvidenceManifest = {
 export type MarketReviewContext = Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'scopes' | 'now'>
 
 const OWNER_ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
+const MAX_MARKET_REVIEW_DATA_DEPTH = 16
+const MAX_MARKET_REVIEW_DATA_NODES = 256
+const MAX_MARKET_REVIEW_OBJECT_FIELDS = 32
+const MAX_MARKET_REVIEW_ARRAY_ITEMS = 32
 
 function positiveInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
@@ -546,6 +550,113 @@ function exactMarketObject(value: unknown, fields: readonly string[], error: str
   return object
 }
 
+/**
+ * D9 snapshots caller-held plan material before any semantic review reads it.
+ * It intentionally accepts only a bounded JSON-like own-data tree. This keeps
+ * getters, Proxy traps, inherited values, hidden fields, symbol fields, sparse
+ * arrays, cyclic aliases, and non-finite values outside canonical review.
+ */
+function strictMarketReviewData(value: unknown, error: string): unknown {
+  const visited = new WeakSet<object>()
+  let nodes = 0
+
+  const copy = (candidate: unknown, depth: number): unknown => {
+    if (depth > MAX_MARKET_REVIEW_DATA_DEPTH || nodes >= MAX_MARKET_REVIEW_DATA_NODES) throw new ConnectorInputError(error)
+    if (candidate === null || typeof candidate === 'string' || typeof candidate === 'boolean') return candidate
+    if (typeof candidate === 'number') {
+      if (!Number.isFinite(candidate)) throw new ConnectorInputError(error)
+      return candidate
+    }
+    if (!candidate || typeof candidate !== 'object' || nodeTypes.isProxy(candidate) || visited.has(candidate)) {
+      throw new ConnectorInputError(error)
+    }
+    visited.add(candidate)
+    nodes += 1
+
+    if (Array.isArray(candidate)) {
+      if (Object.getPrototypeOf(candidate) !== Array.prototype || Object.getOwnPropertySymbols(candidate).length > 0 || candidate.length > MAX_MARKET_REVIEW_ARRAY_ITEMS) {
+        throw new ConnectorInputError(error)
+      }
+      const names = Object.getOwnPropertyNames(candidate)
+      if (names.length !== candidate.length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+        throw new ConnectorInputError(error)
+      }
+      const descriptors = Object.getOwnPropertyDescriptors(candidate)
+      const result: unknown[] = []
+      for (let index = 0; index < candidate.length; index += 1) {
+        const descriptor = descriptors[String(index)]
+        if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError(error)
+        result.push(copy(descriptor.value, depth + 1))
+      }
+      return result
+    }
+
+    if (Object.getPrototypeOf(candidate) !== Object.prototype || Object.getOwnPropertySymbols(candidate).length > 0) {
+      throw new ConnectorInputError(error)
+    }
+    const names = Object.getOwnPropertyNames(candidate)
+    if (names.length > MAX_MARKET_REVIEW_OBJECT_FIELDS) throw new ConnectorInputError(error)
+    const descriptors = Object.getOwnPropertyDescriptors(candidate)
+    const result = Object.create(Object.prototype) as Record<string, unknown>
+    for (const name of names) {
+      const descriptor = descriptors[name]
+      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError(error)
+      Object.defineProperty(result, name, { enumerable: true, value: copy(descriptor.value, depth + 1) })
+    }
+    return result
+  }
+
+  try {
+    return copy(value, 0)
+  } catch (cause) {
+    if (cause instanceof ConnectorInputError) throw cause
+    throw new ConnectorInputError(error)
+  }
+}
+
+function strictMarketReviewPlan(value: unknown): Record<string, unknown> {
+  const plan = strictMarketReviewData(value, 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
+  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
+  return plan as Record<string, unknown>
+}
+
+/** The host-owned ledger is executable by design, but its member must be a
+ * data function, not a getter or Proxy-shaped property. The result is checked
+ * separately as exact own data before any review receipt is built. */
+function terminalReviewRecorder(value: unknown): (entry: Parameters<MarketReviewLedger['recordTerminalReview']>[0]) => Promise<unknown> {
+  try {
+    if (!value || typeof value !== 'object' || nodeTypes.isProxy(value)) throw new ConnectorUnavailableError('MARKET_REVIEW_LEDGER_REQUIRED')
+    let current: object | null = value
+    for (let depth = 0; current && depth < 8; depth += 1) {
+      if (nodeTypes.isProxy(current)) throw new ConnectorUnavailableError('MARKET_REVIEW_LEDGER_REQUIRED')
+      const descriptor = Object.getOwnPropertyDescriptor(current, 'recordTerminalReview')
+      if (descriptor) {
+        if (!('value' in descriptor) || typeof descriptor.value !== 'function' || nodeTypes.isProxy(descriptor.value)) {
+          throw new ConnectorUnavailableError('MARKET_REVIEW_LEDGER_REQUIRED')
+        }
+        return async (entry) => Reflect.apply(descriptor.value, value, [entry]) as unknown
+      }
+      current = Object.getPrototypeOf(current)
+    }
+  } catch (cause) {
+    if (cause instanceof ConnectorUnavailableError) throw cause
+  }
+  throw new ConnectorUnavailableError('MARKET_REVIEW_LEDGER_REQUIRED')
+}
+
+function terminalReviewAuditHash(value: unknown): string {
+  let audit: Record<string, unknown>
+  try {
+    audit = exactMarketObject(value, ['hash'], 'MARKET_REVIEW_AUDIT_APPEND_INVALID')
+  } catch {
+    throw new ConnectorUnavailableError('MARKET_REVIEW_AUDIT_APPEND_INVALID')
+  }
+  if (typeof audit.hash !== 'string' || !DIGEST_PATTERN.test(audit.hash)) {
+    throw new ConnectorUnavailableError('MARKET_REVIEW_AUDIT_APPEND_INVALID')
+  }
+  return audit.hash
+}
+
 function reviewExecutionForReceipt(value: unknown): SyntheticMarketReviewReceipt['execution'] {
   const execution = exactMarketObject(value, ['state', 'externalNetwork', 'reservation', 'booking', 'publication'], 'INVALID_MARKET_REVIEW_RECEIPT_EXECUTION')
   if (execution.state !== 'NOT_AUTHORIZED' || execution.externalNetwork !== false || execution.reservation !== false || execution.booking !== false || execution.publication !== false) {
@@ -634,8 +745,7 @@ function syntheticMarketPlan(binding: MarketPlanBinding, request: SyntheticMarke
  */
 export function validateSyntheticMarketPlanForReview(plan: unknown, context: MarketReviewContext): SyntheticMarketPlan {
   const reviewedContext = reviewContext(context)
-  if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
-  const candidate = plan as Record<string, unknown>
+  const candidate = strictMarketReviewPlan(plan)
   const bindingValue = candidate.binding
   if (!bindingValue || typeof bindingValue !== 'object' || Array.isArray(bindingValue)) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
   const bindingCandidate = bindingValue as Record<string, unknown>
@@ -1249,11 +1359,11 @@ export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMark
   if (!canonicalReviewer) throw new OwnerGateError('MARKET_REVIEWER_REQUIRED')
   if (!reviewedContext.scopes.includes('market:review')) throw new ScopeError('MARKET_REVIEW_SCOPE_REQUIRED')
   if (decision !== 'acknowledged' && decision !== 'rejected') throw new ConnectorInputError('INVALID_MARKET_REVIEW_DECISION')
-  if (!reviewLedger || typeof reviewLedger.recordTerminalReview !== 'function') throw new ConnectorUnavailableError('MARKET_REVIEW_LEDGER_REQUIRED')
+  const recordTerminalReview = terminalReviewRecorder(reviewLedger)
   const validatedPlan = validateSyntheticMarketPlanForReview(plan, context)
   if (canonicalReviewer === validatedPlan.binding.requestedBy) throw new MakerCheckerError('MARKET_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
 
-  const audit = await reviewLedger.recordTerminalReview({
+  const auditHash = terminalReviewAuditHash(await recordTerminalReview({
     product: reviewedContext.product,
     workspaceId: reviewedContext.workspaceId,
     planId: validatedPlan.id,
@@ -1263,10 +1373,7 @@ export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMark
     decision,
     reviewedBy: canonicalReviewer,
     reviewedAt: reviewedAt.toISOString(),
-  })
-  if (!audit || typeof audit.hash !== 'string' || !DIGEST_PATTERN.test(audit.hash)) {
-    throw new ConnectorUnavailableError('MARKET_REVIEW_AUDIT_APPEND_INVALID')
-  }
+  }))
   const reviewed: ReviewedSyntheticMarketPlanDetails = {
     planId: validatedPlan.id,
     reviewId: validatedPlan.reviewPacket.reviewId,
@@ -1276,7 +1383,7 @@ export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMark
     reviewedAt: reviewedAt.toISOString(),
     mode: 'SYNTHETIC',
     execution: reviewExecution(),
-    auditHash: audit.hash,
+    auditHash,
   }
   return { ...reviewed, reviewReceipt: reviewReceiptFor(validatedPlan, reviewed) }
 }
