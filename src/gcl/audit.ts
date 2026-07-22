@@ -91,18 +91,17 @@ function auditValue(value: unknown): AuditRecordValue | null {
  */
 export function verifiedAuditChainHead(values: readonly unknown[]): string | null {
   let previousHash: string | null = null
-  let previousOccurredAt: number | null = null
   const requestedEvents = new Map<string, { event: ConnectorAuditEvent; occurredAt: number }>()
   const terminalRequests = new Set<string>()
   for (const value of values) {
     const candidate = auditValue(value)
     if (!candidate || candidate.previousHash !== previousHash || candidate.hash !== hashAuditEvent(candidate.event, previousHash)) throw new AuditChainError()
-    // auditEvent has already required an exact ISO timestamp. Preserve the
-    // durable record order as a temporal order too: a clock rollback must
-    // make governance unavailable rather than make a later terminal record
-    // appear to predate its request.
+    // auditEvent has already required an exact ISO timestamp. A global wall
+    // clock ordering would reject valid concurrent runs whose request and
+    // terminal records interleave, so enforce the meaningful temporal link:
+    // a terminal record must not predate its own request.
     const occurredAt = Date.parse(candidate.event.occurredAt)
-    if (!Number.isFinite(occurredAt) || (previousOccurredAt !== null && occurredAt < previousOccurredAt)) throw new AuditChainError()
+    if (!Number.isFinite(occurredAt)) throw new AuditChainError()
     if (candidate.event.type === 'connector.run.requested') {
       requestedEvents.set(candidate.hash, { event: candidate.event, occurredAt })
     } else {
@@ -118,7 +117,6 @@ export function verifiedAuditChainHead(values: readonly unknown[]): string | nul
       terminalRequests.add(requestedAuditHash)
     }
     previousHash = candidate.hash
-    previousOccurredAt = occurredAt
   }
   return previousHash
 }

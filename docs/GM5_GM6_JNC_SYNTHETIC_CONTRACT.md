@@ -90,13 +90,17 @@ later clock value. A missing, invalid, subclassed, or throwing clock returns
 `503 connector_unavailable` / `CONNECTOR_CLOCK_UNAVAILABLE` before preflight,
 audit, quota, or adapter execution.
 
-Audit-chain verification requires non-decreasing timestamps in durable record
-order and requires each terminal event to be at or after its linked request.
-A clock rollback, a re-hashed terminal event that predates its request, or a
-reordered historic record is a corrupt governance chain (`503
-gcl_audit_chain_corrupt`), never a reason to create a new root or continue the
-connector. Equal timestamps within one run are intentional: they describe one
-local review transaction, not engine execution time.
+Audit-chain verification requires each terminal event to be at or after its
+linked request. A re-hashed terminal event that predates its request is a
+corrupt governance chain (`503 gcl_audit_chain_corrupt`), never a reason to
+create a new root or continue the connector. The prospective event is checked
+against the complete chain inside the append transaction before it is written,
+so invalid terminal evidence cannot be stored and only fail on a later append.
+The chain deliberately does not impose a global wall-clock order across
+independent records: concurrent synthetic runs may interleave while their own
+request/terminal pair remains valid. Equal timestamps within one run are
+intentional: they describe one local review transaction, not engine execution
+time.
 
 ## Connector mapping
 

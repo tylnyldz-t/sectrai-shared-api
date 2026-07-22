@@ -523,13 +523,6 @@ test('corrupt audit links are rejected instead of silently becoming a new chain 
     { event: predatingTerminal, previousHash: firstHash, hash: predatingTerminalHash },
   ]), AuditChainError)
 
-  const rollbackRequest = { ...firstEvent, occurredAt: '2026-07-22T09:59:59.999Z' }
-  const rollbackRequestHash = hashAuditEvent(rollbackRequest, secondHash)
-  assert.throws(() => verifiedAuditChainHead([
-    { event: firstEvent, previousHash: null, hash: firstHash },
-    { event: secondEvent, previousHash: firstHash, hash: secondHash },
-    { event: rollbackRequest, previousHash: secondHash, hash: rollbackRequestHash },
-  ]), AuditChainError)
 })
 
 test('runner captures one valid clock instant for audit, quota, and synthetic provenance', async () => {
@@ -552,6 +545,23 @@ test('runner captures one valid clock instant for audit, quota, and synthetic pr
   assert.deepEqual(audit.entries.map((entry) => entry.event.occurredAt), [capturedAt, capturedAt])
   assert.equal(quota.reservations[0]?.occurredAt.toISOString(), capturedAt)
   assert.equal(result.provenance.retrievedAt, capturedAt)
+})
+
+test('a prospective terminal event that predates its request is rejected before audit storage', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const requested = {
+    type: 'connector.run.requested' as const, connectorId: 'text-to-3d', product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace',
+    actor: 'synthetic-owner', scopes: ['3d:generate'], costCapCents: 50, requestedItems: 1,
+    occurredAt: '2026-07-22T10:15:00.000Z', detail: {},
+  }
+  const { hash } = await audit.append(requested)
+  await assert.rejects(audit.append({
+    ...requested,
+    type: 'connector.run.failed',
+    occurredAt: '2026-07-22T10:14:59.999Z',
+    detail: { requestedAuditHash: hash, error: 'synthetic_result_integrity_invalid' },
+  }), AuditChainError)
+  assert.equal(audit.entries.length, 1)
 })
 
 test('invalid governance clocks fail closed before preflight, audit, quota, or adapter execution', async () => {
