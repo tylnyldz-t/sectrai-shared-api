@@ -515,6 +515,89 @@ test('corrupt audit links are rejected instead of silently becoming a new chain 
     { event: secondEvent, previousHash: firstHash, hash: secondHash },
     { event: duplicateTerminal, previousHash: secondHash, hash: duplicateTerminalHash },
   ]), AuditChainError)
+
+  const predatingTerminal = { ...secondEvent, occurredAt: '2026-07-22T09:59:59.999Z' }
+  const predatingTerminalHash = hashAuditEvent(predatingTerminal, firstHash)
+  assert.throws(() => verifiedAuditChainHead([
+    { event: firstEvent, previousHash: null, hash: firstHash },
+    { event: predatingTerminal, previousHash: firstHash, hash: predatingTerminalHash },
+  ]), AuditChainError)
+
+  const rollbackRequest = { ...firstEvent, occurredAt: '2026-07-22T09:59:59.999Z' }
+  const rollbackRequestHash = hashAuditEvent(rollbackRequest, secondHash)
+  assert.throws(() => verifiedAuditChainHead([
+    { event: firstEvent, previousHash: null, hash: firstHash },
+    { event: secondEvent, previousHash: firstHash, hash: secondHash },
+    { event: rollbackRequest, previousHash: secondHash, hash: rollbackRequestHash },
+  ]), AuditChainError)
+})
+
+test('runner captures one valid clock instant for audit, quota, and synthetic provenance', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new InMemoryDailyConnectorQuota({ dailyRuns: 6, dailyItems: 60 })
+  const capturedAt = '2026-07-22T10:15:00.000Z'
+  let clockCalls = 0
+  const governed = new GovernedConnectorRunner(
+    new ConnectorRegistry([new SyntheticTextToThreeDConnector(threeDConfig())]),
+    audit,
+    quota,
+    () => {
+      clockCalls += 1
+      return clockCalls === 1 ? new Date(capturedAt) : new Date('2026-07-22T10:16:00.000Z')
+    },
+  )
+
+  const result = await governed.run(request())
+  assert.equal(clockCalls, 1)
+  assert.deepEqual(audit.entries.map((entry) => entry.event.occurredAt), [capturedAt, capturedAt])
+  assert.equal(quota.reservations[0]?.occurredAt.toISOString(), capturedAt)
+  assert.equal(result.provenance.retrievedAt, capturedAt)
+})
+
+test('invalid governance clocks fail closed before preflight, audit, quota, or adapter execution', async () => {
+  let preflightCalls = 0
+  let runCalls = 0
+  const connector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    preflight() { preflightCalls += 1 },
+    async run() { runCalls += 1; throw new Error('ADAPTER_MUST_NOT_RUN') },
+  }
+  const invalidClock = () => new Date('invalid')
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new InMemoryDailyConnectorQuota({ dailyRuns: 6, dailyItems: 60 })
+  const governed = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, invalidClock)
+
+  await assert.rejects(
+    governed.run(request()),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_CLOCK_UNAVAILABLE',
+  )
+  assert.equal(preflightCalls, 0)
+  assert.equal(runCalls, 0)
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.reservations.length, 0)
+
+  class SubclassedClock extends Date {}
+  const subclassed = new GovernedConnectorRunner(
+    new ConnectorRegistry([new SyntheticTextToThreeDConnector(threeDConfig())]),
+    new InMemoryHashChainAuditLog(),
+    new InMemoryDailyConnectorQuota({ dailyRuns: 6, dailyItems: 60 }),
+    () => new SubclassedClock(fixedNow().getTime()),
+  )
+  await assert.rejects(
+    subclassed.run(request()),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_CLOCK_UNAVAILABLE',
+  )
+
+  const throwing = new GovernedConnectorRunner(
+    new ConnectorRegistry([new SyntheticTextToThreeDConnector(threeDConfig())]),
+    new InMemoryHashChainAuditLog(),
+    new InMemoryDailyConnectorQuota({ dailyRuns: 6, dailyItems: 60 }),
+    () => { throw new Error('CLOCK_SEAM_MUST_NOT_ESCAPE') },
+  )
+  await assert.rejects(
+    throwing.run(request()),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_CLOCK_UNAVAILABLE',
+  )
 })
 
 test('direct runner calls reject malformed governance context before audit or quota reservation', async () => {

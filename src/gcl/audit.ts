@@ -91,25 +91,34 @@ function auditValue(value: unknown): AuditRecordValue | null {
  */
 export function verifiedAuditChainHead(values: readonly unknown[]): string | null {
   let previousHash: string | null = null
-  const requestedEvents = new Map<string, ConnectorAuditEvent>()
+  let previousOccurredAt: number | null = null
+  const requestedEvents = new Map<string, { event: ConnectorAuditEvent; occurredAt: number }>()
   const terminalRequests = new Set<string>()
   for (const value of values) {
     const candidate = auditValue(value)
     if (!candidate || candidate.previousHash !== previousHash || candidate.hash !== hashAuditEvent(candidate.event, previousHash)) throw new AuditChainError()
+    // auditEvent has already required an exact ISO timestamp. Preserve the
+    // durable record order as a temporal order too: a clock rollback must
+    // make governance unavailable rather than make a later terminal record
+    // appear to predate its request.
+    const occurredAt = Date.parse(candidate.event.occurredAt)
+    if (!Number.isFinite(occurredAt) || (previousOccurredAt !== null && occurredAt < previousOccurredAt)) throw new AuditChainError()
     if (candidate.event.type === 'connector.run.requested') {
-      requestedEvents.set(candidate.hash, candidate.event)
+      requestedEvents.set(candidate.hash, { event: candidate.event, occurredAt })
     } else {
       const requestedAuditHash = candidate.event.detail.requestedAuditHash
       if (typeof requestedAuditHash !== 'string') throw new AuditChainError()
       const requested = requestedEvents.get(requestedAuditHash)
       if (!requested || terminalRequests.has(requestedAuditHash) ||
-        requested.connectorId !== candidate.event.connectorId || requested.product !== candidate.event.product ||
-        requested.workspaceId !== candidate.event.workspaceId || requested.actor !== candidate.event.actor ||
-        requested.costCapCents !== candidate.event.costCapCents || requested.requestedItems !== candidate.event.requestedItems ||
-        requested.scopes.length !== candidate.event.scopes.length || requested.scopes.some((scope, index) => scope !== candidate.event.scopes[index])) throw new AuditChainError()
+        occurredAt < requested.occurredAt ||
+        requested.event.connectorId !== candidate.event.connectorId || requested.event.product !== candidate.event.product ||
+        requested.event.workspaceId !== candidate.event.workspaceId || requested.event.actor !== candidate.event.actor ||
+        requested.event.costCapCents !== candidate.event.costCapCents || requested.event.requestedItems !== candidate.event.requestedItems ||
+        requested.event.scopes.length !== candidate.event.scopes.length || requested.event.scopes.some((scope, index) => scope !== candidate.event.scopes[index])) throw new AuditChainError()
       terminalRequests.add(requestedAuditHash)
     }
     previousHash = candidate.hash
+    previousOccurredAt = occurredAt
   }
   return previousHash
 }
@@ -125,8 +134,13 @@ export class PrismaHashChainAuditLog implements AuditLog {
         where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       })
-      const previousHash = verifiedAuditChainHead(priorRecords.map((record) => record.values))
+      const priorValues = priorRecords.map((record) => record.values)
+      const previousHash = verifiedAuditChainHead(priorValues)
       const hash = hashAuditEvent(event, previousHash)
+      // Verify the prospective link too. Otherwise a clock-regressed new
+      // event would not be discovered until a later append, after this run
+      // had already reached quota or the adapter.
+      verifiedAuditChainHead([...priorValues, { event, previousHash, hash }])
       await transaction.record.create({
         data: {
           product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID,
@@ -144,9 +158,11 @@ export class InMemoryHashChainAuditLog implements AuditLog {
   readonly entries: AuditRecordValue[] = []
 
   async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
-    const previousHash = this.entries.at(-1)?.hash ?? null
+    const previousHash = verifiedAuditChainHead(this.entries)
     const hash = hashAuditEvent(event, previousHash)
-    this.entries.push({ event, previousHash, hash })
+    const next = { event, previousHash, hash }
+    verifiedAuditChainHead([...this.entries, next])
+    this.entries.push(next)
     return { hash }
   }
 }

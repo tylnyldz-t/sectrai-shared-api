@@ -79,6 +79,25 @@ unresolved, but it cannot be replaced with a new root. Failure events record a
 stable GCL error code (or `connector_run_failed`), never an arbitrary adapter
 error message or untrusted input.
 
+### D1 audit-time lock
+
+Each governed run captures one exact, valid built-in `Date` before preflight.
+That immutable instant is used for the request audit event, quota reservation,
+terminal audit event, and the synthetic result's provenance timestamp. The
+adapter receives only a local clock that returns a fresh copy of this same
+instant; it cannot make the audit and displayed result disagree by observing a
+later clock value. A missing, invalid, subclassed, or throwing clock returns
+`503 connector_unavailable` / `CONNECTOR_CLOCK_UNAVAILABLE` before preflight,
+audit, quota, or adapter execution.
+
+Audit-chain verification requires non-decreasing timestamps in durable record
+order and requires each terminal event to be at or after its linked request.
+A clock rollback, a re-hashed terminal event that predates its request, or a
+reordered historic record is a corrupt governance chain (`503
+gcl_audit_chain_corrupt`), never a reason to create a new root or continue the
+connector. Equal timestamps within one run are intentional: they describe one
+local review transaction, not engine execution time.
+
 ## Connector mapping
 
 | GM connector | Synthetic result | JNC pilot pattern represented | Execution state |

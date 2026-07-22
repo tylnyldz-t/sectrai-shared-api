@@ -137,6 +137,28 @@ function validContext(request: DataRecord): request is ValidRunContext {
     typeof request.actor === 'string' && ACTOR_PATTERN.test(request.actor)
 }
 
+type CapturedRunTime = { occurredAt: Date; iso: string; now: () => Date }
+
+/**
+ * Treat the clock as governance infrastructure, not adapter-controlled data.
+ * A run gets one exact time snapshot; its audit request, terminal audit event,
+ * quota reservation, and synthetic provenance cannot disagree because a test
+ * seam or a rolling-back clock changed value midway through the run.
+ */
+function capturedRunTime(now: () => Date): CapturedRunTime {
+  try {
+    const value = now()
+    if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Date.prototype) throw new TypeError('INVALID_GOVERNANCE_CLOCK')
+    const milliseconds = Date.prototype.getTime.call(value)
+    if (!Number.isFinite(milliseconds)) throw new TypeError('INVALID_GOVERNANCE_CLOCK')
+    const occurredAt = new Date(milliseconds)
+    const iso = occurredAt.toISOString()
+    return Object.freeze({ occurredAt, iso, now: () => new Date(milliseconds) })
+  } catch {
+    throw new ConnectorUnavailableError('CONNECTOR_CLOCK_UNAVAILABLE')
+  }
+}
+
 /** Audit error details are stable codes, never an adapter's arbitrary message. */
 function auditFailureCode(error: unknown): string {
   return error instanceof GclError ? error.code : 'connector_run_failed'
@@ -189,7 +211,7 @@ export class GovernedConnectorRunner {
     } catch {
       throw new ConnectorInputError('CONNECTOR_INVALID_INPUT')
     }
-    const occurredAt = this.now()
+    const runTime = capturedRunTime(this.now)
     const context = Object.freeze({
       product: safeRequest.product,
       workspaceId: safeRequest.workspaceId,
@@ -198,28 +220,28 @@ export class GovernedConnectorRunner {
       scopes: Object.freeze([...scopes].sort()),
       costCapCents: safeRequest.costCapCents,
       requestedItems: safeRequest.requestedItems,
-      now: this.now,
+      now: runTime.now,
     }) as ConnectorRunContext
     await connector.preflight?.(input, context)
     const requestedAudit = await this.auditLog.append({
       type: 'connector.run.requested', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId,
       actor: context.actor, scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,
-      occurredAt: occurredAt.toISOString(), detail: {},
+      occurredAt: runTime.iso, detail: {},
     })
-    await this.quota.consume({ ...context, connectorId: connector.id, occurredAt })
+    await this.quota.consume({ ...context, connectorId: connector.id, occurredAt: runTime.occurredAt })
     try {
       const result = validatedSyntheticConnectorResult(await connector.run(input, context), connector.id, input, syntheticResultReviewBinding(context))
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId,
         actor: context.actor, scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,
-        occurredAt: this.now().toISOString(), detail: { requestedAuditHash: requestedAudit.hash },
+        occurredAt: runTime.iso, detail: { requestedAuditHash: requestedAudit.hash },
       })
       return deepFreeze({ ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } })
     } catch (error) {
       await this.auditLog.append({
         type: 'connector.run.failed', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId,
         actor: context.actor, scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,
-        occurredAt: this.now().toISOString(),
+        occurredAt: runTime.iso,
         detail: { requestedAuditHash: requestedAudit.hash, error: auditFailureCode(error) },
       })
       throw error
