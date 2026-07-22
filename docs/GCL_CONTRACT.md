@@ -86,7 +86,10 @@ Every registered connector is governed by these rules:
   method references before a runner can invoke them; shaped registration fails
   closed before any governed seam. D23 fixes the runner's registry resolver,
   audit/quota callbacks, and local clock behind a native private field, so
-  later public collaborator replacement cannot retarget a governed run.
+  later public collaborator replacement cannot retarget a governed run. D24
+  treats a connector rejection as opaque: a failed audit records only the fixed
+  `CONNECTOR_RUN_FAILED` code without inspecting or retaining connector-supplied
+  error text or shaped error data.
   All resulting evidence remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
@@ -204,7 +207,9 @@ metadata before the succeeded-audit seam, rejects a connector-supplied audit
 hash, and freezes the copied final result egress. D22 fixes the bounded
 registry-visible connector ID, auth/quota metadata, scopes, and method
 references at construction before any governed seam. D23 fixes the runner's
-registry/audit/quota/clock references behind a native private field. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23 are local mutation checks or
+registry/audit/quota/clock references behind a native private field. D24
+records only a fixed failed-run code without copying a connector rejection into
+the audit detail. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23/D24 are local mutation checks or
 boundary hardening, never signatures, credentials, approval workflows, or
 execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).

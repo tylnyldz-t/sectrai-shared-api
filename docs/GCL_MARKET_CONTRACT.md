@@ -675,6 +675,23 @@ booking, publication, handoff, send, durable approval, authorization, or
 execution capability. Every admitted result remains exactly `SYNTHETIC`,
 `LIVE_DISABLED`, and `NOT_AUTHORIZED`.
 
+## D24 — opaque connector-failure audit boundary
+
+After the requested audit and quota reservation, a connector rejection is
+untrusted host data. D24 does not test it with `instanceof`, read its
+`message`, stringify it, coerce it, or inspect any property before appending
+the required `connector.run.failed` event. The event always carries only the
+fixed detail `error: "CONNECTOR_RUN_FAILED"` and the already-local
+`requestedAuditHash`. This prevents an accessor-, Proxy-, or
+provider/credential-shaped thrown value from running code or being copied into
+the audit chain. The original rejection is then rethrown; if the failed-audit
+append is malformed or unavailable, that append error still fails closed.
+
+D24 is audit-metadata minimization only. It does not treat a failed run as a
+success and adds no provider code, credential handling, network call, route,
+storage, migration, queue, worker, quote, reservation, booking, publication,
+handoff, send, durable approval, authorization, or execution capability.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -739,7 +756,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23/D24 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -776,6 +793,9 @@ method references at construction, so later connector mutation cannot retarget
 a governed run. D23 snapshots the runner's registry resolver, audit/quota
 callbacks, and local clock behind a native private field, so later public
 collaborator or legacy-runner-field replacement cannot retarget that run.
+D24 treats a connector rejection as opaque data: its fixed failed-event code
+cannot read a hostile error accessor/Proxy or persist provider/credential-like
+fault text in the audit chain.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -858,6 +878,10 @@ without evaluating a trap, calling a clock, appending an audit event, consuming
 quota, or running a connector. It proves later replacement of public registry,
 audit, quota, clock, or legacy runner fields cannot change the selected
 synthetic, no-action path.
+D24 additionally rejects the need to inspect a connector-thrown value at all:
+an `Error.message` accessor and a Proxy rejection remain unread, while each
+requested run receives only the fixed `CONNECTOR_RUN_FAILED` failed-audit code.
+No provider/credential-shaped fault text reaches the audit detail.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -891,7 +915,8 @@ synthetic, no-action path.
    result/provenance output after audit enrichment; D21 validates and copies
    strict connector-result ingress before the succeeded-audit seam; D22 fixes
    registry-visible connector metadata, scopes, quota group, and methods; D23
-   fixes runner collaborator references behind a native private field.
+   fixes runner collaborator references behind a native private field; D24 keeps
+   connector-thrown fault values out of the failed-audit detail.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.
@@ -912,8 +937,9 @@ synthetic, no-action path.
    freezes the direct/governed no-action preflight/result/provenance boundary;
    D21 copies exact result/provenance metadata before the succeeded audit; D22
    fixes the registered connector control plane; D23 fixes runner collaborator
-   references before a governed run.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23 evidence cannot quote, reserve, book,
+   references before a governed run; D24 writes only a fixed failure code rather
+   than connector-supplied fault data.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23/D24 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -923,4 +949,4 @@ synthetic, no-action path.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23/D24.

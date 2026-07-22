@@ -143,4 +143,8 @@ audit/quota callbacks, and local clock behind a native private field. Proxy,
 accessor, missing-method, and Proxy-clock collaborators fail closed before any
 clock call, audit append, quota reservation, or connector run; later public
 collaborator or legacy-runner-field replacement cannot retarget the synthetic,
-no-action path.
+no-action path. D24 treats a connector rejection as opaque data: a failed-run
+audit uses only the fixed `CONNECTOR_RUN_FAILED` code, without evaluating an
+error accessor/Proxy or retaining provider/credential-shaped fault text. The
+rejection and any failed audit append remain fail-closed and cannot authorize
+an action.

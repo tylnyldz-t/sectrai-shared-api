@@ -1329,7 +1329,7 @@ test('D21 rejects shaped connector-result ingress before a succeeded audit and n
   assert.equal(proxyTrapRead, false)
   assert.equal(quota.requests.length, 1)
   assert.deepEqual(audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.failed'])
-  assert.equal(audit.entries[1]?.event.detail.error, 'CONNECTOR_RESULT_INVALID')
+  assert.equal(audit.entries[1]?.event.detail.error, 'CONNECTOR_RUN_FAILED')
 
   const hiddenProviderResult = { data: {}, provenance: structuredClone(validProvenance), confidence: 0 }
   Object.defineProperty(hiddenProviderResult, 'providerCredential', { value: 'synthetic-not-accepted' })
@@ -1574,6 +1574,58 @@ test('D23 rejects Proxy, accessor, missing-method, and Proxy-clock collaborators
   assert.equal(clockCalls, 0)
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
+})
+
+test('D24 records a fixed failed-run code without inspecting or persisting connector-thrown fault data', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  let messageReads = 0
+  let proxyTrapReads = 0
+  const accessorError = new Error('synthetic-provider-secret-must-not-reach-audit')
+  Object.defineProperty(accessorError, 'message', {
+    get() {
+      messageReads += 1
+      throw new Error('CONNECTOR_ERROR_MESSAGE_MUST_NOT_BE_READ')
+    },
+  })
+  const proxyError = new Proxy({}, {
+    get() { proxyTrapReads += 1; throw new Error('CONNECTOR_ERROR_PROXY_MUST_NOT_BE_READ') },
+    getPrototypeOf() { proxyTrapReads += 1; throw new Error('CONNECTOR_ERROR_PROXY_MUST_NOT_BE_READ') },
+  })
+  const thrown = [accessorError, proxyError] as const
+  let runIndex = 0
+  const connector: Connector = {
+    id: 'market-failure-boundary-test',
+    kind: 'market',
+    authKind: 'owner-token',
+    scopes: ['market:capacity:quote'],
+    async run(): Promise<ConnectorResult> {
+      throw thrown[runIndex++]
+    },
+  }
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+
+  for (const expected of thrown) {
+    let caught: unknown
+    try {
+      await runner.run({ connectorId: connector.id, input: capacityQuote, ...runContext })
+    } catch (error) {
+      caught = error
+    }
+    assert.equal(caught, expected)
+  }
+
+  assert.equal(messageReads, 0)
+  assert.equal(proxyTrapReads, 0)
+  assert.equal(quota.requests.length, 2)
+  assert.deepEqual(audit.entries.map((entry) => entry.event.type), [
+    'connector.run.requested', 'connector.run.failed', 'connector.run.requested', 'connector.run.failed',
+  ])
+  for (const entry of [audit.entries[1], audit.entries[3]]) {
+    assert.equal(entry?.event.detail.error, 'CONNECTOR_RUN_FAILED')
+    assert.equal(entry?.event.detail.requestedAuditHash, entry?.previousHash)
+    assert.equal(JSON.stringify(entry?.event.detail).includes('synthetic-provider-secret'), false)
+  }
 })
 
 test('D1 review packet reconstruction rejects injection, source/quote/action drift, scope drift, and whitespace identity bypasses before audit append', async () => {
@@ -2002,7 +2054,8 @@ test('ADOS 10 controls are complete and explicitly prohibit egress and productio
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D21 copies strict result\/provenance ingress/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D22 fixes the registered connector control plane/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D23 fixes runner collaborator references/i)
-  assert.match(ADOS_10_MARKET_CONTROLS[8]?.enforcement ?? '', /D22\/D23 evidence permanently report no quote/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D24 records a fixed failure code/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[8]?.enforcement ?? '', /D22\/D23\/D24 evidence permanently report no quote/i)
   assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
   assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
