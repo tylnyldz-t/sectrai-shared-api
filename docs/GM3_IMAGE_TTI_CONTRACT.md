@@ -28,9 +28,11 @@ only accepted mode.
    `GCL_IMAGE_MAX_COST_CENTS`, `GCL_IMAGE_MAX_ITEMS`, and
    `GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS`; missing or malformed limits reject the
    request. The review TTL is bounded from 60 seconds through 24 hours.
-3. The synchronous `FamilySafetyFilter` hook runs in preflight before audit or
-   quota reservation. The included baseline filter is deliberately conservative
-   and is not a production moderation policy.
+3. The included synchronous baseline family-safety filter always runs first in
+   preflight before audit or quota reservation. An optional local
+   `FamilySafetyFilter` runs only after that baseline accepts, and can only
+   narrow the result; it cannot replace or override the baseline. The baseline
+   is deliberately conservative and is not a production moderation policy.
 4. The runner resolves connector, audit, and quota operations only from
    data-method descriptors, then appends request/success/failure events with a
    correlation ID to the per-workspace SHA-256 chain and reserves daily usage through
@@ -191,6 +193,21 @@ This contract does not authorize a real provider, a local GPU worker, a model
 installation, a migration, or public publishing. Each remains a separate owner
 decision and must be implemented behind its own bounded approval path.
 
+## D3 — non-bypassable baseline family gate
+
+The local baseline family gate is mandatory even when a host supplies the
+optional closed policy capsule. The baseline evaluates the frozen normalized
+input first; a baseline-rejected prompt stops before the custom callable,
+audit reservation, quota reservation, candidate creation, or review work. A
+custom policy therefore only adds a stricter deny decision and cannot make an
+adult, graphic, weapon-focused, or other baseline-rejected prompt eligible.
+
+For an accepted candidate, `safety.filterId` is the custom policy ID when a
+custom policy additionally accepted the input, otherwise the baseline ID. In
+either case, the baseline gate is implicit and mandatory. This field is
+redacted local policy metadata only; it is not a moderation-provider handle,
+credential, endpoint, or dispatch authorization.
+
 ## Negative and edge-case guarantees
 
 - Prompt fields accept only the documented four keys. Empty text, a value over
@@ -207,10 +224,13 @@ decision and must be implemented behind its own bounded approval path.
   text—never enters the chain.
 - The baseline local family filter tokenizes Unicode text, including Turkish
   terms such as `şiddet`, while avoiding substring false positives such as
-  `gunmetal`. An injected filter must have own data `id`/`assess` properties,
-  a bounded identifier, and may return only an own boolean `allowed` plus a
-  bounded uppercase reason code; inherited approval and untrusted free-form
-  reasons are rejected or replaced with `FAMILY_SAFETY_FILTER_REJECTED`.
+  `gunmetal`. It always runs before an injected filter; a permissive injected
+  policy is never able to override a baseline rejection and is not called for
+  that rejected input. An injected filter must have own data `id`/`assess`
+  properties, a bounded identifier, and may return only an own boolean
+  `allowed` plus a bounded uppercase reason code; inherited approval and
+  untrusted free-form reasons are rejected or replaced with
+  `FAMILY_SAFETY_FILTER_REJECTED`.
 - Connector configuration is an exact, runtime-private snapshot. Hidden
   credential/endpoint fields, symbols, accessors, inherited policy methods,
   nested policy capability fields, malformed environment overrides, and
@@ -307,9 +327,10 @@ decision and must be implemented behind its own bounded approval path.
    deny.
 4. The exact `image:generate` scope, positive cost cap/item count, connector
    limits, and daily quota gate execution before the adapter runs.
-5. Prompt and policy input are untrusted data only, never instructions; policy
-   input is frozen and receiverless, while malformed/accessor/inherited shapes
-   and family-unsafe content are rejected.
+5. Prompt and policy input are untrusted data only, never instructions; the
+   mandatory baseline gate runs before any optional frozen, receiverless policy
+   input is exposed, while malformed/accessor/inherited shapes and
+   family-unsafe content are rejected.
 6. Candidates, receipts, and audit events retain only blocked metadata,
    digests, and provenance—never prompt text, preview bytes, provider output,
    endpoint, or credentials.

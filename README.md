@@ -32,6 +32,12 @@ receiver, and returns frozen synthetic review snapshots. Those snapshots still
 carry only local SVG/plan metadata and remain `LIVE_DISABLED` and publication
 blocked; copying one does not bypass issuance or review fingerprint checks.
 
+D3 keeps the conservative local baseline family gate non-bypassable: it runs
+before any optional custom policy, so a permissive custom policy cannot admit a
+baseline-rejected prompt or even receive it. The optional policy can only add a
+stricter denial; it remains local, synchronous, `LIVE_DISABLED`, and never
+authorizes a provider, network, dispatch, or publication path.
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:
