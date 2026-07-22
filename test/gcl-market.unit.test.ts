@@ -1193,6 +1193,64 @@ test('D7 evidence manifest binds independently rebuilt D3 and D6 evidence, omits
   assert.equal(setup.quota.requests.length, 1)
 })
 
+test('D19 freezes canonical review outputs and D3-D7 evidence, requiring a separate rejected copy for any action or provider drift', async () => {
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
+  const plan = result.data as SyntheticMarketPlan
+  const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
+  const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext)
+  const requestedEntry = setup.audit.entries[0]
+  const succeededEntry = setup.audit.entries[1]
+  const ownerReviewEntry = setup.audit.entries[2]
+  assert.ok(requestedEntry)
+  assert.ok(succeededEntry)
+  assert.ok(ownerReviewEntry)
+  const trail = () => ({
+    requestedRun: structuredClone(requestedEntry),
+    succeededRun: structuredClone(succeededEntry),
+    ownerReview: structuredClone(ownerReviewEntry),
+  })
+
+  const canonicalPlan = validateSyntheticMarketPlanForReview(plan, reviewContext)
+  const reconstructed = validateSyntheticMarketReviewReceipt(plan, reviewed, reviewContext)
+  const auditWitness = validateSyntheticMarketReviewAuditWitness(plan, reviewed, { version: MARKET_REVIEW_AUDIT_WITNESS_VERSION, ...structuredClone(ownerReviewEntry) }, reviewContext)
+  const auditTrailWitness = validateSyntheticMarketReviewAuditTrailWitness(plan, reviewed, trail(), reviewContext)
+  const auditTrailReceipt = createSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), reviewContext)
+  const validatedAuditTrailReceipt = validateSyntheticMarketReviewAuditTrailReceipt(plan, reviewed, trail(), structuredClone(auditTrailReceipt), reviewContext)
+  const manifest = createSyntheticMarketReviewEvidenceManifest(plan, reviewed, trail(), reviewContext)
+  const validatedManifest = validateSyntheticMarketReviewEvidenceManifest(plan, reviewed, trail(), structuredClone(manifest), reviewContext)
+
+  for (const value of [
+    canonicalPlan, canonicalPlan.binding, canonicalPlan.request,
+    reviewed, reviewed.execution, reviewed.reviewReceipt, reviewed.reviewReceipt.scopeBinding, reviewed.reviewReceipt.execution, reviewed.reviewReceipt.integrity,
+    reconstructed, reconstructed.execution, reconstructed.reviewReceipt, reconstructed.reviewReceipt.scopeBinding, reconstructed.reviewReceipt.execution, reconstructed.reviewReceipt.integrity,
+    auditWitness, auditWitness.event, auditWitness.event.scopes, auditWitness.event.detail,
+    auditTrailWitness, auditTrailWitness.execution,
+    auditTrailReceipt, auditTrailReceipt.scopeBinding, auditTrailReceipt.execution, auditTrailReceipt.integrity,
+    validatedAuditTrailReceipt, validatedAuditTrailReceipt.scopeBinding, validatedAuditTrailReceipt.execution, validatedAuditTrailReceipt.integrity,
+    manifest, manifest.scopeBinding, manifest.execution, manifest.integrity,
+    validatedManifest, validatedManifest.scopeBinding, validatedManifest.execution, validatedManifest.integrity,
+  ]) assert.equal(Object.isFrozen(value), true)
+
+  assert.throws(() => { reviewed.execution.booking = true as never })
+  assert.throws(() => Object.defineProperty(reconstructed.reviewReceipt, 'providerCredential', { value: 'synthetic-not-accepted' }))
+  assert.throws(() => { auditWitness.event.detail.publication = true })
+  assert.throws(() => { auditTrailWitness.execution.reservation = true as never })
+  assert.throws(() => Object.setPrototypeOf(auditTrailReceipt.scopeBinding, { providerToken: 'synthetic-not-accepted' }))
+  assert.throws(() => { manifest.execution.externalNetwork = true as never })
+
+  const mutableManifest = structuredClone(manifest)
+  mutableManifest.execution.booking = true as never
+  assert.throws(
+    () => validateSyntheticMarketReviewEvidenceManifest(plan, reviewed, trail(), mutableManifest, reviewContext),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REVIEW_RECEIPT_EXECUTION',
+  )
+  assert.equal(reviewed.execution.state, 'NOT_AUTHORIZED')
+  assert.equal(setup.reviews.entries.length, 1)
+  assert.equal(setup.audit.entries.length, 3)
+  assert.equal(setup.quota.requests.length, 1)
+})
+
 test('D1 review packet reconstruction rejects injection, source/quote/action drift, scope drift, and whitespace identity bypasses before audit append', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })

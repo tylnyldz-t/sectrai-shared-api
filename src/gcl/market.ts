@@ -836,11 +836,61 @@ function reviewReceiptFor(plan: SyntheticMarketPlan, reviewed: ReviewedSynthetic
     auditHash: reviewed.auditHash,
   }
   const integrityDigest = sha256(reviewReceiptMaterial(material))
-  return {
+  return freezeSyntheticMarketReviewReceipt({
     ...material,
     receiptId: `synthetic-market-review-receipt-${sha256(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
     integrity: { algorithm: 'sha256', digest: integrityDigest },
-  }
+  })
+}
+
+/**
+ * D19 closes the outbound review-evidence boundary. These objects are
+ * deterministic no-action data, but callers must still make an explicit copy
+ * before they can simulate a changed receipt, audit witness, or manifest.
+ * The frozen values remain unkeyed mutation evidence, never signatures or
+ * authority.
+ */
+function freezeSyntheticMarketReviewReceipt(receipt: SyntheticMarketReviewReceipt): SyntheticMarketReviewReceipt {
+  Object.freeze(receipt.scopeBinding)
+  Object.freeze(receipt.execution)
+  Object.freeze(receipt.integrity)
+  return Object.freeze(receipt)
+}
+
+function freezeReviewedSyntheticMarketPlan(reviewed: ReviewedSyntheticMarketPlan): ReviewedSyntheticMarketPlan {
+  Object.freeze(reviewed.execution)
+  freezeSyntheticMarketReviewReceipt(reviewed.reviewReceipt)
+  return Object.freeze(reviewed)
+}
+
+function freezeConnectorAuditEvent(event: ConnectorAuditEvent): ConnectorAuditEvent {
+  Object.freeze(event.scopes)
+  Object.freeze(event.detail)
+  return Object.freeze(event)
+}
+
+function freezeSyntheticMarketReviewAuditWitness(witness: SyntheticMarketReviewAuditWitness): SyntheticMarketReviewAuditWitness {
+  freezeConnectorAuditEvent(witness.event)
+  return Object.freeze(witness)
+}
+
+function freezeSyntheticMarketReviewAuditTrailWitness(witness: SyntheticMarketReviewAuditTrailWitness): SyntheticMarketReviewAuditTrailWitness {
+  Object.freeze(witness.execution)
+  return Object.freeze(witness)
+}
+
+function freezeSyntheticMarketReviewAuditTrailReceipt(receipt: SyntheticMarketReviewAuditTrailReceipt): SyntheticMarketReviewAuditTrailReceipt {
+  Object.freeze(receipt.scopeBinding)
+  Object.freeze(receipt.execution)
+  Object.freeze(receipt.integrity)
+  return Object.freeze(receipt)
+}
+
+function freezeSyntheticMarketReviewEvidenceManifest(manifest: SyntheticMarketReviewEvidenceManifest): SyntheticMarketReviewEvidenceManifest {
+  Object.freeze(manifest.scopeBinding)
+  Object.freeze(manifest.execution)
+  Object.freeze(manifest.integrity)
+  return Object.freeze(manifest)
 }
 
 function requiredScope(request: SyntheticMarketInput): 'market:discover' | 'market:capacity:quote' {
@@ -951,7 +1001,7 @@ function validateSyntheticMarketPlanForReviewedContext(plan: unknown, reviewedCo
 }
 
 export function validateSyntheticMarketPlanForReview(plan: unknown, context: MarketReviewContext): SyntheticMarketPlan {
-  return validateSyntheticMarketPlanForReviewedContext(plan, reviewContext(context))
+  return freezeSyntheticMarketPlan(validateSyntheticMarketPlanForReviewedContext(plan, reviewContext(context)))
 }
 
 function reviewedMarketPlanForReceipt(value: unknown): { reviewed: ReviewedSyntheticMarketPlanDetails; receipt: unknown } {
@@ -1053,7 +1103,7 @@ export function validateSyntheticMarketReviewReceipt(sourcePlan: unknown, value:
   ) throw new ConnectorInputError('MARKET_REVIEW_RECEIPT_PACKET_MISMATCH')
   const expected = reviewReceiptFor(plan, candidate.reviewed)
   if (!canonicallyEqual(receipt, expected)) throw new ConnectorInputError('MARKET_REVIEW_RECEIPT_INTEGRITY_INVALID')
-  return { ...candidate.reviewed, reviewReceipt: expected }
+  return freezeReviewedSyntheticMarketPlan({ ...candidate.reviewed, reviewReceipt: expected })
 }
 
 function reviewAuditEvent(plan: SyntheticMarketPlan, reviewed: ReviewedSyntheticMarketPlan): ConnectorAuditEvent {
@@ -1120,12 +1170,12 @@ export function validateSyntheticMarketReviewAuditWitness(sourcePlan: unknown, v
   if (witness.hash !== expectedHash || reviewed.auditHash !== expectedHash) {
     throw new ConnectorInputError('MARKET_REVIEW_AUDIT_WITNESS_HASH_INVALID')
   }
-  return {
+  return freezeSyntheticMarketReviewAuditWitness({
     version: MARKET_REVIEW_AUDIT_WITNESS_VERSION,
     event: expectedEvent,
     previousHash: witness.previousHash,
     hash: expectedHash,
-  }
+  })
 }
 
 type MarketGovernedRunAuditEntry = {
@@ -1238,7 +1288,7 @@ export function validateSyntheticMarketReviewAuditTrailWitness(sourcePlan: unkno
   if (new Date(succeeded.event.occurredAt).getTime() > new Date(reviewWitness.event.occurredAt).getTime()) {
     throw new ConnectorInputError('MARKET_AUDIT_TRAIL_TIME_INVALID')
   }
-  return {
+  return freezeSyntheticMarketReviewAuditTrailWitness({
     version: MARKET_REVIEW_AUDIT_TRAIL_WITNESS_VERSION,
     planId: plan.id,
     reviewId: plan.reviewPacket.reviewId,
@@ -1250,7 +1300,7 @@ export function validateSyntheticMarketReviewAuditTrailWitness(sourcePlan: unkno
     liveStatus: 'LIVE_DISABLED',
     state: 'SYNTHETIC_MARKET_REVIEW_AUDIT_TRAIL_VERIFIED_NO_ACTION',
     execution: reviewExecution(),
-  }
+  })
 }
 
 function reviewAuditTrailReceiptMaterial(receipt: Omit<SyntheticMarketReviewAuditTrailReceipt, 'receiptId' | 'integrity'>): string {
@@ -1277,11 +1327,11 @@ function reviewAuditTrailReceiptFor(witness: SyntheticMarketReviewAuditTrailWitn
     execution: reviewExecution(),
   }
   const integrityDigest = sha256(reviewAuditTrailReceiptMaterial(material))
-  return {
+  return freezeSyntheticMarketReviewAuditTrailReceipt({
     ...material,
     receiptId: `synthetic-market-review-audit-trail-receipt-${sha256(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
     integrity: { algorithm: 'sha256', digest: integrityDigest },
-  }
+  })
 }
 
 function marketReviewAuditTrailReceiptForValidation(value: unknown): SyntheticMarketReviewAuditTrailReceipt {
@@ -1390,11 +1440,11 @@ function reviewEvidenceManifestFor(reviewed: ReviewedSyntheticMarketPlan, auditT
     execution: reviewExecution(),
   }
   const integrityDigest = sha256(reviewEvidenceManifestMaterial(material))
-  return {
+  return freezeSyntheticMarketReviewEvidenceManifest({
     ...material,
     manifestId: `synthetic-market-review-evidence-manifest-${sha256(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
     integrity: { algorithm: 'sha256', digest: integrityDigest },
-  }
+  })
 }
 
 function marketReviewEvidenceManifestForValidation(value: unknown): SyntheticMarketReviewEvidenceManifest {
@@ -1577,7 +1627,7 @@ export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMark
     execution: reviewExecution(),
     auditHash,
   }
-  return { ...reviewed, reviewReceipt: reviewReceiptFor(validatedPlan, reviewed) }
+  return freezeReviewedSyntheticMarketPlan({ ...reviewed, reviewReceipt: reviewReceiptFor(validatedPlan, reviewed) })
 }
 
 function environmentPositiveInteger(value: string | undefined): number | undefined {
