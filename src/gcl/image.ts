@@ -179,14 +179,17 @@ function isImageSize(value: unknown): value is ImageSize { return value === 512 
 function canonicalTimestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const parsed = new Date(value)
-  return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value
+  return !Number.isNaN(Date.prototype.getTime.call(parsed)) && Date.prototype.toISOString.call(parsed) === value
 }
 
+/** Accept and copy only an ordinary built-in Date from an injected host clock. */
 function currentDate(now: () => Date, error: string): Date {
   try {
     const value = now()
-    if (!(value instanceof Date) || Number.isNaN(value.getTime())) throw new ConnectorInputError(error)
-    return value
+    if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Date.prototype) throw new ConnectorInputError(error)
+    const timestamp = Date.prototype.getTime.call(value)
+    if (!Number.isFinite(timestamp)) throw new ConnectorInputError(error)
+    return new Date(timestamp)
   } catch (errorValue) {
     if (errorValue instanceof ConnectorInputError) throw errorValue
     throw new ConnectorInputError(error)
@@ -194,9 +197,9 @@ function currentDate(now: () => Date, error: string): Date {
 }
 
 function reviewExpiresAt(issuedAt: Date, ttlSeconds: number, error: string): string {
-  const expiresAt = new Date(issuedAt.getTime() + ttlSeconds * 1_000)
-  if (Number.isNaN(expiresAt.getTime())) throw new ConnectorInputError(error)
-  return expiresAt.toISOString()
+  const expiresAt = new Date(Date.prototype.getTime.call(issuedAt) + ttlSeconds * 1_000)
+  if (Number.isNaN(Date.prototype.getTime.call(expiresAt))) throw new ConnectorInputError(error)
+  return Date.prototype.toISOString.call(expiresAt)
 }
 
 function hasControlCharacter(value: string): boolean {
@@ -276,7 +279,7 @@ function text(value: unknown, error: string): string {
 function imageInput(value: unknown): Required<TextToImageInput> {
   const candidate = plainRecord(value)
   if (!candidate) throw new ConnectorInputError('INVALID_IMAGE_TTI_INPUT')
-  if (Object.keys(candidate).some((key) => key !== 'prompt' && key !== 'negativePrompt' && key !== 'width' && key !== 'height')) throw new ConnectorInputError('UNEXPECTED_IMAGE_TTI_FIELD')
+  if (Object.getOwnPropertyNames(candidate).some((key) => key !== 'prompt' && key !== 'negativePrompt' && key !== 'width' && key !== 'height')) throw new ConnectorInputError('UNEXPECTED_IMAGE_TTI_FIELD')
   if (!Object.hasOwn(candidate, 'prompt')) throw new ConnectorInputError('INVALID_IMAGE_TTI_PROMPT')
   const prompt = text(candidate.prompt, 'INVALID_IMAGE_TTI_PROMPT')
   const negativePrompt = !Object.hasOwn(candidate, 'negativePrompt') || candidate.negativePrompt === undefined ? '' : text(candidate.negativePrompt, 'INVALID_IMAGE_TTI_NEGATIVE_PROMPT')
@@ -301,7 +304,7 @@ function canonicalJson(value: unknown): string {
   }
   const record = plainRecord(value)
   if (!record) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
-  return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
+  return `{${Object.getOwnPropertyNames(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
 }
 
 /** Used only for redacted candidate/issuance shapes; ledger callers never persist raw prompt text. */
@@ -466,7 +469,7 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
 }
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value)
+  const actual = Object.getOwnPropertyNames(value)
   return actual.length === keys.length && actual.every((key) => keys.includes(key))
 }
 

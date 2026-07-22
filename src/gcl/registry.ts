@@ -44,7 +44,7 @@ type ConnectorCapabilities = {
 function isSafeNonNegativeInteger(value: number): boolean { return Number.isSafeInteger(value) && value >= 0 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value)
+  const actual = Object.getOwnPropertyNames(value)
   return actual.length === keys.length && actual.every((key) => keys.includes(key))
 }
 
@@ -199,7 +199,7 @@ function connectorResult(value: unknown, connectorId: string): ConnectorResult {
   const result = plainRecord(value)
   const provenance = result ? plainRecord(result.provenance) : null
   const content = provenance ? plainRecord(provenance.untrustedContent) : null
-  const provenanceKeys = provenance ? Object.keys(provenance) : []
+  const provenanceKeys = provenance ? Object.getOwnPropertyNames(provenance) : []
   if (!result || !exactKeys(result, ['data', 'provenance', 'confidence']) || !provenance || !PROVENANCE_REQUIRED_KEYS.every((key) => provenanceKeys.includes(key)) || provenanceKeys.some((key) => !PROVENANCE_REQUIRED_KEYS.includes(key as (typeof PROVENANCE_REQUIRED_KEYS)[number]) && !PROVENANCE_OPTIONAL_KEYS.includes(key as (typeof PROVENANCE_OPTIONAL_KEYS)[number])) || provenance.connectorId !== connectorId || typeof provenance.source !== 'string' || !ID_PATTERN.test(provenance.source) || !canonicalTimestamp(provenance.retrievedAt) || (provenance.actorId !== undefined && (typeof provenance.actorId !== 'string' || !ID_PATTERN.test(provenance.actorId))) || (provenance.runId !== undefined && (typeof provenance.runId !== 'string' || !ID_PATTERN.test(provenance.runId))) || (provenance.datasetId !== undefined && (typeof provenance.datasetId !== 'string' || !ID_PATTERN.test(provenance.datasetId))) || !content || !exactKeys(content, ['source', 'value', 'handling', 'instructionPolicy']) || typeof content.source !== 'string' || !ID_PATTERN.test(content.source) || content.handling !== 'data-only' || content.instructionPolicy !== 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS' || typeof result.confidence !== 'number' || !Number.isFinite(result.confidence) || result.confidence < 0 || result.confidence > 1) throw new ConnectorUnavailableError('INVALID_CONNECTOR_RESULT')
   return {
     data: result.data,

@@ -58,7 +58,7 @@ type StoredCandidateReceipt = {
 }
 
 function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
-  const actual = Object.keys(value)
+  const actual = Object.getOwnPropertyNames(value)
   return actual.length === keys.length && actual.every((key) => keys.includes(key))
 }
 
