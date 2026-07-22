@@ -1,19 +1,21 @@
 import { PrismaClient, Prisma } from '@prisma/client'
 import express, { type NextFunction, type Request, type RequestHandler, type Response } from 'express'
 import { productAuth, validProduct } from './auth.js'
-import { PrismaHashChainAuditLog, GCL_AUDIT_MODULE_ID } from './gcl/audit.js'
+import { PrismaHashChainAuditLog } from './gcl/audit.js'
 import { ConnectorUnavailableError, GclError } from './gcl/errors.js'
 import { cameraConnectorFromEnvironment } from './gcl/camera.js'
+import { syntheticImageTtiConnectorFromEnvironment } from './gcl/image.js'
+import type { ImageRunConnectorRequest } from './gcl/image-registry.js'
 import { suggestExtensions, type Extension, type ExtensionInput } from './gcl/extensions.js'
 import { syntheticMarketConnectorFromEnvironment } from './gcl/market.js'
-import { EnvironmentPrismaDailyConnectorQuota, GCL_USAGE_MODULE_ID, GCL_VISION_USAGE_MODULE_ID } from './gcl/quota.js'
+import { EnvironmentPrismaDailyConnectorQuota } from './gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner, type LegacyRunConnectorRequest, type RunConnectorRequest } from './gcl/registry.js'
 import type { CameraRunConnectorRequest } from './gcl/camera-registry.js'
 import { translationConnectorsFromEnvironment } from './gcl/translation.js'
-import { GCL_TRANSLATION_ARTIFACT_MODULE_ID, PrismaTranslationArtifactStore, type TranslationArtifactRecord } from './gcl/translation-artifacts.js'
+import { PrismaTranslationArtifactStore, type TranslationArtifactRecord } from './gcl/translation-artifacts.js'
 import type { AuditLog, ConnectorAuditEvent, ConnectorResult } from './gcl/types.js'
 import { serializeRecord } from './types.js'
-import { RequestValidationError, connectorRunFrom, extensionFrom, extensionSuggestionFrom, mutationFrom, scopeFrom, translationArtifactApprovalFrom, workspaceScopeFrom } from './validation.js'
+import { RequestValidationError, connectorRunFrom, extensionFrom, extensionSuggestionFrom, isInternalGclModuleId, mutationFrom, scopeFrom, translationArtifactApprovalFrom, workspaceScopeFrom } from './validation.js'
 
 type ConnectorRunner = { run(request: RunConnectorRequest | CameraRunConnectorRequest): Promise<ConnectorResult> }
 type ArtifactAuditContext = Pick<ConnectorAuditEvent, 'scopes' | 'costCapCents' | 'requestedItems' | 'occurredAt'>
@@ -25,8 +27,6 @@ type TranslationArtifactStore = {
 type AppOptions = { prisma?: PrismaClient; now?: () => Date; gclRunner?: ConnectorRunner; gclOwnerToken?: string; gclAuditLog?: AuditLog; translationArtifactStore?: TranslationArtifactStore }
 
 const GCL_EXTENSION_MODULE_ID = 'gcl-extensions'
-const GCL_RESERVED_MODULES = new Set([GCL_EXTENSION_MODULE_ID, GCL_AUDIT_MODULE_ID, GCL_USAGE_MODULE_ID, GCL_VISION_USAGE_MODULE_ID, GCL_TRANSLATION_ARTIFACT_MODULE_ID])
-
 function asyncRoute(handler: (request: Request, response: Response, next: NextFunction) => Promise<unknown> | unknown): RequestHandler {
   return (request, response, next) => { void Promise.resolve(handler(request, response, next)).catch(next) }
 }
@@ -107,7 +107,7 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
   const app = express()
   const auditLog = gclAuditLog ?? new PrismaHashChainAuditLog(prisma)
   const governedRunner = gclRunner ?? new GovernedConnectorRunner(
-    new ConnectorRegistry([...translationConnectorsFromEnvironment(), cameraConnectorFromEnvironment(), syntheticMarketConnectorFromEnvironment()]),
+    new ConnectorRegistry([...translationConnectorsFromEnvironment(), cameraConnectorFromEnvironment(), syntheticMarketConnectorFromEnvironment(), syntheticImageTtiConnectorFromEnvironment()]),
     auditLog,
     new EnvironmentPrismaDailyConnectorQuota(prisma),
     now,
@@ -126,7 +126,7 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
   const base = '/api/products/:product/workspaces/:workspaceId/modules/:moduleId/records'
   app.use(base, (request, response, next) => {
     if (!validProduct(request.params.product ?? '')) return response.status(404).json({ error: 'NOT_FOUND', code: 'not_found' })
-    if (GCL_RESERVED_MODULES.has(request.params.moduleId ?? '')) return response.status(404).json({ error: 'NOT_FOUND', code: 'not_found' })
+    if (isInternalGclModuleId(request.params.moduleId)) return response.status(404).json({ error: 'NOT_FOUND', code: 'not_found' })
     return productAuth(request, response, next)
   })
 
@@ -171,10 +171,13 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
     const input = connectorRunFrom(request.body)
     const connectorId = connectorIdFrom(request)
     const actor = ownerActorFrom(request)
+    if (connectorId === 'image-tti' && input.correlationId === undefined) throw new RequestValidationError('IMAGE_CORRELATION_ID_REQUIRED', 422)
     const common = { connectorId, input: input.input, ...scope, ownerApproved: true, scopes: input.scopes, costCapCents: input.costCapCents, requestedItems: input.requestedItems }
-    const runRequest: LegacyRunConnectorRequest | CameraRunConnectorRequest = connectorId === 'camera-observation'
+    const runRequest: LegacyRunConnectorRequest | CameraRunConnectorRequest | ImageRunConnectorRequest = connectorId === 'camera-observation'
       ? { ...common, requestedBy: requestActorFrom(request), checkedBy: actor, correlationId: input.correlationId ?? '' }
-      : { ...common, actor }
+      : connectorId === 'image-tti'
+        ? { ...common, actor, correlationId: input.correlationId! }
+        : { ...common, actor }
     const result = await governedRunner.run(runRequest)
     if (!result.artifact || !result.provenance.auditHash) return response.json({ result })
     const creationNow = artifactMutationClock(now)

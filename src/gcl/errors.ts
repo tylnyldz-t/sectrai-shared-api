@@ -33,6 +33,10 @@ export class ConnectorInputError extends GclError {
   constructor(message = 'INVALID_CONNECTOR_INPUT') { super(message, 422, 'invalid_connector_input') }
 }
 
+export class FamilySafetyError extends GclError {
+  constructor(message = 'FAMILY_SAFETY_FILTER_REJECTED') { super(message, 422, 'family_safety_filter_rejected') }
+}
+
 /** Product/workspace are authority, not adapter input; reject malformed tenant envelopes before preflight. */
 export class ConnectorContextError extends GclError {
   constructor(message = 'INVALID_CONNECTOR_TENANT_CONTEXT') { super(message, 422, 'invalid_connector_tenant_context') }

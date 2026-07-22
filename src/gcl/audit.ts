@@ -8,8 +8,15 @@ import {
   validateAuditChainHead,
 } from './camera-audit.js'
 import { MarketPrismaHashChainAuditLog } from './market-audit.js'
+import {
+  ImagePrismaHashChainAuditLog,
+  appendAuditEvent as appendImageAuditEvent,
+  hashAuditEvent as imageHashAuditEvent,
+  verifyAuditChain as verifyImageAuditChain,
+} from './image-audit.js'
 import { validGclTenantContext } from './context.js'
 import { ConnectorUnavailableError } from './errors.js'
+import type { GclPersistence, GclRecordTransaction } from './persistence.js'
 import { translationArtifactReviewDigest } from './translation-artifact-review.js'
 import type { TranslationArtifactRecord } from './translation-artifacts.js'
 import type { AuditAppendReceipt, AuditLog, ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
@@ -316,6 +323,11 @@ function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
 }
 export function hashAuditEvent(event: ConnectorAuditEvent | Record<string, unknown>, previousHash: string | null): string {
   return cameraHashAuditEvent(event as ConnectorAuditEvent, previousHash)
+}
+
+/** Image candidate ledgers replay the exact synthetic-image chain before trusting lineage. */
+export function verifyAuditChain(records: readonly unknown[]) {
+  return verifyImageAuditChain(records)
 }
 
 function auditValue(value: unknown): AuditRecordValue | null {
@@ -643,6 +655,7 @@ export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionC
  * unaudited translation decision when the audit write fails.
  */
 export async function appendAuditEvent(transaction: Prisma.TransactionClient, event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
+  if (isImageAuditEvent(event)) return appendImageAuditEvent(transaction as unknown as GclRecordTransaction, event)
   const snapshot = snapshotAuditEvent(event)
   if (!snapshot || !validAuditEvent(snapshot)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
   const entries = await validatedAuditEntries(transaction, snapshot.product, snapshot.workspaceId)
@@ -672,20 +685,29 @@ function isMarketAuditEvent(event: ConnectorAuditEvent): boolean {
   return event.connectorId === 'market' && typeof event.actor === 'string'
 }
 
+function isImageAuditEvent(event: ConnectorAuditEvent): boolean {
+  return event.connectorId === 'image-tti'
+    && typeof event.actor === 'string'
+    && typeof event.correlationId === 'string'
+}
+
 /** Per product/workspace append-only SHA-256 chain. Translation text and audio
  * bytes are represented by hashes only; they never enter audit records. */
 export class PrismaHashChainAuditLog implements AuditLog {
   private readonly camera: CameraPrismaHashChainAuditLog
   private readonly market: MarketPrismaHashChainAuditLog
+  private readonly image: ImagePrismaHashChainAuditLog
 
   constructor(private readonly prisma: PrismaClient) {
     this.camera = new CameraPrismaHashChainAuditLog(prisma)
     this.market = new MarketPrismaHashChainAuditLog(prisma)
+    this.image = new ImagePrismaHashChainAuditLog(prisma as unknown as GclPersistence)
   }
 
   async append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
     if (isCameraAuditEvent(event)) return this.camera.append(event)
     if (isMarketAuditEvent(event)) return this.market.append(event)
+    if (isImageAuditEvent(event)) return this.image.append(event)
     return this.prisma.$transaction((transaction) => appendAuditEvent(transaction, event))
   }
 }
@@ -693,6 +715,7 @@ export class PrismaHashChainAuditLog implements AuditLog {
 /** Test seam only. The application uses the durable Prisma implementation. */
 export class InMemoryHashChainAuditLog implements AuditLog {
   readonly entries: AuditRecordValue[] = []
+  readonly imageEntries: AuditRecordValue[] = []
 
   async append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
     if (isCameraAuditEvent(event)) {
@@ -706,6 +729,15 @@ export class InMemoryHashChainAuditLog implements AuditLog {
       const previousHash = this.entries.at(-1)?.hash ?? null
       const hash = hashAuditEvent(event, previousHash)
       this.entries.push({ event, previousHash, hash })
+      return { hash }
+    }
+    if (isImageAuditEvent(event)) {
+      const verified = verifyImageAuditChain(this.imageEntries)
+      const previousHash = verified.at(-1)?.hash ?? null
+      const hash = imageHashAuditEvent(event, previousHash)
+      const entry = { event, previousHash, hash }
+      this.imageEntries.push(entry)
+      this.entries.push(entry)
       return { hash }
     }
     // The durable implementation replays every stored row inside its

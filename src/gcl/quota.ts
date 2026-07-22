@@ -69,8 +69,9 @@ export class EnvironmentPrismaDailyConnectorQuota implements ConnectorQuota {
   async consume(request: Parameters<ConnectorQuota['consume']>[0]): Promise<void> {
     const vision = request.connectorId === 'vision-document-field-extraction'
     const camera = request.connectorId === 'camera-observation'
+    const image = request.connectorId === 'image-tti'
     const market = request.quotaGroup === 'market' || request.connectorId === 'market'
-    const config = market ? dailyQuotaFromEnvironment(this.environment, 'market') : camera ? cameraDailyQuotaFromEnvironment(this.environment) : vision ? visionDailyQuotaFromEnvironment(this.environment) : translationDailyQuotaFromEnvironment(this.environment)
+    const config = market ? dailyQuotaFromEnvironment(this.environment, 'market') : image ? imageDailyQuotaFromEnvironment(this.environment) : camera ? cameraDailyQuotaFromEnvironment(this.environment) : vision ? visionDailyQuotaFromEnvironment(this.environment) : translationDailyQuotaFromEnvironment(this.environment)
     const moduleId = vision ? GCL_VISION_USAGE_MODULE_ID : GCL_USAGE_MODULE_ID
     return new PrismaDailyConnectorQuota(this.prisma, config, moduleId).consume(request)
   }
@@ -96,6 +97,14 @@ export function cameraDailyQuotaFromEnvironment(environment: NodeJS.ProcessEnv =
   const dailyRuns = positiveInteger(environment.GCL_CAMERA_DAILY_RUN_QUOTA)
   const dailyItems = positiveInteger(environment.GCL_CAMERA_DAILY_OBSERVATION_QUOTA)
   if (!dailyRuns || !dailyItems) throw new ConnectorUnavailableError('CAMERA_QUOTA_NOT_CONFIGURED')
+  return { dailyRuns, dailyItems }
+}
+
+/** Missing or malformed limits close the synthetic image connector. */
+export function imageDailyQuotaFromEnvironment(environment: NodeJS.ProcessEnv = process.env): DailyQuotaConfig {
+  const dailyRuns = positiveInteger(environment.GCL_IMAGE_DAILY_RUN_QUOTA)
+  const dailyItems = positiveInteger(environment.GCL_IMAGE_DAILY_ITEM_QUOTA)
+  if (!dailyRuns || !dailyItems) throw new ConnectorUnavailableError('IMAGE_CONNECTOR_QUOTA_NOT_CONFIGURED')
   return { dailyRuns, dailyItems }
 }
 

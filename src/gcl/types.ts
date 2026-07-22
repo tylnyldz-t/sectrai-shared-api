@@ -1,5 +1,5 @@
 /** Connector input is always treated as data, never as executable instructions. */
-export type ConnectorKind = 'text-translation' | 'speech-translation' | 'document-analysis' | 'synthetic-camera' | 'external-data' | 'market'
+export type ConnectorKind = 'text-translation' | 'speech-translation' | 'document-analysis' | 'synthetic-camera' | 'external-data' | 'market' | 'media-generation'
 export type ConnectorAuthKind = 'owner-token' | 'oauth'
 
 export type IsolatedContent = {
@@ -42,6 +42,9 @@ export type ConnectorResult<TData = unknown> = {
   artifact?: TranslationArtifactProposal
 }
 
+/** Redacted primitive-only metadata that binds a connector result to its success audit. */
+export type ConnectorSuccessAuditDetail = Record<string, string | number | boolean | null>
+
 type BaseConnectorRunContext = {
   product: string
   workspaceId: string
@@ -58,11 +61,23 @@ export type ConnectorRunContext = BaseConnectorRunContext & ({
   checkedBy?: never
   correlationId?: never
 } | {
+  actor: string
+  requestedBy?: never
+  checkedBy?: never
+  correlationId: string
+} | {
   actor?: never
   requestedBy: string
   checkedBy: string
   correlationId: string
 })
+
+export type ImageConnectorRunContext = BaseConnectorRunContext & {
+  actor: string
+  requestedBy?: never
+  checkedBy?: never
+  correlationId: string
+}
 
 export interface Connector<TInput = unknown, TData = unknown> {
   id: string
@@ -79,6 +94,7 @@ export interface Connector<TInput = unknown, TData = unknown> {
   preflight?(input: TInput, ctx: ConnectorRunContext): Promise<TInput | void> | TInput | void
   run(input: TInput, ctx: ConnectorRunContext): Promise<ConnectorResult<TData>>
   validateResult?(result: ConnectorResult<TData>, ctx: ConnectorRunContext): ConnectorResult<TData>
+  successAuditDetail?(result: ConnectorResult<TData>, ctx: ConnectorRunContext): Promise<ConnectorSuccessAuditDetail> | ConnectorSuccessAuditDetail
 }
 
 type BaseAuditEvent = {
@@ -93,11 +109,11 @@ type BaseAuditEvent = {
 }
 
 export type ConnectorAuditEvent = BaseAuditEvent & ({
-  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'translation.artifact.created' | 'translation.artifact.approved' | 'translation.artifact.rejected' | 'connector.document.owner_reviewed' | 'connector.market.owner_reviewed'
+  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'translation.artifact.created' | 'translation.artifact.approved' | 'translation.artifact.rejected' | 'connector.document.owner_reviewed' | 'connector.market.owner_reviewed' | 'connector.artifact.candidates_issued' | 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected'
   actor: string
   requestedBy?: never
   checkedBy?: never
-  correlationId?: never
+  correlationId?: string
 } | {
   type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'connector.run.denied' | 'connector.camera.owner_reviewed'
   actor?: never
