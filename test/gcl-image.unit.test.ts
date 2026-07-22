@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { GCL_AUDIT_MODULE_ID, hashAuditEvent, InMemoryHashChainAuditLog, PrismaHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, FamilySafetyError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
-import { LIVE_DISABLED, SyntheticImageTtiConnector, imageCandidateSetDigest, issueSyntheticImageCandidates, ownerLikeSyntheticImage, ownerRejectSyntheticImage, syntheticImageTtiConnectorFromEnvironment } from '../src/gcl/image.js'
+import { LIVE_DISABLED, SyntheticImageTtiConnector, imageCandidateFingerprint, imageCandidateSetDigest, issueSyntheticImageCandidates, ownerLikeSyntheticImage, ownerRejectSyntheticImage, syntheticImageTtiConnectorFromEnvironment } from '../src/gcl/image.js'
 import { GCL_IMAGE_CANDIDATE_MODULE_ID, InMemoryImageCandidateLedger, PrismaImageCandidateLedger } from '../src/gcl/image-candidate-ledger.js'
 import { GCL_IMAGE_OWNER_REVIEW_MODULE_ID, InMemoryImageOwnerReviewLedger, PrismaImageOwnerReviewLedger } from '../src/gcl/image-review-ledger.js'
 import type { GclPersistence, GclRecordTransaction } from '../src/gcl/persistence.js'
@@ -366,6 +366,84 @@ test('accessor-shaped input and family-safety hooks fail closed without executin
   const connector = new SyntheticImageTtiConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300, familySafetyFilter: filter as never })
   await assert.rejects(() => connector.run({ prompt: 'A child-friendly solar system poster' }, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_FAMILY_SAFETY_FILTER_INVALID')
   assert.equal(filterGetterRead, false)
+})
+
+test('direct image contexts and ledger capability boundaries reject accessors without invoking them', async () => {
+  let runContextGetterRead = false
+  const runContext = {}
+  Object.defineProperty(runContext, 'product', { enumerable: true, get: () => { runContextGetterRead = true; return context.product } })
+  await assert.rejects(() => configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, runContext as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_TTI_CONTEXT')
+  assert.equal(runContextGetterRead, false)
+
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
+  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  let issuanceContextGetterRead = false
+  const issuanceContext = {}
+  Object.defineProperty(issuanceContext, 'product', { enumerable: true, get: () => { issuanceContextGetterRead = true; return context.product } })
+  await assert.rejects(() => issueSyntheticImageCandidates(result, new InMemoryImageCandidateLedger(audit), issuanceContext as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+  assert.equal(issuanceContextGetterRead, false)
+  assert.equal(audit.entries.length, 2)
+
+  let issuanceLedgerGetterRead = false
+  const issuanceLedger = {}
+  Object.defineProperty(issuanceLedger, 'appendIssuance', { enumerable: true, get: () => { issuanceLedgerGetterRead = true; return async () => ({ hash: '0'.repeat(64) }) } })
+  await assert.rejects(() => issueSyntheticImageCandidates(result, issuanceLedger as never, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
+  assert.equal(issuanceLedgerGetterRead, false)
+  assert.equal(audit.entries.length, 2)
+
+  const candidates = new InMemoryImageCandidateLedger(audit)
+  await issueSyntheticImageCandidates(result, candidates, context)
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  let reviewContextGetterRead = false
+  const reviewContext = {}
+  Object.defineProperty(reviewContext, 'product', { enumerable: true, get: () => { reviewContextGetterRead = true; return context.product } })
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', new InMemoryImageOwnerReviewLedger(audit), candidates, reviewContext as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+  assert.equal(reviewContextGetterRead, false)
+
+  let reviewLedgerGetterRead = false
+  const reviewLedger = {}
+  Object.defineProperty(reviewLedger, 'appendDecision', { enumerable: true, get: () => { reviewLedgerGetterRead = true; return async () => ({ hash: '0'.repeat(64) }) } })
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviewLedger as never, candidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
+  assert.equal(reviewLedgerGetterRead, false)
+
+  let candidateLedgerGetterRead = false
+  const candidateLedger = {}
+  Object.defineProperty(candidateLedger, 'assertIssued', { enumerable: true, get: () => { candidateLedgerGetterRead = true; return async () => ({ issuanceAuditHash: '0'.repeat(64), runAuditHash: '0'.repeat(64), issuanceOccurredAt: now().toISOString() }) } })
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', new InMemoryImageOwnerReviewLedger(audit), candidateLedger as never, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
+  assert.equal(candidateLedgerGetterRead, false)
+  assert.equal(audit.entries.length, 3)
+})
+
+test('image ledger event scopes reject accessor arrays before reading a scope value', async () => {
+  let candidateScopeGetterRead = false
+  const candidateScopes: unknown[] = []
+  Object.defineProperty(candidateScopes, '0', { enumerable: true, get: () => { candidateScopeGetterRead = true; return 'image:generate' } })
+  candidateScopes.length = 1
+  const candidateId = 'synthetic-image-00000000000000000000'
+  const entry = { candidateId, fingerprint: '0'.repeat(64) }
+  const candidateEvent = {
+    type: 'connector.artifact.candidates_issued' as const,
+    connectorId: 'image-tti', product: context.product, workspaceId: context.workspaceId, actor: context.actor, correlationId: context.correlationId,
+    scopes: candidateScopes, costCapCents: 0, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { candidateSetDigest: imageCandidateFingerprint([entry]), candidateCount: 1, candidates: [entry], publication: 'blocked' as const, runAuditHash: '1'.repeat(64) },
+  }
+  await assert.rejects(() => new InMemoryImageCandidateLedger(new InMemoryHashChainAuditLog()).appendIssuance(candidateEvent as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
+  assert.equal(candidateScopeGetterRead, false)
+
+  let reviewScopeGetterRead = false
+  const reviewScopes: unknown[] = []
+  Object.defineProperty(reviewScopes, '0', { enumerable: true, get: () => { reviewScopeGetterRead = true; return 'image:generate' } })
+  reviewScopes.length = 1
+  const reviewEvent = {
+    type: 'connector.artifact.owner_liked' as const,
+    connectorId: 'image-tti', product: context.product, workspaceId: context.workspaceId, actor: 'checker@example.test', correlationId: context.correlationId,
+    scopes: reviewScopes, costCapCents: 0, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { candidateId, maker: context.actor, publication: 'blocked' as const, issuanceAuditHash: '2'.repeat(64), runAuditHash: '3'.repeat(64), artifactId: `owner-liked-${candidateId}`, ownerReview: 'liked' as const },
+  }
+  await assert.rejects(() => new InMemoryImageOwnerReviewLedger(new InMemoryHashChainAuditLog()).appendDecision(reviewEvent as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_OWNER_REVIEW_EVENT')
+  assert.equal(reviewScopeGetterRead, false)
 })
 
 test('candidate issuance rejects accessor-shaped candidate sets before it reads an untrusted array item', async () => {

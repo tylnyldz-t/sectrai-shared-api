@@ -38,12 +38,31 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 
 /** Reject accessors, symbols, arrays, and non-plain objects before reading values. */
 function plainRecord(value: unknown): Record<string, unknown> | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const prototype = Object.getPrototypeOf(value)
-  if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length > 0) return null
-  const descriptors = Object.getOwnPropertyDescriptors(value)
-  if (Object.values(descriptors).some((descriptor) => descriptor.get || descriptor.set)) return null
-  return value as Record<string, unknown>
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length > 0) return null
+    const descriptors = Object.getOwnPropertyDescriptors(value)
+    if (Object.values(descriptors).some((descriptor) => descriptor.get || descriptor.set)) return null
+    return value as Record<string, unknown>
+  } catch { return null }
+}
+
+/** Reject sparse, accessor-bearing, or extended scope arrays before reading a scope. */
+function plainArray(value: unknown): unknown[] | null {
+  try {
+    if (!Array.isArray(value) || (Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
+    const descriptors = Object.getOwnPropertyDescriptors(value)
+    const length = Object.getOwnPropertyDescriptor(value, 'length')?.value
+    if (!Number.isSafeInteger(length) || length < 0 || Object.keys(descriptors).length !== length + 1) return null
+    const items: unknown[] = []
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = descriptors[String(index)]
+      if (!descriptor || descriptor.get || descriptor.set) return null
+      items.push(descriptor.value)
+    }
+    return items
+  } catch { return null }
 }
 
 function safeIdentifier(value: unknown): value is string { return typeof value === 'string' && IDENTIFIER_PATTERN.test(value) }
@@ -51,6 +70,11 @@ function canonicalTimestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const parsed = new Date(value)
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value
+}
+
+function imageScope(value: unknown): boolean {
+  const scopes = plainArray(value)
+  return Boolean(scopes && scopes.length === 1 && scopes[0] === IMAGE_SCOPE)
 }
 
 function storedReceipt(value: unknown): StoredReviewReceipt | null {
@@ -67,7 +91,7 @@ function eventDecision(event: ImageOwnerReviewDecisionEvent): 'liked' | 'rejecte
 function assertImageOwnerReviewEvent(event: unknown): asserts event is ImageOwnerReviewDecisionEvent {
   const value = plainRecord(event)
   if (!value || !exactKeys(value, ['type', 'connectorId', 'product', 'workspaceId', 'actor', 'correlationId', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'])) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
-  if ((value.type !== 'connector.artifact.owner_liked' && value.type !== 'connector.artifact.owner_rejected') || value.connectorId !== 'image-tti' || !safeIdentifier(value.product) || !safeIdentifier(value.workspaceId) || !safeIdentifier(value.actor) || !safeIdentifier(value.correlationId) || !Array.isArray(value.scopes) || value.scopes.length !== 1 || value.scopes[0] !== IMAGE_SCOPE || value.costCapCents !== 0 || value.requestedItems !== 1 || !canonicalTimestamp(value.occurredAt)) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
+  if ((value.type !== 'connector.artifact.owner_liked' && value.type !== 'connector.artifact.owner_rejected') || value.connectorId !== 'image-tti' || !safeIdentifier(value.product) || !safeIdentifier(value.workspaceId) || !safeIdentifier(value.actor) || !safeIdentifier(value.correlationId) || !imageScope(value.scopes) || value.costCapCents !== 0 || value.requestedItems !== 1 || !canonicalTimestamp(value.occurredAt)) throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
 
   const detail = plainRecord(value.detail)
   const liked = value.type === 'connector.artifact.owner_liked'

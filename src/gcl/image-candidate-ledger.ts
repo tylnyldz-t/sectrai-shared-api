@@ -117,11 +117,16 @@ function issuanceEntries(value: unknown): ImageCandidateIssuanceEntry[] | null {
   return entries.map((entry) => ({ candidateId: entry.candidateId as string, fingerprint: entry.fingerprint as string }))
 }
 
+function imageScope(value: unknown): boolean {
+  const scopes = plainArray(value)
+  return Boolean(scopes && scopes.length === 1 && scopes[0] === IMAGE_SCOPE)
+}
+
 function assertImageCandidateIssuanceEvent(event: unknown): asserts event is ImageCandidateIssuanceEvent {
   const value = plainRecord(event)
   if (!value || !exactKeys(value, ['type', 'connectorId', 'product', 'workspaceId', 'actor', 'correlationId', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'])) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
   const requestedItems = value.requestedItems
-  if (value.type !== 'connector.artifact.candidates_issued' || value.connectorId !== 'image-tti' || !safeIdentifier(value.product) || !safeIdentifier(value.workspaceId) || !safeIdentifier(value.actor) || !safeIdentifier(value.correlationId) || !Array.isArray(value.scopes) || value.scopes.length !== 1 || value.scopes[0] !== IMAGE_SCOPE || value.costCapCents !== 0 || typeof requestedItems !== 'number' || !Number.isSafeInteger(requestedItems) || requestedItems < 1 || !canonicalTimestamp(value.occurredAt)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
+  if (value.type !== 'connector.artifact.candidates_issued' || value.connectorId !== 'image-tti' || !safeIdentifier(value.product) || !safeIdentifier(value.workspaceId) || !safeIdentifier(value.actor) || !safeIdentifier(value.correlationId) || !imageScope(value.scopes) || value.costCapCents !== 0 || typeof requestedItems !== 'number' || !Number.isSafeInteger(requestedItems) || requestedItems < 1 || !canonicalTimestamp(value.occurredAt)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
 
   const detail = plainRecord(value.detail)
   if (!detail || !exactKeys(detail, ['candidateSetDigest', 'candidateCount', 'candidates', 'publication', 'runAuditHash']) || !safeHash(detail.candidateSetDigest) || !Number.isSafeInteger(detail.candidateCount) || detail.publication !== 'blocked' || !safeHash(detail.runAuditHash)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
@@ -166,9 +171,7 @@ function isSourceRunSuccess(record: { event: ConnectorAuditEvent; hash: string }
     && record.event.workspaceId === event.workspaceId
     && record.event.actor === event.actor
     && record.event.correlationId === event.correlationId
-    && Array.isArray(record.event.scopes)
-    && record.event.scopes.length === 1
-    && record.event.scopes[0] === IMAGE_SCOPE
+    && imageScope(record.event.scopes)
     && typeof record.event.costCapCents === 'number'
     && Number.isSafeInteger(record.event.costCapCents)
     && record.event.costCapCents > 0

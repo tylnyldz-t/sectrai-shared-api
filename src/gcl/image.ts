@@ -29,6 +29,9 @@ const COMFY_SDXL_GRAPH_SHAPE = [
   'VAEDecode',
   'SaveImage',
 ] as const
+const IMAGE_RUN_CONTEXT_KEYS = ['product', 'workspaceId', 'actor', 'correlationId', 'ownerApproved', 'scopes', 'costCapCents', 'requestedItems', 'now'] as const
+const IMAGE_ISSUANCE_CONTEXT_KEYS = ['product', 'workspaceId', 'actor', 'correlationId', 'now'] as const
+const IMAGE_REVIEW_CONTEXT_KEYS = ['product', 'workspaceId', 'correlationId', 'now'] as const
 
 export type ImageSize = 512 | 1024
 
@@ -243,6 +246,24 @@ function ownDataRecord(value: unknown): Record<string, unknown> | null {
   } catch { return null }
 }
 
+/**
+ * Resolves a callable capability without evaluating an own or prototype
+ * accessor. Ledger implementations may use class methods, so own-data-only
+ * object validation is intentionally too strict here.
+ */
+function dataMethod(value: unknown, name: string): ((...args: unknown[]) => unknown) | null {
+  try {
+    if (!value || (typeof value !== 'object' && typeof value !== 'function')) return null
+    let target: object | null = value
+    while (target) {
+      const descriptor = Object.getOwnPropertyDescriptor(target, name)
+      if (descriptor) return !descriptor.get && !descriptor.set && typeof descriptor.value === 'function' ? descriptor.value as (...args: unknown[]) => unknown : null
+      target = Object.getPrototypeOf(target)
+    }
+    return null
+  } catch { return null }
+}
+
 function text(value: unknown, error: string): string {
   if (typeof value !== 'string') throw new ConnectorInputError(error)
   const normalized = value.trim()
@@ -372,7 +393,6 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
 
   private configured(ctx: ConnectorRunContext): { filter: FamilySafetyFilter; ownerReviewTtlSeconds: number } {
     if ((this.config.liveMode ?? LIVE_DISABLED) !== LIVE_DISABLED) throw new ConnectorUnavailableError('IMAGE_TTI_LIVE_DISABLED')
-    if (!isSafeIdentifier(ctx.product) || !isSafeIdentifier(ctx.workspaceId) || !isSafeIdentifier(ctx.actor) || !isSafeIdentifier(ctx.correlationId) || typeof ctx.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_TTI_CONTEXT')
     const maxCostCapCents = positiveInteger(this.config.maxCostCapCents)
     const maxItems = positiveInteger(this.config.maxItems)
     const reviewTtl = ownerReviewTtlSeconds(this.config.ownerReviewTtlSeconds)
@@ -385,29 +405,31 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
   }
 
   preflight(input: TextToImageInput, ctx: ConnectorRunContext): void {
-    const { filter } = this.configured(ctx)
-    currentDate(ctx.now, 'INVALID_IMAGE_TTI_CONTEXT')
+    const context = imageRunContext(ctx)
+    const { filter } = this.configured(context)
+    currentDate(context.now, 'INVALID_IMAGE_TTI_CONTEXT')
     safetyAssessment(filter, imageInput(input))
   }
 
   async run(input: TextToImageInput, ctx: ConnectorRunContext): Promise<ConnectorResult<TextToImageData>> {
-    const { filter, ownerReviewTtlSeconds: reviewTtl } = this.configured(ctx)
+    const context = imageRunContext(ctx)
+    const { filter, ownerReviewTtlSeconds: reviewTtl } = this.configured(context)
     const normalized = imageInput(input)
     safetyAssessment(filter, normalized)
-    const generatedDate = currentDate(ctx.now, 'INVALID_IMAGE_TTI_CONTEXT')
+    const generatedDate = currentDate(context.now, 'INVALID_IMAGE_TTI_CONTEXT')
     const generatedAt = generatedDate.toISOString()
     const expiresAt = reviewExpiresAt(generatedDate, reviewTtl, 'INVALID_IMAGE_TTI_CONTEXT')
     const promptDigest = digest(normalized.prompt)
     const plan = creativeWorkerPlan(normalized, promptDigest)
-    const candidates = Array.from({ length: ctx.requestedItems }, (_, index): SyntheticImageCandidate => {
-      const scope = { product: ctx.product, workspaceId: ctx.workspaceId, correlationId: ctx.correlationId }
-      const id = candidateId(scope, ctx.actor, promptDigest, plan.negativePromptDigest, normalized.width, normalized.height, expiresAt, index)
+    const candidates = Array.from({ length: context.requestedItems }, (_, index): SyntheticImageCandidate => {
+      const scope = { product: context.product, workspaceId: context.workspaceId, correlationId: context.correlationId }
+      const id = candidateId(scope, context.actor, promptDigest, plan.negativePromptDigest, normalized.width, normalized.height, expiresAt, index)
       return {
         candidateId: id,
         candidateIndex: index,
         promptDigest,
         ...(plan.negativePromptDigest ? { negativePromptDigest: plan.negativePromptDigest } : {}),
-        requestedBy: ctx.actor,
+        requestedBy: context.actor,
         scope,
         width: normalized.width,
         height: normalized.height,
@@ -447,6 +469,44 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
 }
 
 function isSafeIdentifier(value: unknown): value is string { return typeof value === 'string' && OWNER_ACTOR_PATTERN.test(value) }
+
+/** Copy a closed ConnectorRunContext before direct adapter use reads its data. */
+function imageRunContext(value: unknown): ConnectorRunContext {
+  const context = plainRecord(value)
+  const scopes = context ? plainArray(context.scopes) : null
+  if (!context || !hasExactKeys(context, IMAGE_RUN_CONTEXT_KEYS) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.ownerApproved !== 'boolean' || !scopes || scopes.length < 1 || scopes.some((scope) => !isSafeIdentifier(scope)) || typeof context.costCapCents !== 'number' || typeof context.requestedItems !== 'number' || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_TTI_CONTEXT')
+  return {
+    product: context.product,
+    workspaceId: context.workspaceId,
+    actor: context.actor,
+    correlationId: context.correlationId,
+    ownerApproved: context.ownerApproved,
+    scopes: [...scopes] as string[],
+    costCapCents: context.costCapCents,
+    requestedItems: context.requestedItems,
+    now: context.now as () => Date,
+  }
+}
+
+/** Copy the small issuance context before its identity or clock is used. */
+function imageIssuanceContext(value: unknown): ImageCandidateIssuanceContext {
+  const context = plainRecord(value)
+  if (!context || !hasExactKeys(context, IMAGE_ISSUANCE_CONTEXT_KEYS) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+  return { product: context.product, workspaceId: context.workspaceId, actor: context.actor, correlationId: context.correlationId, now: context.now as () => Date }
+}
+
+/** Copy the small review context before scope or clock checks run. */
+function imageReviewContext(value: unknown): ImageOwnerReviewContext {
+  const context = plainRecord(value)
+  if (!context || !hasExactKeys(context, IMAGE_REVIEW_CONTEXT_KEYS) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+  return { product: context.product, workspaceId: context.workspaceId, correlationId: context.correlationId, now: context.now as () => Date }
+}
+
+function returnedAuditHash(value: unknown, error: string): string {
+  const audit = plainRecord(value)
+  if (!audit || !hasExactKeys(audit, ['hash']) || typeof audit.hash !== 'string' || !DIGEST_PATTERN.test(audit.hash)) throw new ConnectorUnavailableError(error)
+  return audit.hash
+}
 
 function assertCandidateScope(value: unknown, error: string): asserts value is ImageCandidateScope {
   const scope = plainRecord(value)
@@ -503,9 +563,10 @@ export async function issueSyntheticImageCandidates(runResult: ConnectorResult<T
   const provenance = result ? plainRecord(result.provenance) : null
   const candidateValues = data ? plainArray(data.candidates) : null
   if (!data || data.mode !== LIVE_DISABLED || data.nextAction !== 'INDEPENDENT_OWNER_LIKE_REQUIRED' || data.automaticPublication !== false || !candidateValues || !provenance || provenance.connectorId !== IMAGE_TTI_CONNECTOR_ID || provenance.source !== 'synthetic-image-tti' || typeof provenance.auditHash !== 'string' || !DIGEST_PATTERN.test(provenance.auditHash)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
-  if (!candidateLedger || typeof candidateLedger !== 'object' || typeof candidateLedger.appendIssuance !== 'function') throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
-  if (!context || typeof context !== 'object' || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
-  const occurredAt = currentDate(context.now, 'INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+  const appendIssuance = dataMethod(candidateLedger, 'appendIssuance')
+  if (!appendIssuance) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
+  const issuanceContext = imageIssuanceContext(context)
+  const occurredAt = currentDate(issuanceContext.now, 'INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
   if (candidateValues.length < 1 || candidateValues.length > 32) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
 
   const candidates: SyntheticImageCandidate[] = []
@@ -513,17 +574,17 @@ export async function issueSyntheticImageCandidates(runResult: ConnectorResult<T
     const candidate = candidateValues[index]
     assertSyntheticCandidate(candidate)
     assertReviewNotExpired(candidate, occurredAt)
-    if (candidate.candidateIndex !== index || candidate.requestedBy !== context.actor || candidate.scope.product !== context.product || candidate.scope.workspaceId !== context.workspaceId || candidate.scope.correlationId !== context.correlationId) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
+    if (candidate.candidateIndex !== index || candidate.requestedBy !== issuanceContext.actor || candidate.scope.product !== issuanceContext.product || candidate.scope.workspaceId !== issuanceContext.workspaceId || candidate.scope.correlationId !== issuanceContext.correlationId) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
     candidates.push(candidate)
   }
   const entries = candidates.map((candidate) => ({ candidateId: candidate.candidateId, fingerprint: imageCandidateFingerprint(candidate) }))
   const event: ImageCandidateIssuanceEvent = {
     type: 'connector.artifact.candidates_issued',
     connectorId: IMAGE_TTI_CONNECTOR_ID,
-    product: context.product,
-    workspaceId: context.workspaceId,
-    actor: context.actor,
-    correlationId: context.correlationId,
+    product: issuanceContext.product,
+    workspaceId: issuanceContext.workspaceId,
+    actor: issuanceContext.actor,
+    correlationId: issuanceContext.correlationId,
     scopes: [IMAGE_SCOPE],
     costCapCents: 0,
     requestedItems: entries.length,
@@ -536,30 +597,33 @@ export async function issueSyntheticImageCandidates(runResult: ConnectorResult<T
       runAuditHash: provenance.auditHash,
     },
   }
-  const audit = await candidateLedger.appendIssuance(event)
-  if (!audit || typeof audit.hash !== 'string' || !DIGEST_PATTERN.test(audit.hash)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
-  return { issuanceAuditHash: audit.hash }
+  const audit = await appendIssuance.call(candidateLedger, event)
+  return { issuanceAuditHash: returnedAuditHash(audit, 'IMAGE_CANDIDATE_LEDGER_UNAVAILABLE') }
 }
 
-function assertOwnerReviewContext(candidate: SyntheticImageCandidate, context: ImageOwnerReviewContext): Date {
-  if (!context || typeof context !== 'object' || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
-  if (candidate.scope.product !== context.product || candidate.scope.workspaceId !== context.workspaceId || candidate.scope.correlationId !== context.correlationId) throw new ConnectorInputError('IMAGE_REVIEW_SCOPE_MISMATCH')
-  const occurredAt = currentDate(context.now, 'INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+function assertOwnerReviewContext(candidate: SyntheticImageCandidate, context: unknown): { context: ImageOwnerReviewContext; occurredAt: Date } {
+  const reviewContext = imageReviewContext(context)
+  if (candidate.scope.product !== reviewContext.product || candidate.scope.workspaceId !== reviewContext.workspaceId || candidate.scope.correlationId !== reviewContext.correlationId) throw new ConnectorInputError('IMAGE_REVIEW_SCOPE_MISMATCH')
+  const occurredAt = currentDate(reviewContext.now, 'INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
   assertReviewNotExpired(candidate, occurredAt)
-  return occurredAt
+  return { context: reviewContext, occurredAt }
 }
 
-function assertOwnerReviewRequest(candidate: unknown, ownerApproved: boolean, actor: unknown, reviewLedger: unknown, context: ImageOwnerReviewContext): { candidate: SyntheticImageCandidate; actor: string; occurredAt: Date } {
+function assertOwnerReviewRequest(candidate: unknown, ownerApproved: boolean, actor: unknown, reviewLedger: unknown, context: ImageOwnerReviewContext): { candidate: SyntheticImageCandidate; actor: string; context: ImageOwnerReviewContext; occurredAt: Date; appendDecision: (...args: unknown[]) => unknown } {
   if (!ownerApproved) throw new OwnerGateError()
   if (!isSafeIdentifier(actor)) throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
   assertSyntheticCandidate(candidate)
   if (actor === candidate.requestedBy) throw new OwnerGateError('MAKER_CHECKER_SEPARATION_REQUIRED')
-  if (!reviewLedger || typeof reviewLedger !== 'object' || typeof (reviewLedger as ImageOwnerReviewLedger).appendDecision !== 'function') throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
-  return { candidate, actor, occurredAt: assertOwnerReviewContext(candidate, context) }
+  const appendDecision = dataMethod(reviewLedger, 'appendDecision')
+  if (!appendDecision) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
+  const review = assertOwnerReviewContext(candidate, context)
+  return { candidate, actor, appendDecision, ...review }
 }
 
-function assertCandidateLedger(candidateLedger: unknown): asserts candidateLedger is ImageCandidateLedger {
-  if (!candidateLedger || typeof candidateLedger !== 'object' || typeof (candidateLedger as ImageCandidateLedger).assertIssued !== 'function') throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
+function candidateLedgerAssertion(candidateLedger: unknown): (...args: unknown[]) => unknown {
+  const assertIssued = dataMethod(candidateLedger, 'assertIssued')
+  if (!assertIssued) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
+  return assertIssued
 }
 
 /** Treat a malformed ledger proof as unavailable rather than trusting caller-supplied lineage. */
@@ -595,12 +659,13 @@ function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.ar
  */
 export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate, ownerApproved: boolean, actor: string, reviewLedger: ImageOwnerReviewLedger, candidateLedger: ImageCandidateLedger, context: ImageOwnerReviewContext): Promise<OwnerLikedImageArtifact> {
   const request = assertOwnerReviewRequest(candidate, ownerApproved, actor, reviewLedger, context)
-  assertCandidateLedger(candidateLedger)
-  const issuance = await candidateLedger.assertIssued(request.candidate)
+  const assertIssued = candidateLedgerAssertion(candidateLedger)
+  const issuance = await assertIssued.call(candidateLedger, request.candidate)
   assertIssuanceProof(issuance)
   assertReviewNotBeforeIssuance(request.occurredAt, issuance)
-  const artifactId = `owner-liked-${candidate.candidateId}`
-  const audit = await reviewLedger.appendDecision(reviewAuditEvent('connector.artifact.owner_liked', request.candidate, request.actor, request.occurredAt, context, issuance, { artifactId, ownerReview: 'liked' }))
+  const artifactId = `owner-liked-${request.candidate.candidateId}`
+  const audit = await request.appendDecision.call(reviewLedger, reviewAuditEvent('connector.artifact.owner_liked', request.candidate, request.actor, request.occurredAt, request.context, issuance, { artifactId, ownerReview: 'liked' }))
+  const auditHash = returnedAuditHash(audit, 'IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
   return {
     artifactId,
     candidateId: request.candidate.candidateId,
@@ -609,7 +674,7 @@ export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate
     syntheticUri: request.candidate.syntheticUri,
     ownerReview: { status: 'liked', visibility: 'owner-only', publication: 'blocked', required: true, reviewExpiresAt: request.candidate.ownerReview.reviewExpiresAt, actor: request.actor, occurredAt: request.occurredAt.toISOString() },
     publication: 'blocked',
-    auditHash: audit.hash,
+    auditHash,
     issuanceAuditHash: issuance.issuanceAuditHash,
     runAuditHash: issuance.runAuditHash,
   }
@@ -623,19 +688,20 @@ export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate
  */
 export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandidate, ownerApproved: boolean, actor: string, reason: ImageRejectionReason, reviewLedger: ImageOwnerReviewLedger, candidateLedger: ImageCandidateLedger, context: ImageOwnerReviewContext): Promise<OwnerRejectedImageReview> {
   const request = assertOwnerReviewRequest(candidate, ownerApproved, actor, reviewLedger, context)
-  assertCandidateLedger(candidateLedger)
+  const assertIssued = candidateLedgerAssertion(candidateLedger)
   if (reason !== 'NOT_SUITABLE' && reason !== 'SAFETY_CONCERN' && reason !== 'NEEDS_REVISION') throw new ConnectorInputError('INVALID_IMAGE_REJECTION_REASON')
-  const issuance = await candidateLedger.assertIssued(request.candidate)
+  const issuance = await assertIssued.call(candidateLedger, request.candidate)
   assertIssuanceProof(issuance)
   assertReviewNotBeforeIssuance(request.occurredAt, issuance)
   const reviewId = `owner-rejected-${request.candidate.candidateId}`
-  const audit = await reviewLedger.appendDecision(reviewAuditEvent('connector.artifact.owner_rejected', request.candidate, request.actor, request.occurredAt, context, issuance, { reviewId, ownerReview: 'rejected', reason }))
+  const audit = await request.appendDecision.call(reviewLedger, reviewAuditEvent('connector.artifact.owner_rejected', request.candidate, request.actor, request.occurredAt, request.context, issuance, { reviewId, ownerReview: 'rejected', reason }))
+  const auditHash = returnedAuditHash(audit, 'IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
   return {
     reviewId,
     candidateId: request.candidate.candidateId,
     ownerReview: { status: 'rejected', visibility: 'owner-only', publication: 'blocked', required: true, reviewExpiresAt: request.candidate.ownerReview.reviewExpiresAt, actor: request.actor, occurredAt: request.occurredAt.toISOString(), reason },
     publication: 'blocked',
-    auditHash: audit.hash,
+    auditHash,
     issuanceAuditHash: issuance.issuanceAuditHash,
     runAuditHash: issuance.runAuditHash,
   }
