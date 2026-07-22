@@ -333,6 +333,24 @@ not appended an audit record or consumed quota. This is a local data-boundary
 hardening measure only: it adds no provider, network, credential, dispatch,
 GPU, migration, send, publication, or live-mode capability.
 
+## D11 — proxy-free ledger and audit boundary
+
+The same Node-detectable `Proxy` rejection now covers direct candidate-issuance
+and owner-review events, candidate/review ledger capability objects and their
+methods, test-only audit seams, audit-record arrays, and nested audit data.
+The implementation checks for a proxy before reflecting on prototypes, keys,
+property descriptors, or a callable; a proxy therefore cannot execute a trap
+while the module verifies issuance lineage, terminal evidence, or a SHA-256
+audit chain.
+
+A proxied direct issuance event closes as
+`INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT`, a proxied terminal event closes as
+`INVALID_IMAGE_OWNER_REVIEW_EVENT`, and unavailable proxied ledger/audit seams
+close with their existing unavailable error. All occur before a new audit event
+or receipt is written. This hardens only data boundaries: it adds no provider,
+network, credential, dispatch, GPU, migration, send, publication, or live-mode
+capability.
+
 ## Negative and edge-case guarantees
 
 - Prompt fields accept only the documented four keys. Empty text, a value over
@@ -408,16 +426,16 @@ GPU, migration, send, publication, or live-mode capability.
   An orphan direct `appendDecision`, altered terminal receipt, mismatched
   maker, candidate, scope, issuance hash, or run hash fails closed; no liked
   artifact is returned from an unproven terminal decision.
-- Accessor-shaped input, policy objects, and candidate data are rejected
-  before their getters can run, so untrusted runtime objects cannot smuggle
-  prompt text or behavior through validation. The same fail-closed rule applies
-  to stored audit records before they are hashed or inspected. Candidate-set
-  arrays, Creative Worker graph-shape arrays, issuance-entry arrays, and the
-  stored audit-record array must each be dense, ordinary own-data arrays with
-  no symbols or extra properties. Sparse arrays and element accessors are
-  rejected before an item is read; this prevents an untrusted host object from
-  executing code or exposing prompt text during issuance, review, or chain
-  verification.
+- Accessor-shaped and proxy-backed input, policy objects, candidate data,
+  ledger methods, and audit values are rejected before their getters or traps
+  can run, so untrusted runtime objects cannot smuggle prompt text or behavior
+  through validation. The same fail-closed rule applies to stored audit records
+  before they are hashed or inspected. Candidate-set arrays, Creative Worker
+  graph-shape arrays, issuance-entry arrays, and the stored audit-record array
+  must each be dense, ordinary own-data arrays with no symbols or extra
+  properties. Sparse arrays, proxy wrappers, and element accessors are rejected
+  before an item is read; this prevents an untrusted host object from executing
+  code or exposing prompt text during issuance, review, or chain verification.
 - Direct adapter, issuance, and owner-review contexts are closed, copied
   data envelopes. Each accepts only its documented envelope or the complete
   shared `ConnectorRunContext`; arbitrary extra fields, accessor fields,
@@ -433,16 +451,16 @@ GPU, migration, send, publication, or live-mode capability.
   copied before it can set a candidate, issuance, or review timestamp.
   Ledger operations are resolved only from data-method descriptors (including
   ordinary class methods, but never intrinsic `Object`/`Function` prototypes);
-  accessor-backed `appendIssuance`, `assertIssued`, and `appendDecision`
-  capabilities are never invoked. Ledger response hashes must likewise be a
-  closed `{ hash }` envelope. This keeps host integration seams fail-closed
-  without adding an HTTP route, credential, or dispatch capability.
+  accessor-backed or proxy-backed `appendIssuance`, `assertIssued`, and
+  `appendDecision` capabilities are never invoked. Ledger response hashes must
+  likewise be a closed `{ hash }` envelope. This keeps host integration seams
+  fail-closed without adding an HTTP route, credential, or dispatch capability.
 - The in-memory audit log used by the ledger test seams follows the same rule:
   `append` must be a data-method, its mutable `entries` test array must be an
   own data property, and an append response must be a closed `{ hash }`
-  envelope. Accessor-backed audit capabilities, entries, or hash responses are
-  rejected without evaluating their getters; this test-only seam cannot become
-  an alternate dispatch or persistence path.
+  envelope. Accessor-backed or proxy-backed audit capabilities, entries, or
+  hash responses are rejected without evaluating their getters or traps; this
+  test-only seam cannot become an alternate dispatch or persistence path.
 - Candidate-issuance and terminal-review event objects are copied immediately
   after strict validation and before any awaited transaction or audit call.
   Receipt lookup performs the same validation-and-copy operation for its

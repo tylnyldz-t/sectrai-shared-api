@@ -365,13 +365,14 @@ function closedImageTtiConfig(value: unknown): Readonly<ClosedSyntheticImageTtiC
  */
 function dataMethod(value: unknown, name: string): ((...args: unknown[]) => unknown) | null {
   try {
-    if (!value || (typeof value !== 'object' && typeof value !== 'function')) return null
+    if (!value || (typeof value !== 'object' && typeof value !== 'function') || proxyBacked(value)) return null
     let target: object | null = value
     const visited = new Set<object>()
     while (target && target !== Object.prototype && target !== Function.prototype && !visited.has(target)) {
+      if (proxyBacked(target)) return null
       visited.add(target)
       const descriptor = Object.getOwnPropertyDescriptor(target, name)
-      if (descriptor) return !descriptor.get && !descriptor.set && typeof descriptor.value === 'function' ? descriptor.value as (...args: unknown[]) => unknown : null
+      if (descriptor) return !descriptor.get && !descriptor.set && typeof descriptor.value === 'function' && !proxyBacked(descriptor.value) ? descriptor.value as (...args: unknown[]) => unknown : null
       target = Object.getPrototypeOf(target)
     }
     return null

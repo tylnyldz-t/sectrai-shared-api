@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { GCL_AUDIT_MODULE_ID, hashAuditEvent, InMemoryHashChainAuditLog, PrismaHashChainAuditLog } from '../src/gcl/audit.js'
+import { GCL_AUDIT_MODULE_ID, hashAuditEvent, InMemoryHashChainAuditLog, PrismaHashChainAuditLog, verifyAuditChain } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, FamilySafetyError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
 import { LIVE_DISABLED, SyntheticImageTtiConnector, imageCandidateFingerprint, imageCandidateSetDigest, issueSyntheticImageCandidates, ownerLikeSyntheticImage, ownerRejectSyntheticImage, syntheticImageTtiConnectorFromEnvironment } from '../src/gcl/image.js'
 import { GCL_IMAGE_CANDIDATE_MODULE_ID, InMemoryImageCandidateLedger, PrismaImageCandidateLedger } from '../src/gcl/image-candidate-ledger.js'
@@ -1082,6 +1082,65 @@ test('D10 rejects proxy-backed family-safety boundaries before a trap, policy ca
   assert.equal(assessmentTraps, 0)
   assert.equal(assessmentAudit.entries.length, 0)
   assert.equal(assessmentQuota.requests.length, 0)
+})
+
+test('D11 rejects proxy-backed ledger and audit seams before descriptor traps or writes', async () => {
+  const trappingObject = (counter: { value: number }) => new Proxy({}, {
+    getPrototypeOf: (target) => { counter.value += 1; return Reflect.getPrototypeOf(target) },
+    ownKeys: (target) => { counter.value += 1; return Reflect.ownKeys(target) },
+    getOwnPropertyDescriptor: (target, property) => { counter.value += 1; return Reflect.getOwnPropertyDescriptor(target, property) },
+  })
+
+  const directAudit = new InMemoryHashChainAuditLog()
+  const directCandidates = new InMemoryImageCandidateLedger(directAudit)
+  const issuanceTraps = { value: 0 }
+  await assert.rejects(() => directCandidates.appendIssuance(trappingObject(issuanceTraps) as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
+  assert.equal(issuanceTraps.value, 0)
+  assert.equal(directAudit.entries.length, 0)
+
+  const directReviews = new InMemoryImageOwnerReviewLedger(directAudit)
+  const decisionTraps = { value: 0 }
+  await assert.rejects(() => directReviews.appendDecision(trappingObject(decisionTraps) as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_OWNER_REVIEW_EVENT')
+  assert.equal(decisionTraps.value, 0)
+  assert.equal(directAudit.entries.length, 0)
+
+  const recordTraps = { value: 0 }
+  const proxiedRecords = new Proxy([], {
+    getPrototypeOf: (target) => { recordTraps.value += 1; return Reflect.getPrototypeOf(target) },
+    ownKeys: (target) => { recordTraps.value += 1; return Reflect.ownKeys(target) },
+    getOwnPropertyDescriptor: (target, property) => { recordTraps.value += 1; return Reflect.getOwnPropertyDescriptor(target, property) },
+  })
+  assert.throws(() => verifyAuditChain(proxiedRecords), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(recordTraps.value, 0)
+
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, quota, now)
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  const candidateLedger = new InMemoryImageCandidateLedger(audit)
+  await issueSyntheticImageCandidates(result, candidateLedger, context)
+  const writesBefore = audit.entries.length
+
+  const reviewLedgerTraps = { value: 0 }
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'independent-owner@example.test', trappingObject(reviewLedgerTraps) as never, candidateLedger, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
+  assert.equal(reviewLedgerTraps.value, 0)
+  assert.equal(audit.entries.length, writesBefore)
+
+  const candidateLedgerTraps = { value: 0 }
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'independent-owner@example.test', new InMemoryImageOwnerReviewLedger(audit), trappingObject(candidateLedgerTraps) as never, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
+  assert.equal(candidateLedgerTraps.value, 0)
+  assert.equal(audit.entries.length, writesBefore)
+
+  const auditSeamTraps = { value: 0 }
+  const proxiedAudit = new Proxy(audit, {
+    getPrototypeOf: (target) => { auditSeamTraps.value += 1; return Reflect.getPrototypeOf(target) },
+    getOwnPropertyDescriptor: (target, property) => { auditSeamTraps.value += 1; return Reflect.getOwnPropertyDescriptor(target, property) },
+  })
+  await assert.rejects(() => issueSyntheticImageCandidates(result, new InMemoryImageCandidateLedger(proxiedAudit), context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
+  assert.equal(auditSeamTraps.value, 0)
+  assert.equal(audit.entries.length, writesBefore)
 })
 
 test('D2 synthetic outputs are immutable review snapshots before issuance', async () => {

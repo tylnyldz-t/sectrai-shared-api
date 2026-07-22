@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { types as nodeUtilTypes } from 'node:util'
 import { ConnectorUnavailableError } from './errors.js'
 import type { GclPersistence } from './persistence.js'
 import type { GclRecordTransaction } from './persistence.js'
@@ -18,6 +19,14 @@ const AUDIT_EVENT_TYPES = new Set<ConnectorAuditEvent['type']>([
 const AUDIT_EVENT_KEYS = ['type', 'connectorId', 'product', 'workspaceId', 'actor', 'correlationId', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'] as const
 const MAX_AUDIT_SCOPES = 16
 
+/**
+ * Stored audit data and test seams are data-only. Reject a Node-detectable
+ * Proxy before reflection so its traps cannot become an alternate boundary.
+ */
+function proxyBacked(value: object): boolean {
+  try { return nodeUtilTypes.isProxy(value) } catch { return true }
+}
+
 export type AuditRecordValue = {
   event: ConnectorAuditEvent
   previousHash: string | null
@@ -32,7 +41,8 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 /** Reject accessors, symbols, class instances, and arrays before reading event fields. */
 function plainRecord(value: unknown): Record<string, unknown> | null {
   try {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
+    if (!value || typeof value !== 'object' || Array.isArray(value) || proxyBacked(value)) return null
+    if (Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
     const descriptors = Object.getOwnPropertyDescriptors(value)
     if (Object.values(descriptors).some((descriptor) => descriptor.get || descriptor.set)) return null
     return value as Record<string, unknown>
@@ -42,7 +52,8 @@ function plainRecord(value: unknown): Record<string, unknown> | null {
 /** Copy only dense own-data arrays, so a stored record list cannot run a getter. */
 function plainArray(value: unknown): unknown[] | null {
   try {
-    if (!Array.isArray(value) || (Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
+    if (!Array.isArray(value) || proxyBacked(value)) return null
+    if ((Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
     const descriptors = Object.getOwnPropertyDescriptors(value)
     const length = Object.getOwnPropertyDescriptor(value, 'length')?.value
     if (!Number.isSafeInteger(length) || length < 0 || Object.keys(descriptors).length !== length + 1) return null
@@ -59,7 +70,8 @@ function plainArray(value: unknown): unknown[] | null {
 /** Reject sparse, accessor-bearing, or extra-property scope arrays without reading their elements. */
 function scopes(value: unknown): string[] | null {
   try {
-    if (!Array.isArray(value) || (Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
+    if (!Array.isArray(value) || proxyBacked(value)) return null
+    if ((Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
     const descriptors = Object.getOwnPropertyDescriptors(value)
     const length = Object.getOwnPropertyDescriptor(value, 'length')?.value
     if (!Number.isSafeInteger(length) || length < 1 || length > MAX_AUDIT_SCOPES || Object.keys(descriptors).length !== length + 1) return null
@@ -114,7 +126,8 @@ function normalize(value: unknown): unknown {
   }
   if (Array.isArray(value)) return normalizeArray(value)
   try {
-    if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
+    if (!value || typeof value !== 'object' || proxyBacked(value)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
+    if (Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
     const descriptors = Object.getOwnPropertyDescriptors(value)
     if (Object.values(descriptors).some((descriptor) => descriptor.get || descriptor.set)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
     return Object.fromEntries(Object.entries(descriptors).sort(([left], [right]) => left.localeCompare(right)).map(([key, descriptor]) => [key, normalize(descriptor.value)]))

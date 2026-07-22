@@ -86,6 +86,13 @@ policy seam from disguising behavior as ordinary data; rejection still occurs
 before audit or quota reservation, and output remains local SVG-only,
 `LIVE_DISABLED`, owner-only, and publication-blocked.
 
+D11 extends that proxy-free boundary through direct candidate issuance,
+terminal-review, ledger-method, test-audit, and stored-audit-record seams. A
+proxy cannot run descriptor or method traps while a receipt or SHA-256 lineage
+is being checked; it is rejected before a new audit event or receipt is
+written. The module remains synthetic-only, `LIVE_DISABLED`, and publication
+blocked.
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:

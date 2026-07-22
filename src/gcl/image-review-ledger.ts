@@ -1,4 +1,5 @@
 import { appendAuditEvent, GCL_AUDIT_MODULE_ID, verifyAuditChain } from './audit.js'
+import { types as nodeUtilTypes } from 'node:util'
 import { ConnectorInputError, ConnectorUnavailableError } from './errors.js'
 import { imageCandidateFingerprint } from './image.js'
 import type { GclPersistence } from './persistence.js'
@@ -11,6 +12,11 @@ const IDENTIFIER_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 const CANDIDATE_ID_PATTERN = /^synthetic-image-[a-f0-9]{20}$/
 const HASH_PATTERN = /^[a-f0-9]{64}$/
 const IMAGE_SCOPE = 'image:generate'
+
+/** Reject proxy-backed persistence/test values before descriptor inspection. */
+function proxyBacked(value: object): boolean {
+  try { return nodeUtilTypes.isProxy(value) } catch { return true }
+}
 
 export type ImageOwnerReviewDecisionEvent = ConnectorAuditEvent & {
   type: 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected'
@@ -59,7 +65,7 @@ function exactKeys(value: Record<string, unknown>, keys: readonly string[]): boo
 /** Reject accessors, symbols, arrays, and non-plain objects before reading values. */
 function plainRecord(value: unknown): Record<string, unknown> | null {
   try {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    if (!value || typeof value !== 'object' || Array.isArray(value) || proxyBacked(value)) return null
     const prototype = Object.getPrototypeOf(value)
     if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length > 0) return null
     const descriptors = Object.getOwnPropertyDescriptors(value)
@@ -71,7 +77,8 @@ function plainRecord(value: unknown): Record<string, unknown> | null {
 /** Reject sparse, accessor-bearing, or extended scope arrays before reading a scope. */
 function plainArray(value: unknown): unknown[] | null {
   try {
-    if (!Array.isArray(value) || (Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
+    if (!Array.isArray(value) || proxyBacked(value)) return null
+    if ((Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
     const descriptors = Object.getOwnPropertyDescriptors(value)
     const length = Object.getOwnPropertyDescriptor(value, 'length')?.value
     if (!Number.isSafeInteger(length) || length < 0 || Object.keys(descriptors).length !== length + 1) return null
@@ -88,13 +95,14 @@ function plainArray(value: unknown): unknown[] | null {
 /** Resolve the test audit append capability without invoking an accessor. */
 function dataMethod(value: unknown, name: string): ((...args: unknown[]) => unknown) | null {
   try {
-    if (!value || (typeof value !== 'object' && typeof value !== 'function')) return null
+    if (!value || (typeof value !== 'object' && typeof value !== 'function') || proxyBacked(value)) return null
     let target: object | null = value
     const visited = new Set<object>()
     while (target && target !== Object.prototype && target !== Function.prototype && !visited.has(target)) {
+      if (proxyBacked(target)) return null
       visited.add(target)
       const descriptor = Object.getOwnPropertyDescriptor(target, name)
-      if (descriptor) return !descriptor.get && !descriptor.set && typeof descriptor.value === 'function' ? descriptor.value as (...args: unknown[]) => unknown : null
+      if (descriptor) return !descriptor.get && !descriptor.set && typeof descriptor.value === 'function' && !proxyBacked(descriptor.value) ? descriptor.value as (...args: unknown[]) => unknown : null
       target = Object.getPrototypeOf(target)
     }
     return null
@@ -104,9 +112,11 @@ function dataMethod(value: unknown, name: string): ((...args: unknown[]) => unkn
 /** The in-memory seam exposes test entries as an own data property only. */
 function auditEntries(value: unknown): readonly unknown[] | null {
   try {
-    if (!value || (typeof value !== 'object' && typeof value !== 'function')) return null
+    if (!value || (typeof value !== 'object' && typeof value !== 'function') || proxyBacked(value)) return null
     const descriptor = Object.getOwnPropertyDescriptor(value, 'entries')
-    return descriptor && !descriptor.get && !descriptor.set && Array.isArray(descriptor.value) ? descriptor.value : null
+    return descriptor && !descriptor.get && !descriptor.set && Array.isArray(descriptor.value) && !proxyBacked(descriptor.value)
+      ? descriptor.value
+      : null
   } catch { return null }
 }
 
