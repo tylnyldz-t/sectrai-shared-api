@@ -212,6 +212,27 @@ function plainRecord(value: unknown): Record<string, unknown> | null {
   } catch { return null }
 }
 
+/**
+ * Copy only a dense, ordinary array made entirely of own data properties.
+ * Candidate sets and graph shapes arrive from an untrusted host boundary, so
+ * indexing them directly would execute an accessor before validation.
+ */
+function plainArray(value: unknown): unknown[] | null {
+  try {
+    if (!Array.isArray(value) || (Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
+    const descriptors = Object.getOwnPropertyDescriptors(value)
+    const length = Object.getOwnPropertyDescriptor(value, 'length')?.value
+    if (!Number.isSafeInteger(length) || length < 0 || Object.keys(descriptors).length !== length + 1) return null
+    const items: unknown[] = []
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = descriptors[String(index)]
+      if (!descriptor || descriptor.get || descriptor.set) return null
+      items.push(descriptor.value)
+    }
+    return items
+  } catch { return null }
+}
+
 /** Like plainRecord, but permits a sealed policy instance with own data fields. */
 function ownDataRecord(value: unknown): Record<string, unknown> | null {
   try {
@@ -250,7 +271,11 @@ function canonicalJson(value: unknown): string {
     if (!Number.isFinite(value)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
     return JSON.stringify(value)
   }
-  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(',')}]`
+  if (Array.isArray(value)) {
+    const items = plainArray(value)
+    if (!items) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+    return `[${items.map(canonicalJson).join(',')}]`
+  }
   const record = plainRecord(value)
   if (!record) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   return `{${Object.keys(record).sort().map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`).join(',')}}`
@@ -265,7 +290,13 @@ export function imageCandidateFingerprint(value: unknown): string { return diges
  * it never contains the prompt, preview bytes, credential, or endpoint.
  */
 export function imageCandidateSetDigest(candidates: readonly SyntheticImageCandidate[]): string {
-  const entries = candidates.map((candidate) => ({ candidateId: candidate.candidateId, fingerprint: imageCandidateFingerprint(candidate) }))
+  const candidateValues = plainArray(candidates)
+  if (!candidateValues) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+  const entries = candidateValues.map((candidate) => {
+    const value = plainRecord(candidate)
+    if (!value || typeof value.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(value.candidateId)) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+    return { candidateId: value.candidateId, fingerprint: imageCandidateFingerprint(candidate) }
+  })
   return imageCandidateFingerprint(entries.sort((left, right) => left.candidateId.localeCompare(right.candidateId)))
 }
 
@@ -443,7 +474,8 @@ function assertSyntheticCandidate(candidate: unknown): asserts candidate is Synt
   const planKeys = value.negativePromptDigest === undefined
     ? ['schema', 'provider', 'type', 'modelFamily', 'checkpoint', 'graphShape', 'promptDigest', 'dispatch']
     : ['schema', 'provider', 'type', 'modelFamily', 'checkpoint', 'graphShape', 'promptDigest', 'negativePromptDigest', 'dispatch']
-  if (!hasExactKeys(plan, planKeys) || plan.schema !== 'creative-job-v1' || plan.provider !== 'local-comfyui' || plan.type !== 'image' || plan.modelFamily !== 'sdxl' || plan.checkpoint !== 'UNRESOLVED_SYNTHETIC_ONLY' || plan.promptDigest !== value.promptDigest || plan.negativePromptDigest !== value.negativePromptDigest || !Array.isArray(plan.graphShape) || plan.graphShape.length !== COMFY_SDXL_GRAPH_SHAPE.length || plan.graphShape.some((node, index) => node !== COMFY_SDXL_GRAPH_SHAPE[index])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+  const graphShape = plainArray(plan.graphShape)
+  if (!hasExactKeys(plan, planKeys) || plan.schema !== 'creative-job-v1' || plan.provider !== 'local-comfyui' || plan.type !== 'image' || plan.modelFamily !== 'sdxl' || plan.checkpoint !== 'UNRESOLVED_SYNTHETIC_ONLY' || plan.promptDigest !== value.promptDigest || plan.negativePromptDigest !== value.negativePromptDigest || !graphShape || graphShape.length !== COMFY_SDXL_GRAPH_SHAPE.length || graphShape.some((node, index) => node !== COMFY_SDXL_GRAPH_SHAPE[index])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   const dispatch = plainRecord(plan.dispatch)
   if (!dispatch || !hasExactKeys(dispatch, ['performed', 'gate', 'network'])) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   if (dispatch.performed !== false || dispatch.gate !== LIVE_DISABLED || dispatch.network !== 'not-attempted') throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
@@ -469,15 +501,16 @@ export async function issueSyntheticImageCandidates(runResult: ConnectorResult<T
   const result = plainRecord(runResult)
   const data = result ? plainRecord(result.data) : null
   const provenance = result ? plainRecord(result.provenance) : null
-  if (!data || data.mode !== LIVE_DISABLED || data.nextAction !== 'INDEPENDENT_OWNER_LIKE_REQUIRED' || data.automaticPublication !== false || !Array.isArray(data.candidates) || !provenance || provenance.connectorId !== IMAGE_TTI_CONNECTOR_ID || provenance.source !== 'synthetic-image-tti' || typeof provenance.auditHash !== 'string' || !DIGEST_PATTERN.test(provenance.auditHash)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
+  const candidateValues = data ? plainArray(data.candidates) : null
+  if (!data || data.mode !== LIVE_DISABLED || data.nextAction !== 'INDEPENDENT_OWNER_LIKE_REQUIRED' || data.automaticPublication !== false || !candidateValues || !provenance || provenance.connectorId !== IMAGE_TTI_CONNECTOR_ID || provenance.source !== 'synthetic-image-tti' || typeof provenance.auditHash !== 'string' || !DIGEST_PATTERN.test(provenance.auditHash)) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
   if (!candidateLedger || typeof candidateLedger !== 'object' || typeof candidateLedger.appendIssuance !== 'function') throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
   if (!context || typeof context !== 'object' || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
   const occurredAt = currentDate(context.now, 'INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
-  if (data.candidates.length < 1 || data.candidates.length > 32) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
+  if (candidateValues.length < 1 || candidateValues.length > 32) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
 
   const candidates: SyntheticImageCandidate[] = []
-  for (let index = 0; index < data.candidates.length; index += 1) {
-    const candidate = data.candidates[index]
+  for (let index = 0; index < candidateValues.length; index += 1) {
+    const candidate = candidateValues[index]
     assertSyntheticCandidate(candidate)
     assertReviewNotExpired(candidate, occurredAt)
     if (candidate.candidateIndex !== index || candidate.requestedBy !== context.actor || candidate.scope.product !== context.product || candidate.scope.workspaceId !== context.workspaceId || candidate.scope.correlationId !== context.correlationId) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')

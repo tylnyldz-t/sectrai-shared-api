@@ -39,6 +39,23 @@ function plainRecord(value: unknown): Record<string, unknown> | null {
   } catch { return null }
 }
 
+/** Copy only dense own-data arrays, so a stored record list cannot run a getter. */
+function plainArray(value: unknown): unknown[] | null {
+  try {
+    if (!Array.isArray(value) || (Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
+    const descriptors = Object.getOwnPropertyDescriptors(value)
+    const length = Object.getOwnPropertyDescriptor(value, 'length')?.value
+    if (!Number.isSafeInteger(length) || length < 0 || Object.keys(descriptors).length !== length + 1) return null
+    const items: unknown[] = []
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = descriptors[String(index)]
+      if (!descriptor || descriptor.get || descriptor.set) return null
+      items.push(descriptor.value)
+    }
+    return items
+  } catch { return null }
+}
+
 /** Reject sparse, accessor-bearing, or extra-property scope arrays without reading their elements. */
 function scopes(value: unknown): string[] | null {
   try {
@@ -65,17 +82,9 @@ function canonicalTimestamp(value: unknown): number | null {
 /** Normalize arrays from descriptors so nested audit detail cannot execute an accessor. */
 function normalizeArray(value: unknown[]): unknown[] {
   try {
-    if ((Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
-    const descriptors = Object.getOwnPropertyDescriptors(value)
-    const length = Object.getOwnPropertyDescriptor(value, 'length')?.value
-    if (!Number.isSafeInteger(length) || length < 0 || Object.keys(descriptors).length !== length + 1) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
-    const items: unknown[] = []
-    for (let index = 0; index < length; index += 1) {
-      const descriptor = descriptors[String(index)]
-      if (!descriptor || descriptor.get || descriptor.set) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
-      items.push(normalize(descriptor.value))
-    }
-    return items
+    const items = plainArray(value)
+    if (!items) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
+    return items.map(normalize)
   } catch (error) {
     if (error instanceof ConnectorUnavailableError) throw error
     throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
@@ -135,10 +144,12 @@ export function auditRecordValue(value: unknown): AuditRecordValue | null {
  * queries below. A valid standalone hash with a broken predecessor is invalid.
  */
 export function verifyAuditChain(records: readonly unknown[]): AuditRecordValue[] {
+  const orderedRecords = plainArray(records)
+  if (!orderedRecords) throw new ConnectorUnavailableError('GCL_AUDIT_CHAIN_INVALID')
   const verified: AuditRecordValue[] = []
   let previousHash: string | null = null
   let previousOccurredAt: number | null = null
-  for (const value of records) {
+  for (const value of orderedRecords) {
     const record = auditRecordValue(value)
     if (!record || record.previousHash !== previousHash) throw new ConnectorUnavailableError('GCL_AUDIT_CHAIN_INVALID')
     const occurredAt = assertAuditEvent(record.event)

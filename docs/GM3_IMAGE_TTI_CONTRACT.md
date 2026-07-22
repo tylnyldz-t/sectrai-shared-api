@@ -171,7 +171,13 @@ decision and must be implemented behind its own bounded approval path.
 - Accessor-shaped input, policy objects, and candidate data are rejected
   before their getters can run, so untrusted runtime objects cannot smuggle
   prompt text or behavior through validation. The same fail-closed rule applies
-  to stored audit records before they are hashed or inspected.
+  to stored audit records before they are hashed or inspected. Candidate-set
+  arrays, Creative Worker graph-shape arrays, issuance-entry arrays, and the
+  stored audit-record array must each be dense, ordinary own-data arrays with
+  no symbols or extra properties. Sparse arrays and element accessors are
+  rejected before an item is read; this prevents an untrusted host object from
+  executing code or exposing prompt text during issuance, review, or chain
+  verification.
 - `creativeWorkerPlan.dispatch` remains exactly
   `{ performed: false, gate: "LIVE_DISABLED", network: "not-attempted" }`.
   This package does not invoke Creative Worker, ComfyUI, Docker, loopback, a

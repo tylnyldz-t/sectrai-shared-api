@@ -74,6 +74,23 @@ function plainRecord(value: unknown): Record<string, unknown> | null {
   } catch { return null }
 }
 
+/** Reject sparse, accessor-bearing, or extended arrays before entry inspection. */
+function plainArray(value: unknown): unknown[] | null {
+  try {
+    if (!Array.isArray(value) || (Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
+    const descriptors = Object.getOwnPropertyDescriptors(value)
+    const length = Object.getOwnPropertyDescriptor(value, 'length')?.value
+    if (!Number.isSafeInteger(length) || length < 0 || Object.keys(descriptors).length !== length + 1) return null
+    const items: unknown[] = []
+    for (let index = 0; index < length; index += 1) {
+      const descriptor = descriptors[String(index)]
+      if (!descriptor || descriptor.get || descriptor.set) return null
+      items.push(descriptor.value)
+    }
+    return items
+  } catch { return null }
+}
+
 function safeIdentifier(value: unknown): value is string { return typeof value === 'string' && IDENTIFIER_PATTERN.test(value) }
 function safeHash(value: unknown): value is string { return typeof value === 'string' && HASH_PATTERN.test(value) }
 function canonicalTimestamp(value: unknown): value is string {
@@ -91,8 +108,9 @@ function candidateSetDigest(entries: readonly ImageCandidateIssuanceEntry[]): st
 }
 
 function issuanceEntries(value: unknown): ImageCandidateIssuanceEntry[] | null {
-  if (!Array.isArray(value) || value.length < 1 || value.length > MAX_SYNTHETIC_IMAGE_CANDIDATES || value.some((entry) => !plainRecord(entry))) return null
-  const entries = value.map((entry) => entry as Record<string, unknown>)
+  const values = plainArray(value)
+  if (!values || values.length < 1 || values.length > MAX_SYNTHETIC_IMAGE_CANDIDATES || values.some((entry) => !plainRecord(entry))) return null
+  const entries = values.map((entry) => entry as Record<string, unknown>)
   if (entries.some((entry) => !exactKeys(entry, ['candidateId', 'fingerprint']) || typeof entry.candidateId !== 'string' || !CANDIDATE_ID_PATTERN.test(entry.candidateId) || !safeHash(entry.fingerprint))) return null
   const candidateIds = entries.map((entry) => entry.candidateId as string)
   if (new Set(candidateIds).size !== candidateIds.length) return null

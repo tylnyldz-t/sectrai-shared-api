@@ -368,6 +368,53 @@ test('accessor-shaped input and family-safety hooks fail closed without executin
   assert.equal(filterGetterRead, false)
 })
 
+test('candidate issuance rejects accessor-shaped candidate sets before it reads an untrusted array item', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
+  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  let getterRead = false
+  const candidates: unknown[] = []
+  Object.defineProperty(candidates, '0', { enumerable: true, get: () => { getterRead = true; return result.data.candidates[0] } })
+  const forged = structuredClone(result)
+  forged.data.candidates = candidates as never
+  await assert.rejects(() => issueSyntheticImageCandidates(forged, new InMemoryImageCandidateLedger(audit), context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
+  assert.equal(getterRead, false)
+  assert.equal(audit.entries.length, 2)
+})
+
+test('the candidate ledger rejects accessor-shaped issuance entries before it reads an entry', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
+  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+  let getterRead = false
+  const entries: unknown[] = []
+  Object.defineProperty(entries, '0', { enumerable: true, get: () => { getterRead = true; return { candidateId: 'synthetic-image-00000000000000000000', fingerprint: '0'.repeat(64) } } })
+  entries.length = context.requestedItems
+  const event = {
+    type: 'connector.artifact.candidates_issued' as const,
+    connectorId: 'image-tti', product: context.product, workspaceId: context.workspaceId, actor: context.actor, correlationId: context.correlationId,
+    scopes: ['image:generate'], costCapCents: 0, requestedItems: context.requestedItems, occurredAt: now().toISOString(),
+    detail: { candidateSetDigest: imageCandidateSetDigest(result.data.candidates), candidateCount: context.requestedItems, candidates: entries, publication: 'blocked' as const, runAuditHash: result.provenance.auditHash },
+  }
+  await assert.rejects(() => new InMemoryImageCandidateLedger(audit).appendIssuance(event as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
+  assert.equal(getterRead, false)
+  assert.equal(audit.entries.length, 2)
+})
+
+test('owner review rejects an accessor-shaped Creative Worker graph without reading it', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const reviews = new InMemoryImageOwnerReviewLedger(audit)
+  const { candidate, candidates } = await governedIssuedRun(audit)
+  const forged = structuredClone(candidate)
+  let getterRead = false
+  const graphShape: unknown[] = []
+  Object.defineProperty(graphShape, '0', { enumerable: true, get: () => { getterRead = true; return 'PRIVATE-OWNER-PROMPT-ONLY' } })
+  forged.creativeWorkerPlan.graphShape = graphShape as never
+  await assert.rejects(() => ownerLikeSyntheticImage(forged, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
+  assert.equal(getterRead, false)
+  assert.equal(audit.entries.length, 3)
+})
+
 test('owner review rejects a malformed candidate-ledger proof before adding its audit event', async () => {
   const result = await configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, context)
   const candidate = result.data.candidates[0]
@@ -488,6 +535,20 @@ test('accessor-shaped stored audit records fail closed without executing their g
   await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
   assert.equal(getterRead, false)
   assert.equal(audit.entries.length, 4)
+})
+
+test('an accessor-shaped stored audit record array fails closed without reading its item', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const reviews = new InMemoryImageOwnerReviewLedger(audit)
+  const { candidate, candidates } = await governedIssuedRun(audit)
+  const first = audit.entries[0]
+  assert.ok(first)
+  let getterRead = false
+  delete audit.entries[0]
+  Object.defineProperty(audit.entries, '0', { enumerable: true, get: () => { getterRead = true; return first } })
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', reviews, candidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(getterRead, false)
+  assert.equal(audit.entries.length, 3)
 })
 
 test('durable owner-review ledger commits one redacted receipt with its audit event and rolls back invalid state', async () => {
