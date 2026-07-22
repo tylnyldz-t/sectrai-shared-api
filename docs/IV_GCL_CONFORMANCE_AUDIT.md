@@ -785,3 +785,80 @@ output; no JARVIS/JNC start; and no synthetic evidence as deployment or
 live-enable authority. D9 adds no network, provider, credential, real-world
 input, device connection, delivery, publication, production write, `main`
 write, or production mutation.
+
+## D10 — next committed connector package
+
+D10 pins the first immutable successor after D9 for every connector with one:
+RA OCR `1b50843`, RA image `f2f2c10`, RA 3D/game `46a631e`, RA market
+`a0142f6`, RFID `d942746`, translation `6f34b55`, language education
+`e9baa02`, and camera `3f5202b`. RA voice still has no successor after its D1
+snapshot. Every D10 source is read only through
+`git show <pinned-commit>:<path>` and checked against its recorded Git blob
+ID; no mutable sibling worktree is an audit input.
+
+The audit separately pins the changed translation hash-audit helper and the
+changed language-education type boundary. D10 also pins the changed 3D/game
+governance runner even though its public connector stays unchanged. The image
+and RFID successors are synthetic unit-test-only packages: their D9 connector
+and runner blobs are intentionally re-pinned at the successor revisions
+rather than described as unobserved source changes.
+
+Run the complete immutable audit with:
+
+```bash
+npm run test:conformance
+```
+
+| Connector | D10 source-only change/evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D10 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | v10 review packets bind well-formed Unicode/UTF-8 semantics; unpaired surrogate code units fail before reservation or review audit | `requested` only | Pass | Nonconformant |
+| RA image | Test-only successor adds a nested accessor audit-envelope probe that fails without evaluating the getter; connector and runner remain D9-identical | `requested` only | Pass | Nonconformant |
+| RA 3D/game | Registry admission copies connector metadata/method references and freezes a canonical submitted input before governance/result validation | `requested` only | Pass | Nonconformant |
+| RA market | Owner-review context copies descriptor-safe scopes and admits only a native finite clock result before reconstructing a no-action receipt | `requested` only | Pass | Nonconformant |
+| RFID | Test-only successor expands fixed PSMS-SIM actuation-boundary fixtures; gates, dispatch, handoff, enforcement, delivery, and autonomous control remain forbidden | `requested`, `failed` | Pass | Conformant |
+| Translation | Audit rows bind each connector to its one exact run scope and artifact decisions to their zero-cost approval scope, rejecting semantic hash-valid forgeries | `requested`, `failed` | Pass | Conformant |
+| Language education | Adds a portfolio fixture-reference proposal only; learner work, feedback, evaluation, placement, and profiling remain outside the contract | `requested`, `failed` | Pass | Conformant |
+| Camera | Direct execution context and provenance clock now reject hidden/accessor/Proxy-shaped context and forged or invalid clock values before a fixture result | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` is still limited to the pinned synthetic IV governance envelope.
+It does not authorize any provider, credential, real OCR/media/RFID/camera
+input, device connection, database integration, JARVIS/JNC launch, market
+operation, sending, publication, handoff, production write, migration, or
+live enablement.
+
+### D10 negative and edge evidence
+
+- The source scanner now rejects computed CommonJS recovery such as
+  `module['constructor']['_load'](...)`, including its optional-chain form.
+  This closes a loader path that was not a direct `module.require` spelling.
+- A parsed TypeScript `Function` **type** reference is treated as erased type
+  syntax only. Every value reference, alias, constructor, or invocation of
+  `Function` still fails, so D10's typed 3D registry helper does not weaken the
+  no-evaluation boundary.
+- The audit keeps the existing no-egress, no-provider-endpoint, no-credential,
+  no-subprocess, no-auto-publish, import-closure, and strict
+  `LIVE_DISABLED` checks across every D10 local GCL closure. The two
+  `*_LIVE_ENABLED` surfaces (market and camera) continue to hard-deny a true
+  live flag.
+- Owner denial is still required before preflight, requested audit, and quota.
+  The quota classification remains intentionally conservative: OCR, image,
+  3D/game, and market reserve quota before the protected failure lifecycle;
+  RFID, translation, language education, and camera reserve within it and
+  link the failed event to `requestedAuditHash`.
+
+### D10 test evidence and ADOS boundary
+
+`npm run test:conformance` passes the full D1–D10 immutable pin, local-closure,
+disabled-mode, owner-ordering, quota-classification, and negative-source test
+suite. It uses only local Git object reads and in-process source parsing; it
+does not import a target connector, load an environment file, contact a
+provider, open a socket, use a credential, connect a device, invoke a
+database or migration, or send/publish/handoff anything.
+
+All ten ADOS rules remain enforced: no product data-plane join; default-deny
+and `LIVE_DISABLED`; immutable source/blob pins; no inferred owner decision;
+maker–checker where applicable; audit-chain gaps stated rather than filled;
+no migration; proposal-only/no-action output; no JARVIS/JNC start; and no
+synthetic evidence as deployment or live-enable authority. D10 adds no
+network, provider, credential, real-world input, delivery, `main` write, or
+production mutation.
