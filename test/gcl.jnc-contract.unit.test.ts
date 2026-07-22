@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { hashAuditEvent, InMemoryHashChainAuditLog, verifiedAuditChainHead } from '../src/gcl/audit.js'
-import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError, SyntheticResultIntegrityError, SyntheticReviewIntegrityError } from '../src/gcl/errors.js'
+import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, QuotaError, ScopeError, SyntheticResultIntegrityError, SyntheticReviewIntegrityError } from '../src/gcl/errors.js'
 import { gameEngineConnectorFromEnvironment, SyntheticGameEngineConnector, type GameEngineBuildInput, type GameEngineBuildPlan } from '../src/gcl/game-engine.js'
 import { MAX_GOVERNANCE_COST_CAP_CENTS, MAX_GOVERNANCE_REQUESTED_ITEMS, MAX_GOVERNANCE_SCOPE_COUNT } from '../src/gcl/governance-limits.js'
 import { ContractOnlyJncPilotMapper, JNC_MAXIMUM_GPU_RUNTIME_MINUTES, JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from '../src/gcl/jnc-pilot.js'
 import { ownerGateError } from '../src/gcl/owner-gate.js'
 import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, isCanonicalJsonData, isSyntheticPlanIntegrity, syntheticPlanSha256, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
-import { InMemoryDailyConnectorQuota } from '../src/gcl/quota.js'
+import { dailyQuotaFromEnvironment, InMemoryDailyConnectorQuota, PrismaDailyConnectorQuota } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner, type RunConnectorRequest } from '../src/gcl/registry.js'
 import { syntheticResultReviewBinding } from '../src/gcl/result-boundary.js'
 import { createSyntheticReviewReceipt, verifiesSyntheticReviewReceipt } from '../src/gcl/review-receipt.js'
@@ -1357,6 +1357,107 @@ test('governance reservation ceilings are shared by HTTP, direct GM5/GM6 calls, 
   )
   assert.equal(itemGoverned.audit.entries.length, 0)
   assert.equal(itemGoverned.quota.reservations.length, 0)
+})
+
+test('quota admission locks direct reservation data, applies the shared item ceiling, and detaches timestamps', async () => {
+  const quota = new InMemoryDailyConnectorQuota({ dailyRuns: 4, dailyItems: MAX_GOVERNANCE_REQUESTED_ITEMS + 1 })
+  const occurredAt = fixedNow()
+  const reservation = {
+    product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace', connectorId: 'text-to-3d',
+    requestedItems: MAX_GOVERNANCE_REQUESTED_ITEMS, occurredAt,
+  }
+  await quota.consume(reservation)
+  assert.equal(quota.reservations.length, 1)
+  assert.equal(quota.reservations[0]?.occurredAt.toISOString(), fixedNow().toISOString())
+
+  occurredAt.setUTCFullYear(2040)
+  assert.equal(quota.reservations[0]?.occurredAt.toISOString(), fixedNow().toISOString())
+  quota.reservations[0]?.occurredAt.setUTCFullYear(2041)
+  assert.equal(quota.reservations[0]?.occurredAt.toISOString(), fixedNow().toISOString())
+
+  await assert.rejects(
+    quota.consume({ ...reservation, requestedItems: MAX_GOVERNANCE_REQUESTED_ITEMS + 1 }),
+    (error: unknown) => error instanceof QuotaError && error.message === 'INVALID_CONNECTOR_QUOTA_REQUEST',
+  )
+  await assert.rejects(
+    quota.consume({ ...reservation, occurredAt: new Date('invalid') }),
+    (error: unknown) => error instanceof QuotaError && error.message === 'INVALID_CONNECTOR_QUOTA_REQUEST',
+  )
+  await assert.rejects(
+    quota.consume({ ...reservation, extra: 'not a quota field' } as unknown as Parameters<typeof quota.consume>[0]),
+    (error: unknown) => error instanceof QuotaError && error.message === 'INVALID_CONNECTOR_QUOTA_REQUEST',
+  )
+  assert.equal(quota.reservations.length, 1)
+
+  let accessorReads = 0
+  const accessorReservation: Record<string, unknown> = {
+    product: reservation.product, workspaceId: reservation.workspaceId, connectorId: reservation.connectorId, occurredAt: fixedNow(),
+  }
+  Object.defineProperty(accessorReservation, 'requestedItems', {
+    enumerable: true,
+    get() { accessorReads += 1; return 1 },
+  })
+  await assert.rejects(
+    quota.consume(accessorReservation as Parameters<typeof quota.consume>[0]),
+    (error: unknown) => error instanceof QuotaError && error.message === 'INVALID_CONNECTOR_QUOTA_REQUEST',
+  )
+  assert.equal(accessorReads, 0)
+
+  const proxyTraps = { count: 0 }
+  const proxyReservation = trapCountingProxy({ ...reservation, occurredAt: fixedNow() }, proxyTraps)
+  await assert.rejects(
+    quota.consume(proxyReservation as Parameters<typeof quota.consume>[0]),
+    (error: unknown) => error instanceof QuotaError && error.message === 'INVALID_CONNECTOR_QUOTA_REQUEST',
+  )
+  assert.equal(proxyTraps.count, 0)
+  assert.equal(quota.reservations.length, 1)
+})
+
+test('quota configuration and historic usage fail closed without a new reservation', async () => {
+  let configGetterReads = 0
+  const accessorConfig: Record<string, unknown> = { dailyRuns: 1 }
+  Object.defineProperty(accessorConfig, 'dailyItems', {
+    enumerable: true,
+    get() { configGetterReads += 1; return 1 },
+  })
+  assert.throws(
+    () => new InMemoryDailyConnectorQuota(accessorConfig as { dailyRuns: number; dailyItems: number }),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_QUOTA_INVALID_CONFIG',
+  )
+  assert.equal(configGetterReads, 0)
+
+  const environmentNames = { dailyRuns: 'GCL_TEST_DAILY_RUNS', dailyItems: 'GCL_TEST_DAILY_ITEMS' }
+  assert.deepEqual(
+    dailyQuotaFromEnvironment({ GCL_TEST_DAILY_RUNS: '2', GCL_TEST_DAILY_ITEMS: '3' }, environmentNames),
+    { dailyRuns: 2, dailyItems: 3 },
+  )
+  const nameProxyTraps = { count: 0 }
+  assert.throws(
+    () => dailyQuotaFromEnvironment({ GCL_TEST_DAILY_RUNS: '2', GCL_TEST_DAILY_ITEMS: '3' }, trapCountingProxy(environmentNames, nameProxyTraps)),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_QUOTA_POLICY_NOT_REGISTERED',
+  )
+  assert.equal(nameProxyTraps.count, 0)
+
+  let writes = 0
+  const prisma = {
+    async $transaction<T>(operation: (transaction: unknown) => Promise<T>): Promise<T> {
+      return operation({
+        async $executeRaw() { return 0 },
+        record: {
+          async findMany() {
+            return [{ values: { connectorId: 'text-to-3d', requestedItems: MAX_GOVERNANCE_REQUESTED_ITEMS + 1, occurredAt: fixedNow().toISOString(), state: 'reserved' } }]
+          },
+          async create() { writes += 1 },
+        },
+      })
+    },
+  }
+  const quota = new PrismaDailyConnectorQuota(prisma as never, { dailyRuns: 2, dailyItems: MAX_GOVERNANCE_REQUESTED_ITEMS + 1 })
+  await assert.rejects(
+    quota.consume({ product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace', connectorId: 'text-to-3d', requestedItems: 1, occurredAt: fixedNow() }),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_QUOTA_USAGE_CORRUPT',
+  )
+  assert.equal(writes, 0)
 })
 
 test('failed adapter messages are never copied into the durable audit chain', async () => {

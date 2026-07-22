@@ -41,7 +41,7 @@ type QuotaReservationRequest = {
   occurredAt: Date
 }
 
-type StoredQuotaReservation = QuotaReservationRequest
+type StoredQuotaUsage = Pick<QuotaReservationRequest, 'connectorId' | 'requestedItems' | 'occurredAt'>
 
 function startOfUtcDay(value: Date): Date { return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate())) }
 
@@ -122,7 +122,7 @@ function dailyQuotaEnvironmentNames(value: unknown): DailyQuotaEnvironmentNames 
   return Object.freeze({ dailyRuns: names.dailyRuns, dailyItems: names.dailyItems })
 }
 
-function storedQuotaReservation(value: unknown): StoredQuotaReservation | null {
+function storedQuotaReservation(value: unknown): StoredQuotaUsage | null {
   const record = exactOwnDataRecord(value, ['connectorId', 'requestedItems', 'occurredAt', 'state'])
   if (!record ||
     typeof record.connectorId !== 'string' || !CONNECTOR_PATTERN.test(record.connectorId) ||
@@ -130,9 +130,26 @@ function storedQuotaReservation(value: unknown): StoredQuotaReservation | null {
     !exactIsoTimestamp(record.occurredAt) || record.state !== 'reserved') return null
   const occurredAt = new Date(record.occurredAt)
   return Object.freeze({
-    product: '', workspaceId: '', connectorId: record.connectorId,
-    requestedItems: record.requestedItems, occurredAt,
+    connectorId: record.connectorId, requestedItems: record.requestedItems, occurredAt,
   })
+}
+
+function quotaPolicyMapping(value: unknown): Record<string, unknown> | null {
+  try {
+    if (!value || typeof value !== 'object' || Array.isArray(value) || isProxyValue(value)) return null
+    const prototype = Object.getPrototypeOf(value)
+    if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length > 0) return null
+    const output = Object.create(null) as Record<string, unknown>
+    for (const connectorId of Object.getOwnPropertyNames(value)) {
+      if (!CONNECTOR_PATTERN.test(connectorId)) return null
+      const descriptor = Object.getOwnPropertyDescriptor(value, connectorId)
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return null
+      output[connectorId] = descriptor.value
+    }
+    return Object.keys(output).length > 0 ? output : null
+  } catch {
+    return null
+  }
 }
 
 /** Reservations are deliberately conservative: a failed run remains accounted for. */
@@ -157,7 +174,7 @@ export class PrismaDailyConnectorQuota implements ConnectorQuota {
       const priorReservations = records.map((record) => storedQuotaReservation(record.values))
       if (priorReservations.some((reservation) => !reservation)) throw new ConnectorUnavailableError('CONNECTOR_QUOTA_USAGE_CORRUPT')
       const priorItems = priorReservations
-        .filter((reservation): reservation is StoredQuotaReservation => reservation !== null && reservation.connectorId === safeRequest.connectorId)
+        .filter((reservation): reservation is StoredQuotaUsage => reservation !== null && reservation.connectorId === safeRequest.connectorId)
         .map((reservation) => reservation.requestedItems)
       if (priorItems.length >= this.config.dailyRuns || priorItems.reduce((total, items) => total + items, 0) + safeRequest.requestedItems > this.config.dailyItems) throw new QuotaError()
       await transaction.record.create({
@@ -182,7 +199,8 @@ export function dailyQuotaFromEnvironment(environment: NodeJS.ProcessEnv, names:
   const dailyRuns = environmentPositiveInteger(environment[safeNames.dailyRuns])
   const dailyItems = environmentPositiveInteger(environment[safeNames.dailyItems])
   if (!dailyRuns || !dailyItems) throw new ConnectorUnavailableError('CONNECTOR_QUOTA_NOT_CONFIGURED')
-  return dailyQuotaConfig({ dailyRuns, dailyItems })
+  dailyQuotaConfig({ dailyRuns, dailyItems })
+  return { dailyRuns, dailyItems }
 }
 
 /** Selects a quota policy before any reservation; unknown connector ids fail closed. */
@@ -194,8 +212,8 @@ export class EnvironmentPrismaConnectorQuota implements ConnectorQuota {
     private readonly environment: NodeJS.ProcessEnv,
     namesByConnector: Readonly<Record<string, DailyQuotaEnvironmentNames>>,
   ) {
-    const mapping = exactOwnDataRecord(namesByConnector, Object.getOwnPropertyNames(namesByConnector))
-    if (!mapping || Object.keys(mapping).some((connectorId) => !CONNECTOR_PATTERN.test(connectorId))) {
+    const mapping = quotaPolicyMapping(namesByConnector)
+    if (!mapping) {
       throw new ConnectorUnavailableError('CONNECTOR_QUOTA_POLICY_NOT_REGISTERED')
     }
     const copied = Object.create(null) as Record<string, DailyQuotaEnvironmentNames>
@@ -214,14 +232,14 @@ export class EnvironmentPrismaConnectorQuota implements ConnectorQuota {
 
 /** Test-only deterministic quota. */
 export class InMemoryDailyConnectorQuota implements ConnectorQuota {
-  private readonly entries: StoredQuotaReservation[] = []
+  private readonly entries: QuotaReservationRequest[] = []
   private readonly config: Readonly<DailyQuotaConfig>
 
   constructor(config: DailyQuotaConfig) {
     this.config = dailyQuotaConfig(config)
   }
 
-  get reservations(): readonly StoredQuotaReservation[] {
+  get reservations(): readonly QuotaReservationRequest[] {
     return Object.freeze(this.entries.map((reservation) => Object.freeze({
       ...reservation,
       occurredAt: new Date(reservation.occurredAt.getTime()),

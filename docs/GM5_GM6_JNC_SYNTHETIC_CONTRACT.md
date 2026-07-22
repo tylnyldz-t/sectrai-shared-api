@@ -240,10 +240,10 @@ read a credential, execute a process, write an artifact, or publish anything.
 One GM5/GM6 governed request is bounded to a positive cost cap no greater than
 10,000,000 synthetic cents and no more than 100,000 requested items. The same
 two ceilings are enforced by the HTTP parser, direct governed runner, direct
-GM5/GM6 adapter context, audit append/historic verification, and final
-review-binding helper. A direct/internal caller therefore cannot create an
-audit row, reservation context, or frozen review snapshot with accounting
-values that the public route would reject.
+GM5/GM6 adapter context, quota consumption, audit append/historic
+verification, and final review-binding helper. A direct/internal caller
+therefore cannot create an audit row, quota reservation, or frozen review
+snapshot with accounting values that the public route would reject.
 
 HTTP input reports `INVALID_CONNECTOR_COST_CAP` or
 `INVALID_CONNECTOR_REQUESTED_ITEMS`. Direct runner and adapter calls fail
@@ -255,6 +255,39 @@ proposal item). This is a bounded local data-shape/accounting rule only. It
 does not reserve capacity, resolve a budget reference, contact JNC or a
 provider, read a credential, execute a process, write an artifact, or publish
 anything.
+
+### D5 quota admission and historic-usage lock
+
+The Prisma, environment-selected, and in-memory quota implementations each
+accept only an exact own-data reservation request:
+`{ product, workspaceId, connectorId, requestedItems, occurredAt }`. Product,
+workspace, and connector IDs are revalidated; `requestedItems` repeats the
+100,000 shared per-request ceiling; and `occurredAt` must be an exact native
+`Date` that is copied before day bucketing or persistence. Extra, inherited,
+hidden, accessor-backed, sparse, or Proxy-backed request fields fail closed as
+`429 connector_quota_exceeded` / `INVALID_CONNECTOR_QUOTA_REQUEST`, before a
+quota write. The governed runner sends this exact reduced request rather than
+passing its wider run context through the quota boundary.
+
+Daily quota config and the connector-to-environment-variable policy mapping
+are also copied from exact own-data records at construction. Invalid,
+accessor-backed, or Proxy-backed policy data is unavailable (`503
+connector_unavailable`) rather than becoming a dynamic quota rule. The
+environment values remain deployment configuration; this does not inspect or
+expose any credential.
+
+Before a Prisma quota write, every current-day `gcl-usage` record is checked
+as the exact `{ connectorId, requestedItems, occurredAt, state }` reservation
+shape and repeats the shared item ceiling. A malformed or formerly oversized
+usage row makes the quota path unavailable (`503 connector_unavailable` /
+`CONNECTOR_QUOTA_USAGE_CORRUPT`); it is never ignored as zero consumption and
+no new reservation is written. The in-memory test seam keeps its own copied
+timestamp and returns copies, so mutating a direct caller's `Date` or a
+returned test snapshot cannot change later accounting.
+
+These are local validation and accounting controls only. They add no database
+migration, network/provider/JNC call, executable, GPU lease, artifact write,
+credential read, dispatch, or publication capability.
 
 ## Synthetic result egress boundary
 
