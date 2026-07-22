@@ -1,6 +1,6 @@
 import { SyntheticResultIntegrityError } from './errors.js'
 import { JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from './jnc-pilot.js'
-import { deepFreeze, isCanonicalJsonData, syntheticPlanSha256 } from './plan-integrity.js'
+import { deepFreeze, isCanonicalJsonData, isProxyValue, syntheticPlanSha256 } from './plan-integrity.js'
 import { verifiesSyntheticReviewSnapshot } from './review-snapshot.js'
 import { LIVE_DISABLED } from './safety.js'
 import type { ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
@@ -33,6 +33,7 @@ export type SyntheticResultReviewBinding = {
 function ownDataRecord(value: unknown): DataRecord | null {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    if (isProxyValue(value)) return null
     const prototype = Object.getPrototypeOf(value)
     if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length > 0) return null
     const output = Object.create(null) as DataRecord
@@ -59,7 +60,7 @@ function exactOptionalKeys(value: DataRecord, required: readonly string[], allow
 
 function strictStringArray(value: unknown): string[] | null {
   try {
-    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
+    if (isProxyValue(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
     const names = Object.getOwnPropertyNames(value)
     const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
     if (!lengthDescriptor || !('value' in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 1 ||
@@ -83,15 +84,19 @@ function strictStringArray(value: unknown): string[] | null {
  * authorises any execution, transport, artifact write, or publication.
  */
 export function syntheticResultReviewBinding(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'actor' | 'scopes' | 'costCapCents' | 'requestedItems'>): SyntheticResultReviewBinding {
-  return deepFreeze({
-    scope: { product: context.product, workspaceId: context.workspaceId },
-    actor: context.actor,
+  const source = ownDataRecord(context)
+  const scopes = source ? strictStringArray(source.scopes) : null
+  const binding = source && scopes ? normalizedReviewBinding({
+    scope: { product: source.product, workspaceId: source.workspaceId },
+    actor: source.actor,
     governance: {
-      scopes: [...context.scopes].sort(),
-      costCapCents: context.costCapCents,
-      requestedItems: context.requestedItems,
+      scopes: [...scopes].sort(),
+      costCapCents: source.costCapCents,
+      requestedItems: source.requestedItems,
     },
-  })
+  }) : null
+  if (!binding) throw new SyntheticResultIntegrityError('SYNTHETIC_RESULT_REVIEW_BINDING_INVALID')
+  return deepFreeze(binding)
 }
 
 function normalizedReviewBinding(value: unknown): SyntheticResultReviewBinding | null {

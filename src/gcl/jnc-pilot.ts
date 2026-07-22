@@ -1,6 +1,6 @@
 import { LIVE_DISABLED, type LiveDisabled } from './safety.js'
 import { ConnectorInputError } from './errors.js'
-import { deepFreeze } from './plan-integrity.js'
+import { deepFreeze, isProxyValue } from './plan-integrity.js'
 
 /**
  * The contract-only GPU card must remain compatible with the bounded JNC
@@ -82,6 +82,7 @@ function invalidGpuResourceRequest(): never {
 function normalizedGpuResourceRequest(value: unknown): GpuResourceRequest {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return invalidGpuResourceRequest()
+    if (isProxyValue(value)) return invalidGpuResourceRequest()
     const prototype = Object.getPrototypeOf(value)
     if ((prototype !== Object.prototype && prototype !== null) || Object.getOwnPropertySymbols(value).length > 0) {
       return invalidGpuResourceRequest()

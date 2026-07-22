@@ -1,4 +1,5 @@
 import { ConnectorInputError, CostCapError, OwnerGateError, ScopeError } from './errors.js'
+import { isProxyValue } from './plan-integrity.js'
 import type { ConnectorRunContext } from './types.js'
 
 const PRODUCT_PATTERN = /^sectrai-[a-z0-9-]{1,80}$/
@@ -17,6 +18,7 @@ type DataRecord = Record<string, unknown>
 function exactDataRecord(value: unknown, keys: readonly string[]): DataRecord | null {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    if (isProxyValue(value)) return null
     const prototype = Object.getPrototypeOf(value)
     if (prototype !== Object.prototype && prototype !== null) return null
     if (Object.getOwnPropertySymbols(value).length > 0) return null
@@ -36,7 +38,7 @@ function exactDataRecord(value: unknown, keys: readonly string[]): DataRecord | 
 
 function strictStringArray(value: unknown): string[] | null {
   try {
-    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
+    if (isProxyValue(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
     const names = Object.getOwnPropertyNames(value)
     if (names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return null
     const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')

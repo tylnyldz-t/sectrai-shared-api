@@ -1,5 +1,5 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, GclError, OwnerGateError, ScopeError } from './errors.js'
-import { deepFreeze, frozenCanonicalJsonCopy } from './plan-integrity.js'
+import { deepFreeze, frozenCanonicalJsonCopy, isProxyValue } from './plan-integrity.js'
 import { syntheticResultReviewBinding, validatedSyntheticConnectorResult } from './result-boundary.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
@@ -41,6 +41,7 @@ type RegisteredConnector = {
 function runRequestRecord(value: unknown): DataRecord | null {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    if (isProxyValue(value)) return null
     const prototype = Object.getPrototypeOf(value)
     if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length > 0) return null
     const names = Object.getOwnPropertyNames(value)
@@ -59,9 +60,11 @@ function runRequestRecord(value: unknown): DataRecord | null {
 
 function strictScopeArray(value: unknown): string[] | null {
   try {
-    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
+    if (isProxyValue(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
     const names = Object.getOwnPropertyNames(value)
-    const length = value.length
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    if (!lengthDescriptor || !('value' in lengthDescriptor)) return null
+    const length = lengthDescriptor.value
     if (!Number.isSafeInteger(length) || length < 1 || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return null
     const output: string[] = []
     for (let index = 0; index < length; index += 1) {
@@ -97,7 +100,7 @@ function connectorMethod(value: object, name: 'run' | 'preflight'): Function | u
  */
 function registerConnector(value: Connector): RegisteredConnector {
   try {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getOwnPropertySymbols(value).length > 0) {
+    if (!value || typeof value !== 'object' || isProxyValue(value) || Array.isArray(value) || Object.getOwnPropertySymbols(value).length > 0) {
       throw new ConnectorUnavailableError('CONNECTOR_INVALID_REGISTRATION')
     }
     const field = (name: 'id' | 'kind' | 'authKind' | 'scopes'): unknown => {

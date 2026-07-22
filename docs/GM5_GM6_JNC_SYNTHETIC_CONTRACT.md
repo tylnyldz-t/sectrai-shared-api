@@ -54,6 +54,13 @@ other JavaScript-only values are rejected rather than being silently collapsed
 to a potentially colliding digest. Verifier predicates return `false` for such
 data; asserting variants fail closed.
 
+`Proxy` values are also rejected before any property, prototype, key, or
+descriptor reflection. A Proxy is executable JavaScript behaviour because its
+traps can run while an object is inspected; a target that merely *looks* like
+JSON does not make it review data. This applies recursively to a plan payload
+and to the exported deep-freeze helper, so neither helper runs a caller-owned
+trap while producing synthetic evidence.
+
 ### D1 review-evidence data lock
 
 Plan-integrity metadata, review-receipt creation and verification, and
@@ -63,6 +70,10 @@ they do not invoke accessors or retain caller-owned receipt, scope, integrity,
 or plan-payload references. Inherited fields, symbols, hidden properties,
 class instances, cycles, sparse arrays, and getters/setters fail closed as
 review-integrity errors (or `false` from a predicate).
+
+Proxy-backed wrappers and nested values are rejected before reflection as
+well. They are not unwrapped, cloned, hashed, or frozen; no trap result can
+supply a connector ID, scope, digest, or review payload field.
 
 Creating a snapshot therefore does not freeze or later observe the caller's
 payload object: the displayed snapshot remains an independent, recursively
@@ -125,7 +136,8 @@ own, enumerable data fields. Every event, detail object, scope array, prior
 hash, and stored record wrapper is copied as strict canonical JSON before it
 participates in a SHA-256 link. Inherited fields, getters/setters, symbols,
 hidden properties, class instances, cycles, sparse arrays, and non-finite
-values fail closed as `503 gcl_audit_chain_corrupt`; getters are not invoked.
+values and Proxy wrappers fail closed as `503 gcl_audit_chain_corrupt`; getters
+and Proxy traps are not invoked.
 
 This applies before the durable log chooses its workspace lock or opens its
 transaction, and before the in-memory test seam mutates its entries. A
@@ -291,6 +303,13 @@ envelope, frozen provenance, and the same snapshot, provenance, confidence,
 and negative-capability policy checks as an HTTP-routed call. It cannot use a
 mutable direct result to relabel a plan after return.
 
+The final boundary and its governed review-binding helper additionally reject
+Proxy-backed context, result, provenance, and nested plan data before any
+field reflection. A Proxy result cannot make a trap-derived value appear as a
+frozen plan after quota; it produces `503 synthetic_result_integrity_invalid`
+and the terminal audit keeps only that stable code. A Proxy request is rejected
+before preflight, requested-audit append, and quota reservation.
+
 The supplied clock is still a test/internal timestamp seam, not a scheduler or
 transport. Its result must serialize as an exact ISO timestamp; an invalid
 clock value fails closed with `503 synthetic_result_integrity_invalid` before
@@ -327,7 +346,8 @@ references, freezes the registered connector and its scope list, and rejects
 accessor-backed `run`/`preflight` members. Audit, quota, and egress therefore
 keep the connector identity established at registration even if an internal
 caller retains an object reference. These are local object-boundary controls
-only. They add no network client, provider, filesystem write, process launcher,
+only; Proxy-backed connector metadata, configuration, GPU card requests, and
+direct contexts are rejected before reflection. They add no network client, provider, filesystem write, process launcher,
 JNC dispatch, credential read, live mode, or publication path.
 
 ### D1 review scope and reservation binding

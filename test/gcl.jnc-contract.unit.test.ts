@@ -8,6 +8,7 @@ import { ownerGateError } from '../src/gcl/owner-gate.js'
 import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, isCanonicalJsonData, isSyntheticPlanIntegrity, syntheticPlanSha256, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
 import { InMemoryDailyConnectorQuota } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner, type RunConnectorRequest } from '../src/gcl/registry.js'
+import { syntheticResultReviewBinding } from '../src/gcl/result-boundary.js'
 import { createSyntheticReviewReceipt, verifiesSyntheticReviewReceipt } from '../src/gcl/review-receipt.js'
 import { assertSyntheticReviewSnapshot, createSyntheticReviewSnapshot, verifiesSyntheticReviewSnapshot } from '../src/gcl/review-snapshot.js'
 import { LIVE_DISABLED } from '../src/gcl/safety.js'
@@ -45,6 +46,16 @@ function directContext(overrides: Partial<ConnectorRunContext> = {}): ConnectorR
 function runner(connector: Connector, quota = new InMemoryDailyConnectorQuota({ dailyRuns: 6, dailyItems: 60 })) {
   const audit = new InMemoryHashChainAuditLog()
   return { audit, quota, run: new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, fixedNow) }
+}
+
+function trapCountingProxy<T extends object>(value: T, counter: { count: number }): T {
+  const trap = () => { counter.count += 1 }
+  return new Proxy(value, {
+    get(target, property, receiver) { trap(); return Reflect.get(target, property, receiver) },
+    getPrototypeOf(target) { trap(); return Reflect.getPrototypeOf(target) },
+    getOwnPropertyDescriptor(target, property) { trap(); return Reflect.getOwnPropertyDescriptor(target, property) },
+    ownKeys(target) { trap(); return Reflect.ownKeys(target) },
+  })
 }
 
 test('GM5 returns only a synthetic proposal, an unleased GPU contract card, and a CPU-only Blender pilot hand-off', async () => {
@@ -277,6 +288,26 @@ test('plan digests reject JavaScript-only values and verifier predicates do not 
   const integrity = createSyntheticPlanIntegrity({ connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' } })
   assert.equal(verifiesSyntheticPlanIntegrity(integrity, accessorPayload), false)
   assert.equal(verifiesSyntheticReviewSnapshot({ payload: sparsePayload, integrity, reviewReceipt: {} }), false)
+})
+
+test('synthetic review data rejects Proxy values before any caller-controlled trap can run', () => {
+  const traps = { count: 0 }
+  const proxyPayload = trapCountingProxy({
+    connectorId: 'text-to-3d',
+    scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' },
+    artifact: 'synthetic-only',
+  }, traps)
+
+  assert.equal(isCanonicalJsonData(proxyPayload), false)
+  assert.throws(() => syntheticPlanSha256(proxyPayload), /SYNTHETIC_PLAN_PROXY_VALUE/)
+  assert.throws(() => deepFreeze(proxyPayload), /SYNTHETIC_PLAN_PROXY_VALUE/)
+  assert.throws(
+    () => createSyntheticReviewSnapshot({
+      connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, payload: proxyPayload,
+    }),
+    SyntheticReviewIntegrityError,
+  )
+  assert.equal(traps.count, 0)
 })
 
 test('review evidence helpers copy own canonical data and never invoke hostile fields', () => {
@@ -797,6 +828,66 @@ test('GM5/GM6 inputs and direct runner governance read only own data descriptors
   await assert.rejects(governed.run.run(request({ scopes: sparseScopes })), ScopeError)
   assert.equal(governed.audit.entries.length, 0)
   assert.equal(governed.quota.reservations.length, 0)
+})
+
+test('GM5/GM6 proxy-backed boundaries fail closed before reflection, reservation, or egress acceptance', async () => {
+  const configTraps = { count: 0 }
+  const proxyConfig = trapCountingProxy(threeDConfig(), configTraps)
+  assert.throws(
+    () => new SyntheticTextToThreeDConnector(proxyConfig),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'THREED_INVALID_SYNTHETIC_CONFIG',
+  )
+  assert.equal(configTraps.count, 0)
+
+  const gpuTraps = { count: 0 }
+  const proxyGpuRequest = trapCountingProxy({
+    computeTier: 'premium' as const, estimatedVramMiB: 'UNKNOWN' as const, maximumRuntimeSeconds: 60, budgetEnvelopeRef: 'synthetic-budget',
+  }, gpuTraps)
+  const mapper = new ContractOnlyJncPilotMapper()
+  assert.throws(
+    () => mapper.createGpuResourceCard(proxyGpuRequest),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_JNC_GPU_RESOURCE_REQUEST',
+  )
+  assert.equal(gpuTraps.count, 0)
+
+  const inputTraps = { count: 0 }
+  const proxyInput = trapCountingProxy({ prompt: 'A proxy must not become a synthetic plan' }, inputTraps)
+  await assert.rejects(
+    new SyntheticTextToThreeDConnector(threeDConfig()).run(proxyInput, directContext()),
+    ConnectorInputError,
+  )
+  assert.equal(inputTraps.count, 0)
+
+  const bindingTraps = { count: 0 }
+  const proxyContext = trapCountingProxy(directContext(), bindingTraps)
+  assert.throws(() => syntheticResultReviewBinding(proxyContext), SyntheticResultIntegrityError)
+  assert.equal(bindingTraps.count, 0)
+
+  const requestTraps = { count: 0 }
+  const proxyRequest = trapCountingProxy(request(), requestTraps)
+  const preflightRejected = runner(new SyntheticTextToThreeDConnector(threeDConfig()))
+  await assert.rejects(
+    preflightRejected.run.run(proxyRequest),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CONNECTOR_INVALID_CONTEXT',
+  )
+  assert.equal(requestTraps.count, 0)
+  assert.equal(preflightRejected.audit.entries.length, 0)
+  assert.equal(preflightRejected.quota.reservations.length, 0)
+
+  const genuine = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
+    { prompt: 'A genuine local synthetic plan' }, directContext(),
+  )
+  const resultTraps = { count: 0 }
+  const proxyResult = trapCountingProxy({ data: genuine.data, provenance: genuine.provenance, confidence: 0 }, resultTraps)
+  const resultConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return proxyResult as unknown as ConnectorResult },
+  }
+  const egressRejected = runner(resultConnector)
+  await assert.rejects(egressRejected.run.run(request()), SyntheticResultIntegrityError)
+  assert.equal(resultTraps.count, 0)
+  assert.equal(egressRejected.quota.reservations.length, 1)
+  assert.equal(egressRejected.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
 })
 
 test('direct GM5/GM6 calls cross the immutable synthetic egress boundary and reject an invalid clock value', async () => {

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { types } from 'node:util'
 import { SyntheticReviewIntegrityError } from './errors.js'
 
 export const SYNTHETIC_PLAN_INTEGRITY_CONTRACT = 'gcl.synthetic-plan-integrity.v1' as const
@@ -12,6 +13,21 @@ export type SyntheticPlanIntegrity = {
 
 function nonJsonValue(message = 'SYNTHETIC_PLAN_NON_JSON_VALUE'): never {
   throw new TypeError(message)
+}
+
+/**
+ * A Proxy can run caller-controlled traps during otherwise ordinary property
+ * reflection.  It is therefore not data-only input, even when its target
+ * would itself be a plain JSON object.  This Node-only check is deliberately
+ * made before any property or prototype inspection at a trust boundary.
+ */
+export function isProxyValue(value: unknown): boolean {
+  if (!value || (typeof value !== 'object' && typeof value !== 'function')) return false
+  try {
+    return types.isProxy(value)
+  } catch {
+    return true
+  }
 }
 
 function arrayIndex(key: string): boolean {
@@ -32,6 +48,7 @@ function canonicalJson(value: unknown, seen = new WeakSet<object>()): string {
     if (!Number.isFinite(value)) throw new TypeError('SYNTHETIC_PLAN_NON_FINITE_NUMBER')
     return JSON.stringify(value)
   }
+  if (isProxyValue(value)) return nonJsonValue('SYNTHETIC_PLAN_PROXY_VALUE')
   if (Array.isArray(value)) {
     if (Object.getPrototypeOf(value) !== Array.prototype) return nonJsonValue('SYNTHETIC_PLAN_NON_PLAIN_ARRAY')
     if (Object.getOwnPropertySymbols(value).length > 0) return nonJsonValue('SYNTHETIC_PLAN_SYMBOL_KEY')
@@ -154,8 +171,16 @@ export function assertSyntheticPlanIntegrity(integrity: unknown, payload: unknow
  * publication instruction.
  */
 export function deepFreeze<T>(value: T, seen = new WeakSet<object>()): T {
-  if (!value || typeof value !== 'object' || seen.has(value)) return value
+  if (!value || typeof value !== 'object') return value
+  if (isProxyValue(value)) return nonJsonValue('SYNTHETIC_PLAN_PROXY_VALUE')
+  if (seen.has(value)) return value
   seen.add(value)
-  for (const child of Object.values(value)) deepFreeze(child, seen)
+  if (Object.getOwnPropertySymbols(value).length > 0) return nonJsonValue('SYNTHETIC_PLAN_SYMBOL_KEY')
+  for (const name of Object.getOwnPropertyNames(value)) {
+    if (Array.isArray(value) && name === 'length') continue
+    const descriptor = Object.getOwnPropertyDescriptor(value, name)
+    if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) return nonJsonValue('SYNTHETIC_PLAN_ACCESSOR_PROPERTY')
+    deepFreeze(descriptor.value, seen)
+  }
   return Object.freeze(value)
 }

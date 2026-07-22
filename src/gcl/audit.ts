@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import { AuditChainError } from './errors.js'
-import { frozenCanonicalJsonCopy, isCanonicalJsonData } from './plan-integrity.js'
+import { frozenCanonicalJsonCopy, isCanonicalJsonData, isProxyValue } from './plan-integrity.js'
 import type { AuditLog, ConnectorAuditEvent } from './types.js'
 
 export const GCL_AUDIT_MODULE_ID = 'gcl-audit'
@@ -38,6 +38,7 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
 function ownDataRecord(value: unknown): Record<string, unknown> | null {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    if (isProxyValue(value)) return null
     const prototype = Object.getPrototypeOf(value)
     if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length > 0) return null
     const output = Object.create(null) as Record<string, unknown>
@@ -54,7 +55,7 @@ function ownDataRecord(value: unknown): Record<string, unknown> | null {
 
 function strictScopeArray(value: unknown): string[] | null {
   try {
-    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
+    if (isProxyValue(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
     const names = Object.getOwnPropertyNames(value)
     const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
     if (!lengthDescriptor || !('value' in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 1 ||

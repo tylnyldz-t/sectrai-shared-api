@@ -1,6 +1,6 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, JNC_MAXIMUM_GPU_RUNTIME_SECONDS, type GpuResourceRequest, type JncBlenderPilotHandoff, type JncGpuResourceCard } from './jnc-pilot.js'
-import { deepFreeze, frozenCanonicalJsonCopy, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { deepFreeze, frozenCanonicalJsonCopy, isProxyValue, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
 import { syntheticResultReviewBinding, validatedSyntheticConnectorResult } from './result-boundary.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
 import type { SyntheticReviewReceipt } from './review-receipt.js'
@@ -64,7 +64,7 @@ function positiveInteger(value: unknown): number | null { return typeof value ==
 /** Accept configuration data only; a mapper or transport cannot be injected. */
 function connectorConfig(value: SyntheticThreeDConnectorConfig): SyntheticThreeDConnectorConfig {
   try {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+    if (!value || typeof value !== 'object' || isProxyValue(value) || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) {
       throw new ConnectorUnavailableError('THREED_INVALID_SYNTHETIC_CONFIG')
     }
     const names = Object.getOwnPropertyNames(value)
@@ -87,7 +87,7 @@ function connectorConfig(value: SyntheticThreeDConnectorConfig): SyntheticThreeD
 
 function inputRecord(value: unknown, permittedKeys: readonly string[]): Record<string, unknown> {
   try {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError()
+    if (!value || typeof value !== 'object' || isProxyValue(value) || Array.isArray(value)) throw new ConnectorInputError()
     const prototype = Object.getPrototypeOf(value)
     if (prototype !== Object.prototype && prototype !== null || Object.getOwnPropertySymbols(value).length > 0) throw new ConnectorInputError()
     const names = Object.getOwnPropertyNames(value)
