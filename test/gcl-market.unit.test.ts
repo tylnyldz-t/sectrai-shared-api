@@ -1435,6 +1435,7 @@ test('ADOS 10 controls are complete and explicitly prohibit egress and productio
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D12 snapshots the runner envelope/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D13 retains the market preflight snapshot/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D14 fixes the connector configuration snapshot/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D15 fixes governed host seams and time/i)
   assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
   assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })

@@ -463,6 +463,33 @@ send, durable approval, signature, authorization, or execution capability.
 The resulting plan remains exactly `SYNTHETIC`, `LIVE_DISABLED`, and
 `NOT_AUTHORIZED`.
 
+## D15 — governed host-seam and clock snapshot
+
+`GovernedConnectorRunner` fixes its injected `audit.append` and
+`quota.consume` data-function members at construction. Getter- or Proxy-shaped
+hosts/members are rejected without invocation, and a later host-object mutation
+cannot replace either callback during a market run. Audit append results must
+be exact plain own-data `{ hash }` records with a lowercase SHA-256 digest.
+An invalid requested-event result stops before quota; an invalid succeeded-event
+result returns no successful connector result and does not append a misleading
+third failed event.
+
+The runner calls its clock once, after its static request/scope gates and
+before connector preflight, audit, or quota. Only a non-Proxy function that
+returns an intrinsic finite `Date` is accepted; its epoch is copied into a
+local clock. Requested/succeeded/failed audit timestamps and market provenance
+therefore use the same copied instant. A throwing, Proxy-shaped, non-Date, or
+invalid clock fails closed as `INVALID_GOVERNED_RUN_TIME` before market
+preflight, audit, or quota.
+
+D15 only bounds existing in-process host seams. It adds no route, migration,
+database table, provider configuration, credential, network call, queue,
+worker, quote, reservation, booking, publication, handoff, send, durable
+approval, signature, authorization, or execution capability. Audit/quota hosts
+remain host-owned; this package does not claim that a valid return proves
+durable storage. Every successful market result remains exactly `SYNTHETIC`,
+`LIVE_DISABLED`, and `NOT_AUTHORIZED`.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -527,7 +554,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -544,7 +571,9 @@ literal boolean `true` at every owner-gate boundary. D12 snapshots the exact
 governed-run envelope and its scope strings before preflight, audit, or quota.
 D13 keeps market's accepted canonical input snapshot across the runner's
 asynchronous audit, quota, and run seams. D14 fixes market's exact
-construction-time configuration snapshot across those same seams.
+construction-time configuration snapshot across those same seams. D15 fixes
+the governed audit/quota members at construction, verifies one copied runner
+clock before preflight, and accepts only an exact SHA-256 audit result.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -582,7 +611,11 @@ provider-shaped field, or create a failed/post-quota alternate request. D14
 additionally rejects visible/hidden credential-shaped fields, accessors,
 Proxies, and inherited configuration without evaluating shaped values, and
 proves post-preflight configuration mutation cannot change a successful plan
-or create a post-quota failure.
+or create a post-quota failure. D15 additionally rejects getter- and
+Proxy-shaped audit/quota members without invocation, ignores a later mutation
+of fixed host members, rejects invalid clock values before preflight/audit/quota,
+and rejects getter- or malformed audit results before quota or a success result
+can be fabricated.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -605,7 +638,8 @@ or create a post-quota failure.
    snapshots an exact governed-run envelope before connector preflight, audit,
    or quota can consume it; D13 retains market's canonical preflight result
    across those later asynchronous seams; D14 fixes the connector configuration
-   before those seams.
+   before those seams; D15 fixes audit/quota host members and copies one
+   verified runner clock before those seams.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.
@@ -617,8 +651,9 @@ or create a post-quota failure.
    only hardens D2's in-process append seam and D9 only validates in-process
    review inputs/results; D12 snapshots the run envelope before those governed
    seams; D13 retains the accepted market request after preflight; D14 fixes
-   the connector configuration before preflight.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14 evidence cannot quote, reserve, book,
+   the connector configuration before preflight; D15 fixes the governed host
+   members and clock before preflight.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -628,4 +663,4 @@ or create a post-quota failure.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15.

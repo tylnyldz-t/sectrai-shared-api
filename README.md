@@ -105,3 +105,7 @@ proposal or provider-shaped request after ingress. D14 also copies the
 connector's exact scalar configuration at construction, so a caller cannot
 flip its live gate, limit, or inject a credential-shaped field after
 preflight; malformed configuration remains unavailable before audit or quota.
+D15 fixes the governed runner's audit/quota data-function members at
+construction, requires exact SHA-256 audit results, and copies one verified
+clock instant before market preflight, audit, or quota; malformed host seams
+fail closed and cannot create a successful market result.
