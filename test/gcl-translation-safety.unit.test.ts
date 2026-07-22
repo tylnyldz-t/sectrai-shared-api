@@ -371,6 +371,109 @@ test('audit rejects a second run outcome and a checker decision without its matc
   assert.equal(audit.entries.length, 2)
 })
 
+test('audit rejects invented checker bindings and rolls back a second artifact bound to one successful run', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const requested: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+  const requestedAudit = await audit.append(requested)
+  const proposal = runResult().artifact!
+  const succeededAudit = await audit.append({
+    type: 'connector.run.succeeded', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { requestedAuditHash: requestedAudit.hash, artifact: proposal },
+  })
+  const forgedCreation: ConnectorAuditEvent = {
+    type: 'translation.artifact.created', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: {
+      artifactId: 'translation-artifact-invented-digest',
+      kind: proposal.kind,
+      contentHash: proposal.contentHash,
+      mediaType: proposal.mediaType,
+      source: proposal.source,
+      synthetic: true,
+      approvalState: 'pending-checker-approval',
+      reviewPolicyVersion: proposal.reviewPolicyVersion,
+      reviewDigest: `sha256:${'0'.repeat(64)}`,
+      reviewExpiresAt: proposal.reviewExpiresAt,
+      runAuditHash: succeededAudit.hash,
+      autoPublish: false,
+    },
+  }
+
+  await assert.rejects(() => audit.append(forgedCreation), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_EVENT_INVALID')
+  assert.equal(audit.entries.length, 2)
+
+  const artifacts = new InMemoryTranslationArtifactStore(audit)
+  const input = {
+    product,
+    workspaceId,
+    actor: 'maker@example.test',
+    connectorId: 'translation-text-synthetic',
+    proposal,
+    runAuditHash: succeededAudit.hash,
+    audit: { scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString() },
+  }
+  await artifacts.proposeAndAudit(input)
+  await assert.rejects(() => artifacts.proposeAndAudit(input), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_EVENT_INVALID')
+  assert.equal(artifacts.entries.length, 1)
+  assert.equal(audit.entries.length, 3)
+})
+
+test('durable audit fails closed on a hash-valid persisted artifact creation with an invented checker digest', async () => {
+  const proposal = runResult().artifact!
+  const requested: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+  const requestedHash = hashAuditEvent(requested, null)
+  const succeeded: ConnectorAuditEvent = {
+    type: 'connector.run.succeeded', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { requestedAuditHash: requestedHash, artifact: proposal },
+  }
+  const succeededHash = hashAuditEvent(succeeded, requestedHash)
+  const forgedCreated: ConnectorAuditEvent = {
+    type: 'translation.artifact.created', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: {
+      artifactId: 'translation-artifact-persisted-invented-digest',
+      kind: proposal.kind,
+      contentHash: proposal.contentHash,
+      mediaType: proposal.mediaType,
+      source: proposal.source,
+      synthetic: true,
+      approvalState: 'pending-checker-approval',
+      reviewPolicyVersion: proposal.reviewPolicyVersion,
+      reviewDigest: `sha256:${'0'.repeat(64)}`,
+      reviewExpiresAt: proposal.reviewExpiresAt,
+      runAuditHash: succeededHash,
+      autoPublish: false,
+    },
+  }
+  const forgedCreatedHash = hashAuditEvent(forgedCreated, succeededHash)
+  let createCalls = 0
+  const prisma = {
+    $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({
+      $executeRaw: async () => 1,
+      record: {
+        findMany: async () => [
+          { values: { event: requested, previousHash: null, hash: requestedHash } },
+          { values: { event: succeeded, previousHash: requestedHash, hash: succeededHash } },
+          { values: { event: forgedCreated, previousHash: succeededHash, hash: forgedCreatedHash } },
+        ],
+        create: async () => { createCalls += 1; return {} },
+      },
+    }),
+  }
+
+  const audit = new PrismaHashChainAuditLog(prisma as never)
+  await assert.rejects(() => audit.append(requested), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(createCalls, 0)
+})
+
 test('durable proposals bind the maker, request limits, metadata envelope, and unexpired creation instant to the successful synthetic run', async () => {
   const proposal = runResult().artifact!
   const requested: ConnectorAuditEvent = {

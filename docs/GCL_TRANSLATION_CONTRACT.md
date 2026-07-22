@@ -198,13 +198,16 @@ The audit writer also replays transition semantics while it validates the
 existing chain. A run outcome must reference its one earlier, otherwise
 identical request and no second success/failure outcome may reuse that request.
 An artifact creation must reference the exact successful run and proposal
-envelope, and a checker decision must be the first terminal event after the
-matching creation, from a different actor, before the shared expiry. A
-hash-valid persisted row that breaks one of these predecessor links makes the
-whole chain unavailable as `GCL_AUDIT_CHAIN_INVALID`; a newly submitted
-orphan, duplicate outcome, or unlinked decision is rejected before append as
-`GCL_AUDIT_EVENT_INVALID`. Neither path stores raw fixture data or creates a
-publication, send, provider, or live-execution capability.
+envelope, carry the canonical metadata-only review digest, and be the only
+creation that uses that successful-run hash. A checker decision must be the
+first terminal event after the matching creation, from a different actor,
+before the shared expiry. A hash-valid persisted row that breaks one of these
+predecessor, digest, or single-binding links makes the whole chain unavailable
+as `GCL_AUDIT_CHAIN_INVALID`; a newly submitted orphan, invented-digest,
+duplicate outcome, duplicate artifact binding, or unlinked decision is
+rejected before append as `GCL_AUDIT_EVENT_INVALID`. Neither path stores raw
+fixture data or creates a publication, send, provider, or live-execution
+capability.
 
 For an artifact-producing success, the `succeeded` audit event contains the
 complete metadata-only proposal envelope (binding, content hash, synthetic
@@ -237,18 +240,26 @@ artifact, or audit can execute. A status/maker mismatch in durable storage is
 treated as `TRANSLATION_ARTIFACT_STORAGE_INVALID`, never as a recoverable
 artifact.
 
-## ADOS boundary checklist
+## ADOS boundary checklist (10 rules)
 
-- Product/workspace scope is retained; this module makes no cross-product DB
-  query, runtime import, shared state, or outbound request.
-- Default deny applies to absent synthetic gates, owner token, actor, scope,
-  quota, cost cap, and malformed fixture metadata.
-- Artifacts/audit hold reference hashes and provenance, not raw content.
-- Maker and checker are separated; the exact metadata digest and TTL bind a
-  decision; terminal artifact decisions are compare-and-set; audit is a
-  fail-closed, exact-schema, per-product/workspace SHA-256 chain with a
-  verified, maker-and-envelope-bound run-provenance link; each durable mutation
-  is inseparable from its audit row and validates its status/maker envelope; no
-  migration is introduced by this module.
-- `LIVE_DISABLED` synthetic tests and contracts do not authorize production,
-  real-data ingestion, real translation, sending, publishing, or launch.
+1. Product/workspace scope is retained; no cross-product DB query, runtime
+   import, or shared in-process state is introduced.
+2. The connector stays `LIVE_DISABLED`; it has no credential, provider URL,
+   HTTP client, or outbound request capability.
+3. Synthetic enablement, owner token, and canonical owner actor default to
+   deny; a present live-enable flag is a poison pill.
+4. Scope, positive cost cap, one-item limit, and daily quota are enforced
+   before adapter execution.
+5. Fixture input is untrusted data only, never instructions; basic personal
+   data is rejected.
+6. Artifacts and audit contain only metadata, hashes, and provenance—never
+   translated text, transcripts, audio bytes, URLs, provider output, or secrets.
+7. The review digest is recomputed from the exact metadata-only envelope in
+   both artifact storage and audit validation.
+8. One requested run has one terminal outcome, and one successful run can bind
+   exactly one artifact; the SHA-256 audit chain replays these transitions.
+9. Maker/checker separation, TTL, canonical timestamps, and compare-and-set
+   terminal decisions prevent self-approval, stale review, and overwrite races.
+10. Each durable mutation shares a transaction with its audit row; no migration,
+    publication, send, provider invocation, real-data ingestion, or production
+    enablement is authorized by this synthetic contract or its tests.
