@@ -1,5 +1,5 @@
 import { SyntheticResultIntegrityError } from './errors.js'
-import { MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
+import { isGovernanceCostCapCents, isGovernanceRequestedItems, MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
 import { JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from './jnc-pilot.js'
 import { deepFreeze, frozenCanonicalJsonCopy, isCanonicalJsonData, isProxyValue, syntheticPlanSha256 } from './plan-integrity.js'
 import { verifiesSyntheticReviewSnapshot } from './review-snapshot.js'
@@ -116,8 +116,7 @@ function normalizedReviewBinding(value: unknown): SyntheticResultReviewBinding |
     typeof scope.workspaceId !== 'string' || !WORKSPACE_PATTERN.test(scope.workspaceId) ||
     typeof binding.actor !== 'string' || !ACTOR_PATTERN.test(binding.actor) ||
     !governance || !exactKeys(governance, ['scopes', 'costCapCents', 'requestedItems']) ||
-    typeof governance.costCapCents !== 'number' || !Number.isSafeInteger(governance.costCapCents) || governance.costCapCents < 1 ||
-    typeof governance.requestedItems !== 'number' || !Number.isSafeInteger(governance.requestedItems) || governance.requestedItems < 1 ||
+    !isGovernanceCostCapCents(governance.costCapCents) || !isGovernanceRequestedItems(governance.requestedItems) ||
     !validIsoTimestamp(binding.retrievedAt)) return null
   const scopes = strictStringArray(governance.scopes)
   return scopes === null ? null : {

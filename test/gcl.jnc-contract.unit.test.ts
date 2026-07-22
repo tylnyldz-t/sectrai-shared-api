@@ -3,7 +3,7 @@ import test from 'node:test'
 import { hashAuditEvent, InMemoryHashChainAuditLog, verifiedAuditChainHead } from '../src/gcl/audit.js'
 import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError, SyntheticResultIntegrityError, SyntheticReviewIntegrityError } from '../src/gcl/errors.js'
 import { gameEngineConnectorFromEnvironment, SyntheticGameEngineConnector, type GameEngineBuildInput, type GameEngineBuildPlan } from '../src/gcl/game-engine.js'
-import { MAX_GOVERNANCE_SCOPE_COUNT } from '../src/gcl/governance-limits.js'
+import { MAX_GOVERNANCE_COST_CAP_CENTS, MAX_GOVERNANCE_REQUESTED_ITEMS, MAX_GOVERNANCE_SCOPE_COUNT } from '../src/gcl/governance-limits.js'
 import { ContractOnlyJncPilotMapper, JNC_MAXIMUM_GPU_RUNTIME_MINUTES, JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from '../src/gcl/jnc-pilot.js'
 import { ownerGateError } from '../src/gcl/owner-gate.js'
 import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, isCanonicalJsonData, isSyntheticPlanIntegrity, syntheticPlanSha256, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
@@ -1270,6 +1270,93 @@ test('governance scope cardinality is bounded consistently before registration, 
   await assert.rejects(governed.run.run(request({ scopes: tooManyScopes })), ScopeError)
   assert.equal(governed.audit.entries.length, 0)
   assert.equal(governed.quota.reservations.length, 0)
+})
+
+test('governance reservation ceilings are shared by HTTP, direct GM5/GM6 calls, audit, and egress', async () => {
+  const overflowingCostCap = MAX_GOVERNANCE_COST_CAP_CENTS + 1
+  const overflowingRequestedItems = MAX_GOVERNANCE_REQUESTED_ITEMS + 1
+  const httpRequest = {
+    input: { prompt: 'Synthetic reservation-bound request' }, scopes: ['3d:generate'],
+    costCapCents: MAX_GOVERNANCE_COST_CAP_CENTS, requestedItems: MAX_GOVERNANCE_REQUESTED_ITEMS,
+  }
+  assert.deepEqual(connectorRunFrom(httpRequest), httpRequest)
+  assert.throws(
+    () => connectorRunFrom({ ...httpRequest, costCapCents: overflowingCostCap }),
+    (error: unknown) => error instanceof Error && error.message === 'INVALID_CONNECTOR_COST_CAP',
+  )
+  assert.throws(
+    () => connectorRunFrom({ ...httpRequest, requestedItems: overflowingRequestedItems }),
+    (error: unknown) => error instanceof Error && error.message === 'INVALID_CONNECTOR_REQUESTED_ITEMS',
+  )
+
+  const threeD = new SyntheticTextToThreeDConnector(threeDConfig())
+  await assert.rejects(
+    threeD.run({ prompt: 'Direct GM5 cost-cap overflow' }, directContext({ costCapCents: overflowingCostCap })),
+    (error: unknown) => error instanceof CostCapError && error.message === 'CONNECTOR_COST_CAP_REQUIRED',
+  )
+  await assert.rejects(
+    threeD.run({ prompt: 'Direct GM5 item overflow' }, directContext({ requestedItems: overflowingRequestedItems })),
+    (error: unknown) => error instanceof CostCapError && error.message === 'CONNECTOR_REQUESTED_ITEMS_REQUIRED',
+  )
+
+  const gameEngine = new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 1 })
+  const economicInput: GameEngineBuildInput = {
+    tier: 'economic', engine: 'godot', projectId: 'reservation-ceiling', brief: 'Synthetic local review plan', target: 'web',
+  }
+  await assert.rejects(
+    gameEngine.run(economicInput, directContext({ scopes: ['game:project:build'], costCapCents: overflowingCostCap })),
+    (error: unknown) => error instanceof CostCapError && error.message === 'CONNECTOR_COST_CAP_REQUIRED',
+  )
+  await assert.rejects(
+    gameEngine.run(economicInput, directContext({ scopes: ['game:project:build'], requestedItems: overflowingRequestedItems })),
+    (error: unknown) => error instanceof CostCapError && error.message === 'CONNECTOR_REQUESTED_ITEMS_REQUIRED',
+  )
+
+  const ceilingBinding = syntheticResultReviewBinding(
+    directContext({ costCapCents: MAX_GOVERNANCE_COST_CAP_CENTS, requestedItems: MAX_GOVERNANCE_REQUESTED_ITEMS }), fixedNow().toISOString(),
+  )
+  assert.deepEqual(ceilingBinding.governance, {
+    scopes: ['3d:generate'], costCapCents: MAX_GOVERNANCE_COST_CAP_CENTS, requestedItems: MAX_GOVERNANCE_REQUESTED_ITEMS,
+  })
+  assert.throws(
+    () => syntheticResultReviewBinding(directContext({ costCapCents: overflowingCostCap }), fixedNow().toISOString()),
+    SyntheticResultIntegrityError,
+  )
+  assert.throws(
+    () => syntheticResultReviewBinding(directContext({ requestedItems: overflowingRequestedItems }), fixedNow().toISOString()),
+    SyntheticResultIntegrityError,
+  )
+
+  const costOverflowEvent = {
+    type: 'connector.run.requested' as const, connectorId: 'text-to-3d', product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace',
+    actor: 'synthetic-owner', scopes: ['3d:generate'], costCapCents: MAX_GOVERNANCE_COST_CAP_CENTS, requestedItems: MAX_GOVERNANCE_REQUESTED_ITEMS,
+    occurredAt: fixedNow().toISOString(), detail: {},
+  }
+  assert.match(hashAuditEvent(costOverflowEvent, null), /^[a-f0-9]{64}$/)
+  const itemOverflowEvent = { ...costOverflowEvent, costCapCents: 50, requestedItems: overflowingRequestedItems }
+  const overflowingCostEvent = { ...costOverflowEvent, costCapCents: overflowingCostCap, requestedItems: 1 }
+  const audit = new InMemoryHashChainAuditLog()
+  assert.throws(() => hashAuditEvent(overflowingCostEvent, null), AuditChainError)
+  assert.throws(() => hashAuditEvent(itemOverflowEvent, null), AuditChainError)
+  await assert.rejects(audit.append(overflowingCostEvent), AuditChainError)
+  await assert.rejects(audit.append(itemOverflowEvent), AuditChainError)
+  assert.equal(audit.entries.length, 0)
+
+  const costGoverned = runner(new SyntheticTextToThreeDConnector(threeDConfig()))
+  await assert.rejects(
+    costGoverned.run.run(request({ costCapCents: overflowingCostCap })),
+    (error: unknown) => error instanceof CostCapError && error.message === 'CONNECTOR_COST_CAP_REQUIRED',
+  )
+  assert.equal(costGoverned.audit.entries.length, 0)
+  assert.equal(costGoverned.quota.reservations.length, 0)
+
+  const itemGoverned = runner(new SyntheticTextToThreeDConnector(threeDConfig()))
+  await assert.rejects(
+    itemGoverned.run.run(request({ requestedItems: overflowingRequestedItems })),
+    (error: unknown) => error instanceof CostCapError && error.message === 'CONNECTOR_REQUESTED_ITEMS_REQUIRED',
+  )
+  assert.equal(itemGoverned.audit.entries.length, 0)
+  assert.equal(itemGoverned.quota.reservations.length, 0)
 })
 
 test('failed adapter messages are never copied into the durable audit chain', async () => {

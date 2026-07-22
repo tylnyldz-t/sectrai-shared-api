@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import { AuditChainError } from './errors.js'
-import { MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
+import { isGovernanceCostCapCents, isGovernanceRequestedItems, MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
 import { frozenCanonicalJsonCopy, isCanonicalJsonData, isProxyValue } from './plan-integrity.js'
 import type { AuditLog, ConnectorAuditEvent } from './types.js'
 
@@ -111,8 +111,8 @@ function auditEvent(value: unknown): ConnectorAuditEvent | null {
   if (typeof event.actor !== 'string' || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(event.actor)) return null
   const scopes = strictScopeArray(event.scopes)
   if (!scopes || scopes.some((scope) => !scope || scope.length > 120) || new Set(scopes).size !== scopes.length) return null
-  if (typeof event.costCapCents !== 'number' || !Number.isSafeInteger(event.costCapCents) || event.costCapCents < 1) return null
-  if (typeof event.requestedItems !== 'number' || !Number.isSafeInteger(event.requestedItems) || event.requestedItems < 1) return null
+  if (!isGovernanceCostCapCents(event.costCapCents)) return null
+  if (!isGovernanceRequestedItems(event.requestedItems)) return null
   if (!exactIsoTimestamp(event.occurredAt)) return null
   const detail = ownDataRecord(event.detail)
   if (!detail || !isCanonicalJsonData(detail)) return null

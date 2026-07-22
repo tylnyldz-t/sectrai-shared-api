@@ -1,5 +1,5 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, GclError, OwnerGateError, ScopeError } from './errors.js'
-import { MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
+import { isGovernanceCostCapCents, isGovernanceRequestedItems, MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
 import { deepFreeze, frozenCanonicalJsonCopy, isProxyValue } from './plan-integrity.js'
 import { syntheticResultReviewBinding, validatedSyntheticConnectorResult } from './result-boundary.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
@@ -16,7 +16,6 @@ export type RunConnectorRequest = {
   requestedItems: number
 }
 
-function positiveInteger(value: number): boolean { return Number.isSafeInteger(value) && value > 0 }
 const PRODUCT_PATTERN = /^sectrai-[a-z0-9-]{1,80}$/
 const WORKSPACE_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
@@ -206,8 +205,8 @@ export class GovernedConnectorRunner {
     const connector = this.registry.get(safeRequest.connectorId)
     if (safeRequest.ownerApproved !== true) throw new OwnerGateError()
     if (!validContext(safeRequest)) throw new ConnectorInputError('CONNECTOR_INVALID_CONTEXT')
-    if (typeof safeRequest.costCapCents !== 'number' || !positiveInteger(safeRequest.costCapCents)) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
-    if (typeof safeRequest.requestedItems !== 'number' || !positiveInteger(safeRequest.requestedItems)) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
+    if (!isGovernanceCostCapCents(safeRequest.costCapCents)) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
+    if (!isGovernanceRequestedItems(safeRequest.requestedItems)) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
     const scopes = strictScopeArray(safeRequest.scopes)
     if (!scopes || scopes.some((scope) => !connector.scopes.includes(scope)) || new Set(scopes).size !== scopes.length) throw new ScopeError()
 

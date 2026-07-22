@@ -1,5 +1,5 @@
 import type { Request } from 'express'
-import { MAX_GOVERNANCE_SCOPE_COUNT } from './gcl/governance-limits.js'
+import { MAX_GOVERNANCE_COST_CAP_CENTS, MAX_GOVERNANCE_REQUESTED_ITEMS, MAX_GOVERNANCE_SCOPE_COUNT } from './gcl/governance-limits.js'
 
 const ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const STATUS_LIMIT = 80
@@ -75,7 +75,7 @@ export function connectorRunFrom(body: unknown): ConnectorRunMutation {
   return {
     input: values(input.input),
     scopes: stringArray(input.scopes, 'INVALID_CONNECTOR_SCOPES', MAX_GOVERNANCE_SCOPE_COUNT, 80),
-    costCapCents: positiveInteger(input.costCapCents, 'INVALID_CONNECTOR_COST_CAP', 10_000_000),
-    requestedItems: positiveInteger(input.requestedItems, 'INVALID_CONNECTOR_REQUESTED_ITEMS', 100_000),
+    costCapCents: positiveInteger(input.costCapCents, 'INVALID_CONNECTOR_COST_CAP', MAX_GOVERNANCE_COST_CAP_CENTS),
+    requestedItems: positiveInteger(input.requestedItems, 'INVALID_CONNECTOR_REQUESTED_ITEMS', MAX_GOVERNANCE_REQUESTED_ITEMS),
   }
 }

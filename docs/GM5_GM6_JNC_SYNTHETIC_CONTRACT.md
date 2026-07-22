@@ -235,6 +235,27 @@ remain corrupt/unavailable. This is a bounded local data-shape rule only. It
 does not widen scope authority, reserve capacity, contact JNC or a provider,
 read a credential, execute a process, write an artifact, or publish anything.
 
+### D4 reservation-envelope lock
+
+One GM5/GM6 governed request is bounded to a positive cost cap no greater than
+10,000,000 synthetic cents and no more than 100,000 requested items. The same
+two ceilings are enforced by the HTTP parser, direct governed runner, direct
+GM5/GM6 adapter context, audit append/historic verification, and final
+review-binding helper. A direct/internal caller therefore cannot create an
+audit row, reservation context, or frozen review snapshot with accounting
+values that the public route would reject.
+
+HTTP input reports `INVALID_CONNECTOR_COST_CAP` or
+`INVALID_CONNECTOR_REQUESTED_ITEMS`. Direct runner and adapter calls fail
+before preflight, audit, quota, or plan construction with their existing
+cost-cap errors; invalid audit and egress data remain unavailable. Exact
+ceiling values remain valid at this shared governance boundary, subject to the
+connector's tighter synthetic limits (for example, GM5 still permits one
+proposal item). This is a bounded local data-shape/accounting rule only. It
+does not reserve capacity, resolve a budget reference, contact JNC or a
+provider, read a credential, execute a process, write an artifact, or publish
+anything.
+
 ## Synthetic result egress boundary
 
 After an adapter returns, the governed runner performs one final, local-only

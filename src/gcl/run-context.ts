@@ -1,5 +1,5 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError } from './errors.js'
-import { MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
+import { isGovernanceCostCapCents, isGovernanceRequestedItems, MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
 import { isProxyValue } from './plan-integrity.js'
 import type { ConnectorRunContext } from './types.js'
 
@@ -55,10 +55,6 @@ function strictStringArray(value: unknown): string[] | null {
   }
 }
 
-function positiveInteger(value: unknown): value is number {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0
-}
-
 /**
  * Revalidates and copies the governance boundary used by direct connector
  * calls.  The registry performs the same checks before audit/quota work; this
@@ -73,8 +69,8 @@ export function validatedConnectorRunContext(value: unknown, connectorScopes: re
     throw new ConnectorInputError('CONNECTOR_INVALID_CONTEXT')
   }
   if (context.ownerApproved !== true) throw new OwnerGateError()
-  if (!positiveInteger(context.costCapCents)) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
-  if (!positiveInteger(context.requestedItems)) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
+  if (!isGovernanceCostCapCents(context.costCapCents)) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
+  if (!isGovernanceRequestedItems(context.requestedItems)) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
   const scopes = strictStringArray(context.scopes)
   if (!scopes || scopes.length === 0 || new Set(scopes).size !== scopes.length ||
     scopes.some((scope) => !scope || scope.length > 120 || !connectorScopes.includes(scope))) {
