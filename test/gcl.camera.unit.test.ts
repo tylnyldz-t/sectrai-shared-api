@@ -1269,6 +1269,104 @@ test('D21 rejects an uncaught preflight input mutation before request audit or q
   assert.equal(setup.audit.entries[0]?.event.workspaceId, runContext.workspaceId)
 })
 
+test('D22 seals registered connector metadata and method references against later retargeting', async () => {
+  const valid = await enabledConnector().run(loadingDockInput, context)
+  let capturedPreflightCalls = 0
+  let capturedRunCalls = 0
+  let replacedMethodCalls = 0
+  const connector: Connector = {
+    id: CAMERA_CONNECTOR_ID,
+    kind: 'synthetic-camera',
+    authKind: 'owner-token',
+    scopes: ['camera:observe'],
+    preflight() { capturedPreflightCalls += 1 },
+    async run() { capturedRunCalls += 1; return structuredClone(valid) },
+  }
+  const registry = new ConnectorRegistry([connector])
+  const registered = registry.get(CAMERA_CONNECTOR_ID)
+
+  assert.equal(Object.isFrozen(registered), true)
+  assert.equal(Object.isFrozen(registered.scopes), true)
+  connector.id = 'retargeted-connector'
+  connector.scopes = ['camera:retarget']
+  connector.preflight = () => { replacedMethodCalls += 1 }
+  connector.run = async () => { replacedMethodCalls += 1; throw new Error('REPLACED_METHOD_MUST_NOT_RUN') }
+  assert.throws(() => { (registered as unknown as { id: string }).id = 'retargeted-connector' }, TypeError)
+  assert.throws(() => { (registered.scopes as string[]).push('camera:retarget') }, TypeError)
+
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(registry, audit, quota, now)
+  const result = await runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
+
+  assert.equal(capturedPreflightCalls, 1)
+  assert.equal(capturedRunCalls, 1)
+  assert.equal(replacedMethodCalls, 0)
+  assert.equal(result.provenance.auditHash, audit.entries[1]?.hash)
+  assert.deepEqual(audit.entries.map((entry) => entry.event.connectorId), [CAMERA_CONNECTOR_ID, CAMERA_CONNECTOR_ID])
+  assert.equal(audit.entries.every((entry) => entry.event.scopes.length === 1 && entry.event.scopes[0] === CAMERA_SCOPE), true)
+  assert.deepEqual(quota.requests, [{ connectorId: CAMERA_CONNECTOR_ID, requestedItems: 1 }])
+})
+
+test('D22 rejects shaped registry collections, connector control metadata, scopes, and callbacks without evaluating traps', () => {
+  const connector = (): Connector => ({
+    id: CAMERA_CONNECTOR_ID,
+    kind: 'synthetic-camera',
+    authKind: 'owner-token',
+    scopes: ['camera:observe'],
+    async run() { return await enabledConnector().run(loadingDockInput, context) },
+  })
+  const rejectsRegistration = (candidate: unknown) => {
+    assert.throws(
+      () => new ConnectorRegistry([candidate] as Connector[]),
+      (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'INVALID_CONNECTOR_REGISTRATION',
+    )
+  }
+
+  let idAccessorRead = false
+  const accessorId = connector()
+  Object.defineProperty(accessorId, 'id', {
+    enumerable: true,
+    get() { idAccessorRead = true; throw new Error('REGISTRY_ID_ACCESSOR_MUST_NOT_RUN') },
+  })
+
+  let methodAccessorRead = false
+  const accessorMethod = connector()
+  Object.defineProperty(accessorMethod, 'run', {
+    enumerable: true,
+    get() { methodAccessorRead = true; throw new Error('REGISTRY_METHOD_ACCESSOR_MUST_NOT_RUN') },
+  })
+
+  const sparseScopes = connector()
+  sparseScopes.scopes = Object.assign([], { 1: 'camera:observe', length: 2 })
+
+  let proxyTrapRead = false
+  const proxyConnector = new Proxy(connector(), {
+    get() { proxyTrapRead = true; throw new Error('REGISTRY_PROXY_MUST_NOT_RUN') },
+    getOwnPropertyDescriptor() { proxyTrapRead = true; throw new Error('REGISTRY_PROXY_MUST_NOT_RUN') },
+  })
+
+  const proxyRun = connector()
+  proxyRun.run = new Proxy(proxyRun.run, {
+    apply() { proxyTrapRead = true; throw new Error('REGISTRY_METHOD_PROXY_MUST_NOT_RUN') },
+  })
+
+  for (const candidate of [accessorId, accessorMethod, sparseScopes, proxyConnector, proxyRun]) rejectsRegistration(candidate)
+  assert.equal(idAccessorRead, false)
+  assert.equal(methodAccessorRead, false)
+  assert.equal(proxyTrapRead, false)
+
+  const collection = new Proxy([connector()], {
+    get() { proxyTrapRead = true; throw new Error('REGISTRY_COLLECTION_PROXY_MUST_NOT_RUN') },
+    getOwnPropertyDescriptor() { proxyTrapRead = true; throw new Error('REGISTRY_COLLECTION_PROXY_MUST_NOT_RUN') },
+  })
+  assert.throws(
+    () => new ConnectorRegistry(collection as unknown as Connector[]),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'INVALID_CONNECTOR_REGISTRATION',
+  )
+  assert.equal(proxyTrapRead, false)
+})
+
 test('D15 seals audit events before append: shaped or cyclic events never reach the audit collaborator', async () => {
   const received: ConnectorAuditEvent[] = []
   const audit: AuditLog = {
