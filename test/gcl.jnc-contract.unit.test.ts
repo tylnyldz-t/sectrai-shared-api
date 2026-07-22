@@ -1327,7 +1327,7 @@ test('the final result boundary detaches canonical untrusted provenance before e
     },
   }
   const governed = runner(connector)
-  const accepted = await governed.run.run(request()) as ConnectorResult<SyntheticThreeDResult>
+  const accepted = await governed.run.run(request({ input: { prompt: 'A local synthetic 3D proposal' } })) as ConnectorResult<SyntheticThreeDResult>
   const acceptedValue = accepted.provenance.untrustedContent.value as { prompt: string; outputFormat: string }
 
   assert.deepEqual(acceptedValue, adapterOwnedValue)

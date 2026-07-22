@@ -1,6 +1,6 @@
 import { SyntheticResultIntegrityError } from './errors.js'
 import { JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from './jnc-pilot.js'
-import { deepFreeze, frozenCanonicalJsonCopy, isProxyValue, syntheticPlanSha256 } from './plan-integrity.js'
+import { deepFreeze, frozenCanonicalJsonCopy, isCanonicalJsonData, isProxyValue, syntheticPlanSha256 } from './plan-integrity.js'
 import { verifiesSyntheticReviewSnapshot } from './review-snapshot.js'
 import { LIVE_DISABLED } from './safety.js'
 import type { ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
