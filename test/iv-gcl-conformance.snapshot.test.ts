@@ -5,7 +5,7 @@ import { posix as path } from 'node:path'
 import test from 'node:test'
 import ts from 'typescript'
 
-type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15'
+type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16'
 
 type PinnedClosureBlob = {
   path: string
@@ -46,7 +46,7 @@ const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
 const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
 
 /*
- * These are immutable local Git snapshots from the D1 through D15 audit batches.
+ * These are immutable local Git snapshots from the D1 through D16 audit batches.
  * Every source read below is `git show <revision>:<path>`, never the mutable
  * worktree file. This fixture does not import target runtime code, load an
  * env file, open a socket, or make a network request. A missing worktree,
@@ -171,6 +171,14 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D15', name: 'Translation', revision: '9144977', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '542a39d3ac9849469d5a39aca21dd60a58ec374a', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: 'ec19515a62257f017678092dcbacab493387b3d8' }, { path: 'src/gcl/translation-artifacts.ts', blob: '3c94e009008116e709c947e0b43140aed9c7f2b9' }] },
   { batch: 'D15', name: 'Language education', revision: '77b805a', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: 'c8a83355a2f6a468b3443cc56121b416f859ac12', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: 'be5f2d160d16f27f1d3edda58cce044a011a62d5' }] },
   { batch: 'D15', name: 'Camera', revision: '3a127ae', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: 'd01cd7b19acf975a09c9d51e75e66df5e41a6a80', registryBlob: 'fb46d9f3271e79b1966cdffa075bde325cb56e8d', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/errors.ts', blob: '7e373dce7b114770be1c05f5de61dff1f067bebc' }] },
+  { batch: 'D16', name: 'RA OCR', revision: '2d4c78c', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: '76140e91ee58ed485f1b8f331e62faa68a5f1879', registryBlob: '2407ff38734546832bd9a8e2e97fae488198e7f9', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D16', name: 'RA image', revision: '16b4689', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: 'bf63ec84ac4f49d2a96be90c30b77b186e065cae', registryBlob: '76221dc13d588bd7a042735badf6bc825b573ca3', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D16', name: 'RA 3D/game', revision: 'f2efd6b', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: 'e30cf1d4f158e6d1b2a98a9073061c43362b18c7', registryBlob: '400933ad278d07687541967370fae5ef584abbc9', hardDeniesLiveOptIn: false, quotaFailureAudited: false, pinnedClosureBlobs: [{ path: 'src/gcl/result-boundary.ts', blob: '7acc391722d5b43c0922e8bcc4b127ac28fdee8d' }], pinnedSupplementalBlobs: [{ path: 'src/gcl/game-engine.ts', blob: '7561bde35dea24f32821a77e87999101f8df73d6' }] },
+  { batch: 'D16', name: 'RA market', revision: '6fa3a80', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: '39451c140ad97b426dbcc76d0793506a84788335', registryBlob: '9fa4810c5ef2d68814dcccb600cdf88c5835e557', hardDeniesLiveOptIn: true, quotaFailureAudited: false },
+  { batch: 'D16', name: 'RFID', revision: '7633dd7', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: '688d170d830684e8c0dfd35f0d480ea7d81e4019', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D16', name: 'Translation', revision: '8911290', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '46280bb34960ee1ae5794bd8ee952ccfc1262708', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D16', name: 'Language education', revision: 'a8d986d', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: 'c016c22ff9c9dc8fd017e18b5c237f173ce9b6f5', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: '3736c0bb4c56981efa81641ae94d0595a5030a9f' }] },
+  { batch: 'D16', name: 'Camera', revision: 'fe57460', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: 'd01cd7b19acf975a09c9d51e75e66df5e41a6a80', registryBlob: 'fb46d9f3271e79b1966cdffa075bde325cb56e8d', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
 ]
 
 function repositoryFor(snapshot: Snapshot): string {
@@ -259,6 +267,55 @@ function assertNoProcessEnvironmentEscape(code: string, name: string): void {
     if (processIndex === undefined) throw new Error(`${name} process environment access must be locatable`)
     assert.equal(isAllowedProcessEnvironmentDefault(code, processIndex), true, `${name} must accept process.env only as a typed environment default parameter`)
   }
+}
+
+/**
+ * A typed `environment = process.env` parameter is the sole permitted
+ * process-root use.  Source-text checks can miss that root when it is wrapped
+ * in a sequence, array, conditional, or object shorthand, so reject every
+ * other AST value reference before it can become a retained capability.
+ */
+function isAllowedTypedProcessEnvironmentDefault(node: ts.Identifier, sourceFile: ts.SourceFile): boolean {
+  const access = node.parent
+  if (!ts.isPropertyAccessExpression(access) || access.expression !== node || access.name.text !== 'env' || access.questionDotToken) return false
+
+  let current: ts.Node = access
+  while (ts.isParenthesizedExpression(current.parent) || ts.isAsExpression(current.parent) || ts.isTypeAssertionExpression(current.parent) || ts.isNonNullExpression(current.parent) || ts.isSatisfiesExpression(current.parent)) current = current.parent
+  const parameter = current.parent
+  return ts.isParameter(parameter)
+    && parameter.initializer === current
+    && ts.isIdentifier(parameter.name)
+    && parameter.name.text === 'environment'
+    && parameter.type?.getText(sourceFile).replace(/\s/g, '') === 'NodeJS.ProcessEnv'
+}
+
+function isDataPropertyName(node: ts.Identifier): boolean {
+  const parent = node.parent
+  return (ts.isPropertyAccessExpression(parent) && parent.name === node)
+    || (ts.isPropertyAssignment(parent) && parent.name === node)
+    || (ts.isPropertyDeclaration(parent) && parent.name === node)
+    || (ts.isPropertySignature(parent) && parent.name === node)
+    || (ts.isMethodDeclaration(parent) && parent.name === node)
+    || (ts.isGetAccessorDeclaration(parent) && parent.name === node)
+    || (ts.isSetAccessorDeclaration(parent) && parent.name === node)
+    || (ts.isBindingElement(parent) && parent.propertyName === node)
+}
+
+function assertNoRetainedRuntimeRoot(source: string, name: string): void {
+  const sourceFile = parsedTypeScriptSource(source)
+  const visit = (node: ts.Node): void => {
+    if (ts.isIdentifier(node) && (node.text === 'process' || node.text === 'module')) {
+      if (isDataPropertyName(node)) {
+        // A property name such as `packet.module` is ordinary input data, not a host root.
+      } else if (node.text === 'process' && isAllowedTypedProcessEnvironmentDefault(node, sourceFile)) {
+        // The bounded configuration seam is verified above and cannot be retained.
+      } else {
+        assert.fail(`${name} must not retain a ${node.text} runtime root outside the typed environment default`)
+      }
+    }
+    ts.forEachChild(node, visit)
+  }
+  visit(sourceFile)
 }
 
 /**
@@ -361,6 +418,7 @@ function assertNoRetainedReflectionCapability(source: string, name: string): voi
 function assertNoRuntimeEscape(source: string, name: string): void {
   const code = sourceCode(source)
   assertNoProcessEnvironmentEscape(code, name)
+  assertNoRetainedRuntimeRoot(source, name)
   assertNoFunctionCapability(source, name)
   assertNoRetainedReflectionCapability(source, name)
   assert.doesNotMatch(code, /\b(?:require|createRequire|eval)\b|\bimport\s*(?:\?\.)?\s*\(|\bimport\s*\.\s*meta\b|\bmodule\s*(?:\.|\?\.)\s*(?:require|constructor\s*(?:\.|\?\.)\s*_load)\b|\b(?:process|module)\s*(?:\.|\?\.)\s*(?:getBuiltinModule|binding|dlopen|mainModule|constructor)\b/, `${name} must not dynamically load or evaluate a runtime module`)
@@ -449,7 +507,7 @@ function ownerDenialPrecedesReservations(registry: string): boolean {
   return ownerGate >= 0 && ownerGate < preflight && preflight < requestedAudit && requestedAudit < quota
 }
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15 source fixture pins every audited connector and its governance runner to local Git objects', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
     assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
@@ -466,7 +524,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15 source fixture pins eve
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
     const closure = [...sourceClosure(snapshot).values()].join('\n')
@@ -485,7 +543,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15 synthetic source closur
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
@@ -668,4 +726,18 @@ test('D15 fail-closed safety checks reject wrapped or structured aliases of refl
   ]) assert.throws(() => assertNoRuntimeEscape(source, `D15 reflection-wrapper probe: ${source}`))
   assert.doesNotThrow(() => assertNoRuntimeEscape("const descriptor = Object.getOwnPropertyDescriptor(input, 'value')", 'D15 allowed immediate own-data descriptor'))
   assert.doesNotThrow(() => assertNoRuntimeEscape('const keys = Reflect.ownKeys(input)', 'D15 allowed immediate own-data reflection'))
+})
+
+test('D16 fail-closed safety checks reject wrapped process and module roots before capability recovery', () => {
+  for (const source of [
+    'const runtime = (0, process)',
+    'const runtime = [process][0]',
+    'const runtime = true ? process : module',
+    'const holder = { process }; const runtime = holder.process',
+    'const holder = { module }; const runtime = holder.module',
+    'const { env } = (0, process)',
+    'const loader = [module][0]',
+  ]) assert.throws(() => assertNoRuntimeEscape(source, `D16 runtime-root wrapper probe: ${source}`))
+  assert.doesNotThrow(() => assertNoRuntimeEscape('function safe(environment: NodeJS.ProcessEnv = process.env) { return environment.GCL_CAMERA_SYNTHETIC_ENABLED === \'true\' }', 'D16 allowed typed synthetic configuration default'))
+  assert.doesNotThrow(() => assertNoRuntimeEscape("const packet = { module: 'synthetic' }; const label = packet.module", 'D16 allowed ordinary data property'))
 })

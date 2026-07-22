@@ -1245,3 +1245,77 @@ JARVIS/JNC start; and synthetic evidence is never deployment or live-enable
 authority. D15 loaded no credential, contacted no provider or network,
 accessed no device or production database, sent nothing, and made no `main` or
 production write.
+
+## D16 — direct immutable successor package
+
+D16 pins exactly the direct committed child of every D15 snapshot: RA OCR
+`2d4c78c`, RA image `16b4689`, RA 3D/game `f2efd6b`, RA market `6fa3a80`,
+RFID `7633dd7`, translation `8911290`, language education `a8d986d`, and
+camera `fe57460`. RA voice still has no successor beyond its D1 object. This
+is deliberately not a sibling worktree tip. The fixture resolves each commit,
+re-derives every connector/runner blob, and reads only its local GCL closure
+with `git show <revision>:<path>`; missing object, revision, dependency, or
+blob mismatch fails closed.
+
+D16 additionally pins the changed 3D result boundary and contract-only game
+companion, plus language-education's expanded type boundary. No target module
+is imported. The fixture reads no environment file or credential and opens no
+provider, socket, device, database, migration, JARVIS/JNC, or production
+target.
+
+| Connector | D16 source-only evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D16 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Documentation/unit successor; the connector and runner remain D15-identical | `requested` only | Pass | Nonconformant |
+| RA image | Documentation/unit successor; the connector and runner remain D15-identical | `requested` only | Pass | Nonconformant |
+| RA 3D/game | Synthetic plan/result-review and game build identifiers bind the validated actor in addition to scope and governance; JNC remains a no-transport, no-launch contract | `requested` only | Pass | Nonconformant |
+| RA market | The ten ADOS controls now explicitly retain the frozen governed-run envelope boundary; no market response, booking, reservation, or egress path is added | `requested` only | Pass | Nonconformant |
+| RFID | Adds a fixed PSMS-SIM program-halt-boundary review: real program/violation state, trigger, halt command, notification, live/pilot setting, and deployment bypass are rejected rather than acted on | `requested`, `failed` | Pass | Conformant |
+| Translation | The governed runner freezes one native-clock instant before preflight/audit/quota and reuses it for request, outcome, provenance, and quota metadata | `requested`, `failed` | Pass | Conformant |
+| Language education | Adds only a hash-bound `synthetic://langedu/accessibility/...` fixture pointer; accessibility needs, health/disability data, settings, preferences, learner profiles, content, and delivery remain denied | `requested`, `failed` | Pass | Conformant |
+| Camera | Unit-only successor; connector and runner remain D15-identical and the prior proxy-negative regression is now covered by the selected passing test | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` remains a source-only classification of the pinned synthetic
+governance envelope. It authorizes neither a credential/API key nor network
+egress, real OCR/media/RFID/camera input, device, database, migration,
+JARVIS/JNC launch, handoff, send, publication, production write, or live
+enablement.
+
+### D16 negative and edge evidence
+
+- The fail-closed scanner now walks the TypeScript AST for `process` and
+  `module` root references. Its only `process` exception is the exact typed
+  `environment: NodeJS.ProcessEnv = process.env` configuration parameter.
+  Sequence, array, conditional, object-shorthand, and destructuring wrappers
+  cannot retain either runtime root for later capability recovery. Ordinary
+  input-data properties such as `packet.module` remain allowed.
+- D16 preserves the prior fail-closed checks for dynamic load/evaluation,
+  browser/alternate runtime recovery, egress clients/endpoints, credential-like
+  configuration reads, worker/subprocess launch, automatic publication,
+  non-local imports, and relative imports that escape `src/gcl`.
+- Owner denial still precedes connector preflight, requested-audit reservation,
+  and quota use. Quota classification is intentionally conservative: OCR,
+  image, 3D/game, and market retain a `requested`-only quota-rejection path;
+  RFID, translation, language education, and camera append the linked
+  `failed` event.
+
+### D16 test evidence and ADOS boundary
+
+`npm run test:conformance` passes the full D1–D16 immutable-pin,
+local-closure, disabled-mode, owner-ordering, quota-classification, and
+negative-source suite. It uses local Git objects and in-process TypeScript
+parsing only.
+
+The selected synthetic unit files for all eight exact D16 commits also pass
+from temporary local Git archives with an empty environment except `PATH`:
+OCR vision, image, 3D/game JNC contract, market, RFID, translation, language
+education, and camera. Database integration files were excluded; no database
+connection, migration, credential, provider/network/device call, send, or
+publication was attempted.
+
+All ten ADOS rules remain intact: no product data-plane join; default-deny and
+`LIVE_DISABLED`; immutable source/blob evidence only; no inferred owner
+decision; maker–checker where applicable; audit gaps are reported rather than
+hidden; no migration; proposal-only/no-action output; no JARVIS/JNC start; and
+synthetic evidence is never deployment or live-enable authority. D16 loaded no
+credential, contacted no provider or network, accessed no device or production
+database, sent nothing, and made no `main` or production write.
