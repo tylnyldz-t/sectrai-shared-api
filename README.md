@@ -114,4 +114,9 @@ copies their sole clock result before plan construction; shaped contexts and
 invalid times fail closed and cannot alter a synthetic plan. D17 fixes the
 selected synthetic connector instance: its private configuration, own
 preflight/run functions, and market scope tuple cannot be replaced while
-governed audit or quota work is pending.
+governed audit or quota work is pending. D18 freezes every branch of the
+emitted synthetic plan—including its request, binding, sources, quote,
+side-effect, owner-review, and review-packet objects—before it crosses the
+caller boundary. A caller must make a separate copy to propose a change, and
+the canonical review validator rejects action or credential-shaped drift in
+that copy; neither form can authorize an action.

@@ -531,6 +531,28 @@ handoff, send, durable approval, signature, authorization, or execution
 capability. The fixed methods still produce only `SYNTHETIC`, `LIVE_DISABLED`,
 and `NOT_AUTHORIZED` plans.
 
+## D18 — immutable emitted synthetic plan
+
+After `SyntheticMarketConnector.run()` has assembled the deterministic
+proposal, D18 freezes every known data branch: the root plan, binding and its
+scope tuple, integrity, request, source entries and array, optional quote,
+side-effect flags, owner-review flags, review packet, packet execution flags,
+and packet integrity. The request also remains the exact frozen value named in
+`provenance.untrustedContent`; it is still data-only, never a provider request
+or instruction.
+
+This protects the object returned by both direct and governed calls from later
+in-place addition of a credential/provider-shaped field or an action flag. A
+consumer that wants to simulate or transport a change must make a separate
+copy. That copy has no authority: the existing canonical review validator
+rejects action/packet drift, and an unchanged copy still yields only
+`NOT_AUTHORIZED` review evidence. D18 is not a signature, durable store,
+approval workflow, or execution permission.
+
+D18 adds no provider code, credential handling, network call, route, storage,
+migration, queue, worker, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution capability.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -595,7 +617,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -618,7 +640,9 @@ clock before preflight, and accepts only an exact SHA-256 audit result. D16
 snapshots direct market preflight/run context and copies its one verified clock
 value before plan construction. D17 fixes the market connector's own
 preflight/run functions, private configuration reference, and scope tuple
-before any runner audit or quota await.
+before any runner audit or quota await. D18 freezes every emitted plan branch
+and the request value exposed as data-only provenance before a caller receives
+it.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -668,6 +692,11 @@ synthetic no-action plan. D17 additionally proves an in-flight run cannot
 overwrite market's `run`/`preflight`, replace its prototype, inject a visible
 configuration property, or expand its scope tuple while the requested audit
 append is pending; the only completed result remains synthetic and no-action.
+D18 additionally proves that the emitted plan's root and nested binding,
+request, sources, quote, side-effect, owner-review, and review-packet branches
+cannot receive an action, provider, credential, or prototype mutation in
+place. A separately mutated clone remains no-action and fails canonical
+review; the original plan's audit and quota counts are unchanged.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -694,7 +723,8 @@ append is pending; the only completed result remains synthetic and no-action.
    verified runner clock before those seams; D16 snapshots direct market
    preflight/run context and copies one direct clock result before plan
    construction; D17 fixes the selected synthetic connector instance and its
-   market scope tuple before the runner's asynchronous seams.
+   market scope tuple before the runner's asynchronous seams; D18 freezes every
+   emitted synthetic plan branch before it reaches a caller.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.

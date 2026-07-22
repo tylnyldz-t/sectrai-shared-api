@@ -72,7 +72,9 @@ Every registered connector is governed by these rules:
   construction, so bypassing the runner cannot admit shaped context data or
   alter a synthetic plan. D17 fixes the selected synthetic connector instance,
   its private configuration reference, own run/preflight functions, and market
-  scope tuple before the runner's asynchronous seams.
+  scope tuple before the runner's asynchronous seams. D18 freezes every
+  emitted synthetic market-plan branch before it crosses the caller boundary;
+  a changed copy still requires canonical no-action review.
   All resulting evidence remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
@@ -181,7 +183,8 @@ preflight, audit, or quota. D16 also snapshots direct market preflight/run
 contexts as exact own data and copies their one clock result before plan
 construction; credential-shaped or malformed contexts fail closed. D17 fixes
 the selected synthetic connector binding and its scope tuple before the
-runner's asynchronous seams. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 are local mutation checks or
+runner's asynchronous seams. D18 freezes the emitted synthetic plan's known
+data branches before it reaches a caller. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18 are local mutation checks or
 boundary hardening, never signatures, credentials, approval workflows, or
 execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).

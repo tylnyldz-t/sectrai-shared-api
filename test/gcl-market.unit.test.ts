@@ -664,6 +664,45 @@ test('D17 fixes the synthetic connector instance and its method bindings across 
   assert.equal(quota.requests.length, 1)
 })
 
+test('D18 freezes every emitted synthetic plan branch so action or credential drift needs a separate rejected copy', async () => {
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
+  const plan = result.data as SyntheticMarketPlan
+
+  for (const value of [
+    plan,
+    plan.binding,
+    plan.binding.scopes,
+    plan.integrity,
+    plan.request,
+    plan.sources,
+    plan.sources[0],
+    plan.quote,
+    plan.sideEffects,
+    plan.ownerReview,
+    plan.reviewPacket,
+    plan.reviewPacket.execution,
+    plan.reviewPacket.integrity,
+  ]) assert.equal(Object.isFrozen(value), true)
+  assert.equal(Object.isFrozen(result.provenance.untrustedContent.value), true)
+
+  assert.throws(() => { plan.sideEffects.booking = true as never })
+  assert.throws(() => { plan.request.originCountry = 'FR' })
+  assert.throws(() => (plan.sources as unknown as Array<unknown>).push({ id: 'provider', state: 'CONTACTED' }))
+  assert.throws(() => Object.defineProperty(plan.request, 'providerCredential', { value: 'synthetic-not-accepted' }))
+  assert.throws(() => Object.setPrototypeOf(plan.reviewPacket, { execution: { state: 'AUTHORIZED' } }))
+
+  const changedCopy = structuredClone(plan)
+  changedCopy.sideEffects.booking = true as never
+  assert.throws(
+    () => validateSyntheticMarketPlanForReview(changedCopy, { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID',
+  )
+  assert.deepEqual(plan.sideEffects, { externalNetwork: false, reservation: false, booking: false, publication: false })
+  assert.equal(setup.audit.entries.length, 2)
+  assert.equal(setup.quota.requests.length, 1)
+})
+
 test('a distinct owner can audit a market review, but neither decision can authorize an execution', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
@@ -1574,6 +1613,7 @@ test('ADOS 10 controls are complete and explicitly prohibit egress and productio
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D15 fixes governed host seams and time/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D16 snapshots direct market context and time/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D17 fixes the selected synthetic connector binding/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D18 freezes the emitted synthetic plan/i)
   assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
   assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
