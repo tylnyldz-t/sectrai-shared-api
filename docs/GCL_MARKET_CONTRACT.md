@@ -513,6 +513,24 @@ worker, quote, reservation, booking, publication, handoff, send, durable
 approval, signature, authorization, or execution capability. Successful plans
 remain exactly `SYNTHETIC`, `LIVE_DISABLED`, and `NOT_AUTHORIZED`.
 
+## D17 — fixed synthetic connector binding
+
+`SyntheticMarketConnector` now installs `preflight` and `run` as own
+data-functions, retains its construction-time configuration in an ECMAScript
+private field, and freezes the completed connector instance. Its fixed market
+scope tuple is frozen as well. Consequently, neither an own-property overwrite,
+prototype replacement, nor a visible `config` shadow can replace market's
+preflight/run behavior while `GovernedConnectorRunner` is awaiting its audit or
+quota seams.
+
+This is a local integrity boundary for the connector constructed by this
+module; it does not turn a registry into a trust boundary for arbitrary host
+connectors. It adds no provider code, credential field, network call, route,
+storage, migration, queue, worker, quote, reservation, booking, publication,
+handoff, send, durable approval, signature, authorization, or execution
+capability. The fixed methods still produce only `SYNTHETIC`, `LIVE_DISABLED`,
+and `NOT_AUTHORIZED` plans.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -577,7 +595,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -598,7 +616,9 @@ construction-time configuration snapshot across those same seams. D15 fixes
 the governed audit/quota members at construction, verifies one copied runner
 clock before preflight, and accepts only an exact SHA-256 audit result. D16
 snapshots direct market preflight/run context and copies its one verified clock
-value before plan construction.
+value before plan construction. D17 fixes the market connector's own
+preflight/run functions, private configuration reference, and scope tuple
+before any runner audit or quota await.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -644,7 +664,10 @@ can be fabricated. D16 additionally rejects credential-shaped, hidden,
 inherited, accessor-, Proxy-, symbol-, and sparse-array direct contexts without
 evaluating them; it rejects throwing, invalid, and Proxy-shaped direct clock
 results, and proves a clock-side mutation cannot change the copied binding or
-synthetic no-action plan.
+synthetic no-action plan. D17 additionally proves an in-flight run cannot
+overwrite market's `run`/`preflight`, replace its prototype, inject a visible
+configuration property, or expand its scope tuple while the requested audit
+append is pending; the only completed result remains synthetic and no-action.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -670,7 +693,8 @@ synthetic no-action plan.
    before those seams; D15 fixes audit/quota host members and copies one
    verified runner clock before those seams; D16 snapshots direct market
    preflight/run context and copies one direct clock result before plan
-   construction.
+   construction; D17 fixes the selected synthetic connector instance and its
+   market scope tuple before the runner's asynchronous seams.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.
@@ -684,8 +708,9 @@ synthetic no-action plan.
    seams; D13 retains the accepted market request after preflight; D14 fixes
    the connector configuration before preflight; D15 fixes the governed host
    members and clock before preflight; D16 snapshots direct market context and
-   time before its plan construction.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 evidence cannot quote, reserve, book,
+   time before its plan construction; D17 fixes the selected synthetic
+   connector binding before the runner's asynchronous seams.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -695,4 +720,4 @@ synthetic no-action plan.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17.

@@ -654,7 +654,7 @@ test('D17 fixes the synthetic connector instance and its method bindings across 
   assert.throws(() => Object.defineProperty(connector, 'preflight', { value: () => { throw new Error('MUTATED_PREFLIGHT_MUST_NOT_EXECUTE') } }))
   assert.throws(() => Object.defineProperty(connector, 'config', { value: { liveEnabled: true } }))
   assert.throws(() => Object.setPrototypeOf(connector, { run: async () => { throw new Error('PROTOTYPE_RUN_MUST_NOT_EXECUTE') } }))
-  assert.throws(() => (connector.scopes as string[]).push('market:provider:write'))
+  assert.throws(() => (connector.scopes as unknown as string[]).push('market:provider:write'))
 
   releaseRequestedAudit?.()
   const result = await governedRun

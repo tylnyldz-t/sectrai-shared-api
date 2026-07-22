@@ -111,4 +111,7 @@ clock instant before market preflight, audit, or quota; malformed host seams
 fail closed and cannot create a successful market result. D16 applies an
 exact own-data snapshot to direct `market.preflight`/`market.run` contexts and
 copies their sole clock result before plan construction; shaped contexts and
-invalid times fail closed and cannot alter a synthetic plan.
+invalid times fail closed and cannot alter a synthetic plan. D17 fixes the
+selected synthetic connector instance: its private configuration, own
+preflight/run functions, and market scope tuple cannot be replaced while
+governed audit or quota work is pending.
