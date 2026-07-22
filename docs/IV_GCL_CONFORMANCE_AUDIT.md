@@ -701,3 +701,87 @@ output; no JARVIS/JNC start; and no synthetic evidence as deployment or
 live-enable authority. D8 adds no network, provider, credential, real-world
 input, device connection, delivery, publication, production write, `main`
 write, or production mutation.
+
+## D9 — next committed connector package
+
+D9 pins the first immutable successor after D8 for every connector that has
+one: RA OCR `53043fb`, RA image `21282f1`, RA 3D/game `504a4ce`, RA market
+`a373b48`, RFID `fb59cc0`, translation `ab6f765`, language education
+`f7744fe`, and camera `e0f54f0`. RA voice still has no later local committed
+connector package and remains D1 evidence. Every D9 source is read only with
+`git show <pinned-commit>:<path>` and re-derived against its recorded Git blob
+ID; mutable sibling worktrees are not audit input.
+
+D9 treats a changed package helper as an explicit audit root even if its
+public connector or runner is unchanged: image audit envelope; 3D canonical
+copy, result boundary, and game-engine contract; translation audit and
+artifact store; and language-education types. Each root and its local GCL
+import closure receives the same no-egress, no-credential, no-launch,
+no-publish, default-deny, and strict `LIVE_DISABLED` scan. This is static
+source conformance evidence, not execution, delivery, or deployment.
+
+| Connector | D9 source-only change/evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D9 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Review packet v10 binds a well-formed UTF-8 string boundary and rejects control characters and unpaired surrogate code units before a proposal is hashed | `requested` only | Pass | Nonconformant |
+| RA image | The standalone audit envelope validates exact own data, dense scope arrays, canonical timestamps, nested data-only detail, and non-regressing hash-chain time | `requested` only | Pass | Nonconformant |
+| RA 3D/game | Canonical frozen copies isolate caller input; the final result snapshot must bind the submitted-input SHA-256 before a synthetic plan is returned | `requested` only | Pass | Nonconformant |
+| RA market | Deep own-data validation prevents shaped caller-held plans or terminal-ledger results from producing a synthetic review receipt | `requested` only | Pass | Nonconformant |
+| RFID | A fixed actuation-boundary review rejects authentication, authorization, gate/barrier control, notification, dispatch, handoff, enforcement, delivery, and autonomous action | `requested`, `failed` | Pass | Conformant |
+| Translation | Durable artifact creation rejects a noncanonical, regressing, or expired audit instant before a record transaction can open | `requested`, `failed` | Pass | Conformant |
+| Language education | Checkpoint proposals accept fixture reference/hash metadata only; questions, answers, learner responses, scores, profiling, and automatic progression remain absent | `requested`, `failed` | Pass | Conformant |
+| Camera | Independent review accepts only a non-Proxy native finite `Date` from the local clock and canonicalizes it before owner-review audit append | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` is limited to the immutable, synthetic IV GCL envelope. It does
+not authorize a provider, API key, OCR/media/RFID/camera input, device
+connection, database integration, JARVIS/JNC launch, market action, sending,
+publication, handoff, production write, migration, or live enablement.
+
+### D9 negative and edge evidence
+
+- The fixture now permits `process.env` only where it is the typed
+  `environment: NodeJS.ProcessEnv` default parameter of a connector factory.
+  Assignment after declaration, direct runtime/default-parameter aliases,
+  destructuring from `process`, passing `process.env` to another function, and
+  untyped/renamed environment defaults fail before an audited source can pass.
+  Credential-shaped variables remain denied; only bounded `GCL_*` synthetic
+  configuration fields are represented by the audited packages.
+- OCR binds the new text-encoding boundary into its review-packet integrity
+  material, so a packet issued under an older or weaker string rule cannot be
+  silently substituted during review.
+- Image audit handling validates descriptor-safe nested data and rejects sparse
+  or accessor-bearing scope/detail shapes without reading a hostile value; a
+  timestamp that regresses within a chain is rejected rather than normalized.
+- 3D/game copies caller-held input before validation, freezes the canonical
+  value, and binds its digest into the review snapshot/result boundary. Market
+  applies the corresponding deep-own-data boundary to host-provided review
+  seams. Neither pathway opens a transport, worker, GPU node, or market action.
+- RFID's action-boundary fixture has no command, target, recipient, clock,
+  delivery, feature-flag, reader, tag, device, or real-world input. Camera's
+  only review-context callable is contained to a validated native local clock;
+  thrown, forged, invalid, and Proxy-shaped values fail before audit append.
+- Translation rejects stale durable creation chronology; language education
+  rejects raw checkpoint content and learner assessment/profiling fields before
+  any audit or quota lifecycle is reached.
+
+### D9 test evidence and ADOS boundary
+
+Run the complete immutable D1–D9 source audit with:
+
+```bash
+npm run test:conformance
+```
+
+This command passed for D9. It performs only local Git-object reads and
+in-process negative source probes. It does not load an env file, contact a
+provider, open a socket, use a credential, connect a device, invoke a
+database/migration, send/publish/handoff anything, or write `main`/production.
+Its outcome is not deployment or live-enable authority.
+
+All ten ADOS rules remain enforced: no product data-plane join; default-deny
+and `LIVE_DISABLED`; immutable source/blob pins; no inferred owner decision;
+maker–checker where applicable; linked audit-lifecycle classification without
+claiming a missing quota-failure audit; no migration; proposal-only/no-action
+output; no JARVIS/JNC start; and no synthetic evidence as deployment or
+live-enable authority. D9 adds no network, provider, credential, real-world
+input, device connection, delivery, publication, production write, `main`
+write, or production mutation.
