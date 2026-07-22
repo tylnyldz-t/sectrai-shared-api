@@ -95,7 +95,7 @@ test('GM2 run requires owner gate, scope, cost cap, quota, consent, and creates 
   assert.equal(proposal.evidence.rawContentStored, false)
   assert.equal(proposal.ownerReview.status, 'pending')
   assert.equal(proposal.ownerReview.automaticApply, false)
-  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.match(proposal.reviewPacket.integrityDigest, /^[a-f0-9]{64}$/)
   assert.equal(proposal.reviewPacket.scopeBinding.productDigest.length, 64)
   assert.equal(proposal.reviewPacket.consentBinding.purpose, 'document-field-extraction')
@@ -118,6 +118,7 @@ test('GM2 run requires owner gate, scope, cost cap, quota, consent, and creates 
   assert.deepEqual(proposal.reviewPacket.auditAppendBoundaryBinding, { auditLog: 'non-proxy-data-method-only', appendResult: 'native-promise-only', accessorOrProxyAuditTargetsAccepted: false, rejectedOrThenableAuditResultsAccepted: false })
   assert.deepEqual(proposal.reviewPacket.auditMethodBoundaryBinding, { appendMethod: 'own-or-direct-prototype-data-method-only', inheritedFromObjectPrototypeAccepted: false, inheritedBeyondDirectPrototypeAccepted: false })
   assert.deepEqual(proposal.reviewPacket.auditEventBoundaryBinding, { auditEvent: 'adapter-created-frozen-own-data-only', auditEventScope: 'single-read-validated-review-context-only', auditEventMutationAccepted: false })
+  assert.deepEqual(proposal.reviewPacket.reviewContextBoundaryBinding, { contextMembers: 'own-enumerable-data-properties-read-once', inheritedOrAccessorMembersAccepted: false, proxyClockFunctionAccepted: false })
   assert.equal(proposal.reviewPacket.evidenceBinding.capturedAt, input.evidence.capturedAt)
   assert.equal(proposal.reviewPacket.evidenceBinding.expiresAt, '2026-07-22T12:04:00.000Z')
   assert.equal(proposal.reviewPacket.reviewWindow.issuedAt, now().toISOString())
@@ -304,7 +305,7 @@ test('D5 requires a causally coherent review timeline and refuses review deadlin
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input: consentBoundInput, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
 
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.equal(result.data.proposal.reviewPacket.reviewWindow.reviewBy, consentBoundInput.consent.expiresAt)
 
   const deadlineBeyondConsent = clone()
@@ -331,7 +332,7 @@ test('D6 derives exact review and evidence deadlines from integrity-bound synthe
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
 
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.governanceBinding, { maxReviewAgeSeconds: 60, maxEvidenceAgeSeconds: 300 })
 
   const missingBinding = clone()
@@ -389,7 +390,7 @@ test('D7 rejects inherited, hidden, or accessor-backed data and validates its pl
 
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.dataBoundaryBinding, { evidenceSource: 'synthetic-fixture', inputShape: 'plain-own-data-only', rawDocumentContentAccepted: false })
 
   const missingBinding = clone()
@@ -431,14 +432,14 @@ test('D7 rejects inherited, hidden, or accessor-backed data and validates its pl
   assert.equal(quota.requests.length, 1)
 })
 
-test('D8 canonical maker-checker identity remains enforced under D23 packets', async () => {
+test('D8 canonical maker-checker identity remains enforced under D24 packets', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
 
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.makerCheckerBinding, { actorIdentity: 'ascii-case-insensitive-trimmed', independentReviewerRequired: true })
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'MAKER@example.test', audit, context), (error: unknown) => error instanceof MakerCheckerError && error.message === 'DOCUMENT_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
   await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, ' maker@example.test ', audit, context), (error: unknown) => error instanceof MakerCheckerError && error.message === 'DOCUMENT_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
@@ -496,7 +497,7 @@ test('D9 rejects sparse, accessor-backed, or extended field arrays before their 
 
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.collectionBoundaryBinding, { collectionShape: 'array-prototype-dense-own-data-only', sparseOrInheritedElementsAccepted: false, accessorElementsAccepted: false })
 
   const accessorProposal = clone()
@@ -566,7 +567,7 @@ test('D10 binds well-formed UTF-8 text handling and rejects ambiguous surrogate 
 
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.stringBoundaryBinding, { valueEncoding: 'well-formed-unicode-utf8', controlCharactersAccepted: false, unpairedSurrogateCodeUnitsAccepted: false })
 
   const malformedReviewValue = clone()
@@ -640,7 +641,7 @@ test('D11 freezes an exact built-in clock and binds that boundary before any res
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   assert.equal(clockCalls, 1)
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.timeBoundaryBinding, { clockValue: 'utc-epoch-milliseconds', clockObject: 'exact-date-prototype-no-own-properties', issuedAtSource: 'validated-run-context-clock' })
 
   const missingBinding = clone()
@@ -676,7 +677,7 @@ test('D12 rejects inherited, hidden, or accessor-backed proposal-field records b
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.fieldRecordBoundaryBinding, { fieldRecordShape: 'plain-own-enumerable-data-only', fieldDescriptorsValidatedBeforeValues: true, accessorFieldPropertiesAccepted: false })
 
   const fieldAccessorProposal = clone()
@@ -761,7 +762,7 @@ test('D13 rejects Proxy-wrapped synthetic input and review-graph members before 
 
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.proxyBoundaryBinding, { proxyDetection: 'node-util-types-isProxy', proxyObjectsAccepted: false, proxyArraysAccepted: false })
 
   let proposalTraps = 0
@@ -828,7 +829,7 @@ test('D14 rejects date-arithmetic overflow and malformed arithmetic bindings bef
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.dateArithmeticBoundaryBinding, { arithmetic: 'checked-utc-epoch-milliseconds', overflowAccepted: false, invalidDateAccepted: false })
 
   const missingBinding = clone()
@@ -864,7 +865,7 @@ test('D15 binds canonical integrity encoding and ignores hostile JSON serializat
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.integrityEncodingBoundaryBinding, { encoding: 'canonical-json-utf8', objectKeyOrder: 'utf16-code-unit-ascending', toJsonHooksAccepted: false, inheritedSerializationAccepted: false })
 
   const missingBinding = clone()
@@ -912,7 +913,7 @@ test('D16 binds module-captured intrinsics and ignores late global or prototype 
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.intrinsicBoundaryBinding, {
     runtimeIntrinsics: 'module-captured-ecmascript-structural-temporal-and-encoding-intrinsics',
     latePatchedGlobalsAccepted: false,
@@ -1018,7 +1019,7 @@ test('D17 binds SHA-256 operations and ignores late Hash prototype hooks before 
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.hashBoundaryBinding, {
     algorithm: 'sha256',
     digestEncoding: 'hex-lowercase',
@@ -1070,7 +1071,7 @@ test('D18 binds regex validation and rejects late RegExp prototype hooks before 
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(result.data.proposal.reviewPacket.patternBoundaryBinding, {
     validation: 'module-captured-regexp-exec',
     latePatchedRegExpMethodsAccepted: false,
@@ -1122,11 +1123,11 @@ test('D18 binds regex validation and rejects late RegExp prototype hooks before 
   assert.equal(reviewed?.auditHash, 'c'.repeat(64))
 })
 
-test('D19 binds the module-captured Proxy inspector and ignores a late node:util inspector replacement under D23 packets', async () => {
+test('D19 binds the module-captured Proxy inspector and ignores a late node:util inspector replacement under D24 packets', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const proposal = (await configuredConnector(60, 300).run(input, context)).data.proposal
   const clone = () => JSON.parse(JSON.stringify(proposal)) as typeof proposal
-  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(proposal.reviewPacket.proxyInspectionBoundaryBinding, {
     inspection: 'module-captured-node-util-types-isProxy',
     latePatchedInspectorAccepted: false,
@@ -1182,7 +1183,7 @@ test('D19 binds the module-captured Proxy inspector and ignores a late node:util
 test('D20 binds a strict audit receipt and does not report a review as successful with malformed audit output', async () => {
   const proposal = (await configuredConnector(60, 300).run(input, context)).data.proposal
   const clone = () => JSON.parse(JSON.stringify(proposal)) as typeof proposal
-  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(proposal.reviewPacket.auditReceiptBoundaryBinding, {
     receiptShape: 'plain-own-enumerable-sha256-hash-only',
     malformedReceiptAccepted: false,
@@ -1249,7 +1250,7 @@ test('D20 binds a strict audit receipt and does not report a review as successfu
 test('D21 binds a fail-closed audit append invocation and rejects accessor, Proxy, thenable, throw, and rejection edges', async () => {
   const proposal = (await configuredConnector(60, 300).run(input, context)).data.proposal
   const clone = () => JSON.parse(JSON.stringify(proposal)) as typeof proposal
-  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(proposal.reviewPacket.auditAppendBoundaryBinding, {
     auditLog: 'non-proxy-data-method-only',
     appendResult: 'native-promise-only',
@@ -1331,7 +1332,7 @@ test('D21 binds a fail-closed audit append invocation and rejects accessor, Prox
 test('D22 binds audit method provenance and rejects Object.prototype or indirect-prototype append without invocation', async () => {
   const proposal = (await configuredConnector(60, 300).run(input, context)).data.proposal
   const clone = () => JSON.parse(JSON.stringify(proposal)) as typeof proposal
-  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(proposal.reviewPacket.auditMethodBoundaryBinding, {
     appendMethod: 'own-or-direct-prototype-data-method-only',
     inheritedFromObjectPrototypeAccepted: false,
@@ -1388,7 +1389,7 @@ test('D22 binds audit method provenance and rejects Object.prototype or indirect
 test('D23 snapshots the review scope once and freezes the audit handoff against downstream mutation', async () => {
   const proposal = (await configuredConnector(60, 300).run(input, context)).data.proposal
   const clone = () => JSON.parse(JSON.stringify(proposal)) as typeof proposal
-  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v23')
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
   assert.deepEqual(proposal.reviewPacket.auditEventBoundaryBinding, {
     auditEvent: 'adapter-created-frozen-own-data-only',
     auditEventScope: 'single-read-validated-review-context-only',
@@ -1422,13 +1423,7 @@ test('D23 snapshots the review scope once and freezes the audit handoff against 
   assert.equal(contextTraps, 0)
   assert.equal(preAppendCalls, 0)
 
-  let productReads = 0
-  let workspaceReads = 0
-  const changingContext = {
-    get product(): string { productReads += 1; return productReads === 1 ? context.product : 'wrong-product' },
-    get workspaceId(): string { workspaceReads += 1; return workspaceReads === 1 ? context.workspaceId : 'wrong-workspace' },
-    now: context.now,
-  }
+  const stableContext = { product: context.product, workspaceId: context.workspaceId, now: context.now }
   let receivedEvent: ConnectorAuditEvent | undefined
   let rejectedMutationAttempts = 0
   const mutationAudit = {
@@ -1440,9 +1435,7 @@ test('D23 snapshots the review scope once and freezes the audit handoff against 
       return Promise.resolve({ hash: '1'.repeat(64) })
     },
   }
-  const reviewed = await independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', mutationAudit, changingContext)
-  assert.equal(productReads, 1)
-  assert.equal(workspaceReads, 1)
+  const reviewed = await independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', mutationAudit, stableContext)
   assert.equal(receivedEvent?.product, context.product)
   assert.equal(receivedEvent?.workspaceId, context.workspaceId)
   assert.deepEqual(receivedEvent?.scopes, ['vision:document-field-extraction'])
@@ -1452,6 +1445,67 @@ test('D23 snapshots the review scope once and freezes the audit handoff against 
   assert.equal(Object.isFrozen(receivedEvent?.detail), true)
   assert.equal(rejectedMutationAttempts, 3)
   assert.equal(reviewed.auditHash, '1'.repeat(64))
+  assert.equal(reviewed.mesaEvidenceHandoff.sent, false)
+})
+
+test('D24 descriptor-binds review scope and clock members before they can alter or invoke a review', async () => {
+  const proposal = (await configuredConnector(60, 300).run(input, context)).data.proposal
+  const clone = () => JSON.parse(JSON.stringify(proposal)) as typeof proposal
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v24')
+  assert.deepEqual(proposal.reviewPacket.reviewContextBoundaryBinding, {
+    contextMembers: 'own-enumerable-data-properties-read-once',
+    inheritedOrAccessorMembersAccepted: false,
+    proxyClockFunctionAccepted: false,
+  })
+
+  let appendCalls = 0
+  const audit = { async append(): Promise<{ hash: string }> { appendCalls += 1; return { hash: '2'.repeat(64) } } }
+  const missingBinding = clone()
+  delete (missingBinding.reviewPacket as { reviewContextBoundaryBinding?: unknown }).reviewContextBoundaryBinding
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(missingBinding, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_CONTEXT_BOUNDARY_BINDING')
+
+  const extraBindingField = clone()
+  ;(extraBindingField.reviewPacket.reviewContextBoundaryBinding as { extension?: unknown }).extension = 'forbidden'
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(extraBindingField, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_DOCUMENT_REVIEW_CONTEXT_BOUNDARY_BINDING_FIELD')
+
+  const alteredBinding = clone()
+  alteredBinding.reviewPacket.reviewContextBoundaryBinding.inheritedOrAccessorMembersAccepted = true as never
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(alteredBinding, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_CONTEXT_BOUNDARY_BINDING')
+
+  const legacyPacket = clone()
+  legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v23' as never
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(legacyPacket, 'approved', true, 'checker@example.test', audit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
+  assert.equal(appendCalls, 0)
+
+  let getterReads = 0
+  const accessorScope = {
+    get product(): string { getterReads += 1; throw new Error('REVIEW_CONTEXT_GETTER_MUST_NOT_RUN') },
+    workspaceId: context.workspaceId,
+    now: context.now,
+  }
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', audit, accessorScope), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_CONTEXT')
+  assert.equal(getterReads, 0)
+
+  const inheritedScope = Object.create({ product: context.product }) as { workspaceId: string; now: () => Date }
+  inheritedScope.workspaceId = context.workspaceId
+  inheritedScope.now = context.now
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', audit, inheritedScope as unknown as Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'now'>), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_CONTEXT')
+
+  const hiddenScope = { product: context.product, now: context.now }
+  Object.defineProperty(hiddenScope, 'workspaceId', { value: context.workspaceId, enumerable: false })
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', audit, hiddenScope as unknown as Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'now'>), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_CONTEXT')
+
+  let proxyClockCalls = 0
+  const proxyClock = new Proxy(() => { proxyClockCalls += 1; return now() }, {
+    apply() { proxyClockCalls += 1; return now() },
+  })
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', audit, { product: context.product, workspaceId: context.workspaceId, now: proxyClock }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_TIME')
+  assert.equal(proxyClockCalls, 0)
+  assert.equal(appendCalls, 0)
+
+  const reviewed = await independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', audit, { product: context.product, workspaceId: context.workspaceId, now: context.now })
+  assert.equal(reviewed.auditHash, '2'.repeat(64))
+  assert.equal(appendCalls, 1)
   assert.equal(reviewed.mesaEvidenceHandoff.sent, false)
 })
 

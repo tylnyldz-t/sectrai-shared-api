@@ -802,21 +802,29 @@ function fieldsFrom(input: SyntheticDocumentScanInput): SyntheticDocumentField[]
   })
 }
 
-function reviewContext(context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): { product: string; workspaceId: string } {
-  if (!context || (typeof context !== 'object' && typeof context !== 'function') || isProxyObject(context)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_CONTEXT')
-  const product = context.product
-  const workspaceId = context.workspaceId
+type ReviewContextSnapshot = { product: string; workspaceId: string; now: unknown }
+
+/** Read the review scope and clock only from own enumerable data descriptors. */
+function reviewContextSnapshot(context: unknown): ReviewContextSnapshot {
+  if (!isRecord(context)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_CONTEXT')
+  const member = (key: 'product' | 'workspaceId' | 'now'): unknown => {
+    const descriptor = intrinsicObjectGetOwnPropertyDescriptor(context, key)
+    if (!descriptor || !descriptor.enumerable || descriptor.get || descriptor.set || !('value' in descriptor)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_CONTEXT')
+    return descriptor.value
+  }
+  const product = member('product')
+  const workspaceId = member('workspaceId')
+  const now = member('now')
   if (typeof product !== 'string' || typeof workspaceId !== 'string' || !matchesPattern(SCOPE_ID_PATTERN, product) || !matchesPattern(SCOPE_ID_PATTERN, workspaceId)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_CONTEXT')
-  return { product, workspaceId }
+  if (typeof now !== 'function' || isProxyObject(now)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_TIME')
+  return { product, workspaceId, now }
 }
 
-function reviewNow(context: Pick<ConnectorRunContext, 'now'>): Date {
-  if (!context || (typeof context !== 'object' && typeof context !== 'function') || isProxyObject(context)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_TIME')
-  const now = context.now
+function reviewNow(now: unknown): Date {
   if (typeof now !== 'function' || isProxyObject(now)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_TIME')
   let value: unknown
   try {
-    value = intrinsicFunctionCall.call(now, context)
+    value = intrinsicFunctionCall.call(now, undefined)
   } catch {
     throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_TIME')
   }
@@ -1014,6 +1022,13 @@ function reviewedAuditEventBoundaryBinding(value: unknown): SyntheticDocumentRev
   return { ...SYNTHETIC_DOCUMENT_AUDIT_EVENT_BOUNDARY }
 }
 
+function reviewedReviewContextBoundaryBinding(value: unknown): SyntheticDocumentReviewPacket['reviewContextBoundaryBinding'] {
+  if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_CONTEXT_BOUNDARY_BINDING')
+  exactKeys(value, ['contextMembers', 'inheritedOrAccessorMembersAccepted', 'proxyClockFunctionAccepted'], 'UNEXPECTED_DOCUMENT_REVIEW_CONTEXT_BOUNDARY_BINDING_FIELD')
+  if (value.contextMembers !== SYNTHETIC_DOCUMENT_REVIEW_CONTEXT_BOUNDARY.contextMembers || value.inheritedOrAccessorMembersAccepted !== false || value.proxyClockFunctionAccepted !== false) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_CONTEXT_BOUNDARY_BINDING')
+  return { ...SYNTHETIC_DOCUMENT_REVIEW_CONTEXT_BOUNDARY }
+}
+
 /**
  * Resolve an audit append method through data descriptors only. Audit classes
  * may expose a normal prototype method, but accessors and Proxy targets are
@@ -1185,7 +1200,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const mesaEvidenceHandoff: SyntheticDocumentProposal['mesaEvidenceHandoff'] = { state: 'BLOCKED_PENDING_INDEPENDENT_OWNER_REVIEW', referenceOnly: true, rawContentIncluded: false, sent: false }
 
   if (!isRecord(proposal.reviewPacket)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET')
-  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'makerCheckerBinding', 'collectionBoundaryBinding', 'stringBoundaryBinding', 'timeBoundaryBinding', 'fieldRecordBoundaryBinding', 'proxyBoundaryBinding', 'dateArithmeticBoundaryBinding', 'integrityEncodingBoundaryBinding', 'intrinsicBoundaryBinding', 'hashBoundaryBinding', 'patternBoundaryBinding', 'proxyInspectionBoundaryBinding', 'auditReceiptBoundaryBinding', 'auditAppendBoundaryBinding', 'auditMethodBoundaryBinding', 'auditEventBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
+  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'makerCheckerBinding', 'collectionBoundaryBinding', 'stringBoundaryBinding', 'timeBoundaryBinding', 'fieldRecordBoundaryBinding', 'proxyBoundaryBinding', 'dateArithmeticBoundaryBinding', 'integrityEncodingBoundaryBinding', 'intrinsicBoundaryBinding', 'hashBoundaryBinding', 'patternBoundaryBinding', 'proxyInspectionBoundaryBinding', 'auditReceiptBoundaryBinding', 'auditAppendBoundaryBinding', 'auditMethodBoundaryBinding', 'auditEventBoundaryBinding', 'reviewContextBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
   if (proposal.reviewPacket.version !== SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
   if (!isRecord(proposal.reviewPacket.scopeBinding)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_SCOPE')
   exactKeys(proposal.reviewPacket.scopeBinding, ['productDigest', 'workspaceDigest'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_SCOPE_FIELD')
@@ -1212,6 +1227,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const auditAppendBoundaryBinding = reviewedAuditAppendBoundaryBinding(proposal.reviewPacket.auditAppendBoundaryBinding)
   const auditMethodBoundaryBinding = reviewedAuditMethodBoundaryBinding(proposal.reviewPacket.auditMethodBoundaryBinding)
   const auditEventBoundaryBinding = reviewedAuditEventBoundaryBinding(proposal.reviewPacket.auditEventBoundaryBinding)
+  const reviewContextBoundaryBinding = reviewedReviewContextBoundaryBinding(proposal.reviewPacket.reviewContextBoundaryBinding)
   const evidenceBinding = reviewedEvidenceBinding(proposal.reviewPacket.evidenceBinding, evidence, governanceBinding, reviewedAt)
   const reviewWindow = reviewedReviewWindow(proposal.reviewPacket.reviewWindow, reviewedAt)
   validateReviewPacketTimeline(consentBinding, governanceBinding, evidenceBinding, reviewWindow)
@@ -1238,6 +1254,7 @@ function validateSyntheticDocumentProposalForReviewAt(
     auditAppendBoundaryBinding,
     auditMethodBoundaryBinding,
     auditEventBoundaryBinding,
+    reviewContextBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -1247,7 +1264,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   }
   if (proposal.reviewPacket.state !== reviewPacket.state || proposal.reviewPacket.rawDocumentContentIncluded !== false || proposal.reviewPacket.automaticApply !== false || proposal.reviewPacket.automaticPublication !== false || productDigest !== digest(scoped.product) || workspaceDigest !== digest(scoped.workspaceId)) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_SCOPE_MISMATCH')
   const normalized: SyntheticDocumentProposal = { proposalId, syntheticUri: proposal.syntheticUri, preparedBy, mode: LIVE_DISABLED, extraction: 'SYNTHETIC_PROPOSAL_ONLY_NOT_OCR', evidence, fields, fieldsDigest, ownerReview, reviewPacket, mesaEvidenceHandoff }
-  if (integrityDigest !== digest(canonicalJson(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, integrityEncodingBoundaryBinding, intrinsicBoundaryBinding, hashBoundaryBinding, patternBoundaryBinding, proxyInspectionBoundaryBinding, auditReceiptBoundaryBinding, auditAppendBoundaryBinding, auditMethodBoundaryBinding, auditEventBoundaryBinding, evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+  if (integrityDigest !== digest(canonicalJson(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, integrityEncodingBoundaryBinding, intrinsicBoundaryBinding, hashBoundaryBinding, patternBoundaryBinding, proxyInspectionBoundaryBinding, auditReceiptBoundaryBinding, auditAppendBoundaryBinding, auditMethodBoundaryBinding, auditEventBoundaryBinding, reviewContextBoundaryBinding, evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
   return normalized
 }
 
@@ -1257,8 +1274,8 @@ function validateSyntheticDocumentProposalForReviewAt(
  * authenticity or grant a sending/applying capability.
  */
 export function validateSyntheticDocumentProposalForReview(proposal: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'now'>): SyntheticDocumentProposal {
-  const scoped = reviewContext(context)
-  return validateSyntheticDocumentProposalForReviewAt(proposal, scoped, reviewNow(context))
+  const snapshot = reviewContextSnapshot(context)
+  return validateSyntheticDocumentProposalForReviewAt(proposal, snapshot, reviewNow(snapshot.now))
 }
 
 /**
@@ -1289,18 +1306,19 @@ export class SyntheticVisionDocumentFieldExtractionConnector implements Connecto
 
   preflight(input: SyntheticDocumentScanInput, context: ConnectorRunContext): void {
     const limits = this.configured(context)
-    const checkedAt = reviewNow(context)
+    const checkedAt = reviewNow(reviewContextSnapshot(context).now)
     const normalized = normalizedInput(input, checkedAt)
     evidenceBindingFor(normalized.evidence, checkedAt, limits.maxEvidenceAgeSeconds)
   }
 
   async run(input: SyntheticDocumentScanInput, context: ConnectorRunContext): Promise<ConnectorResult<DocumentFieldExtractionData>> {
     const limits = this.configured(context)
-    const issuedAt = reviewNow(context)
+    const contextSnapshot = reviewContextSnapshot(context)
+    const issuedAt = reviewNow(contextSnapshot.now)
     const normalized = normalizedInput(input, issuedAt)
     const fields = fieldsFrom(normalized)
     const fieldsDigest = fieldsDigestFrom(fields)
-    const proposalId = proposalIdFor(context.product, context.workspaceId, normalized.evidence.sha256, fieldsDigest)
+    const proposalId = proposalIdFor(contextSnapshot.product, contextSnapshot.workspaceId, normalized.evidence.sha256, fieldsDigest)
     const generatedAt = intrinsicDateToISOString.call(issuedAt)
     const proposalWithoutReviewPacket: Omit<SyntheticDocumentProposal, 'reviewPacket'> = {
       proposalId,
@@ -1314,7 +1332,7 @@ export class SyntheticVisionDocumentFieldExtractionConnector implements Connecto
       ownerReview: { status: 'pending', required: true, visibility: 'owner-only', automaticApply: false, automaticPublication: false },
       mesaEvidenceHandoff: { state: 'BLOCKED_PENDING_INDEPENDENT_OWNER_REVIEW', referenceOnly: true, rawContentIncluded: false, sent: false },
     }
-    const proposal: SyntheticDocumentProposal = { ...proposalWithoutReviewPacket, reviewPacket: reviewPacketFor(proposalWithoutReviewPacket, context.product, context.workspaceId, normalized.consent, issuedAt, limits.maxReviewAgeSeconds, limits.maxEvidenceAgeSeconds) }
+    const proposal: SyntheticDocumentProposal = { ...proposalWithoutReviewPacket, reviewPacket: reviewPacketFor(proposalWithoutReviewPacket, contextSnapshot.product, contextSnapshot.workspaceId, normalized.consent, issuedAt, limits.maxReviewAgeSeconds, limits.maxEvidenceAgeSeconds) }
     return {
       data: { mode: LIVE_DISABLED, proposal, nextAction: 'INDEPENDENT_OWNER_REVIEW_REQUIRED', automaticApply: false, automaticPublication: false },
       provenance: {
@@ -1341,12 +1359,12 @@ export async function independentlyReviewSyntheticDocumentProposal(proposal: Syn
   if (!ownerApproved) throw new OwnerGateError()
   const normalizedReviewer = reviewActor(reviewer)
   if (decision !== 'approved' && decision !== 'rejected') throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_DECISION')
-  const scoped = reviewContext(context)
-  const reviewedAt = reviewNow(context)
-  const normalizedProposal = validateSyntheticDocumentProposalForReviewAt(proposal, scoped, reviewedAt)
+  const snapshot = reviewContextSnapshot(context)
+  const reviewedAt = reviewNow(snapshot.now)
+  const normalizedProposal = validateSyntheticDocumentProposalForReviewAt(proposal, snapshot, reviewedAt)
   if (actorIdentity(normalizedReviewer) === actorIdentity(normalizedProposal.preparedBy)) throw new MakerCheckerError('DOCUMENT_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
   const occurredAt = intrinsicDateToISOString.call(reviewedAt)
-  const auditHash = reviewedAuditHash(await appendReviewedAudit(auditLog, frozenReviewedAuditEvent(scoped, normalizedReviewer, occurredAt, normalizedProposal, decision)))
+  const auditHash = reviewedAuditHash(await appendReviewedAudit(auditLog, frozenReviewedAuditEvent(snapshot, normalizedReviewer, occurredAt, normalizedProposal, decision)))
   return {
     proposalId: normalizedProposal.proposalId,
     decision,
