@@ -13,6 +13,9 @@ export const MAX_GOVERNANCE_SCOPE_COUNT = 12
 export const MAX_GOVERNANCE_COST_CAP_CENTS = 10_000_000
 export const MAX_GOVERNANCE_REQUESTED_ITEMS = 100_000
 
+/** Only the three built-in synthetic connectors are registered today. */
+export const MAX_SYNTHETIC_CONNECTOR_REGISTRY_SIZE = 12
+
 export function isGovernanceCostCapCents(value: unknown): value is number {
   return typeof value === 'number' && Number.isSafeInteger(value) && value >= 1 && value <= MAX_GOVERNANCE_COST_CAP_CENTS
 }

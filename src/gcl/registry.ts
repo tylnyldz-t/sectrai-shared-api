@@ -1,5 +1,5 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, GclError, OwnerGateError, ScopeError } from './errors.js'
-import { isGovernanceCostCapCents, isGovernanceRequestedItems, MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
+import { isGovernanceCostCapCents, isGovernanceRequestedItems, MAX_GOVERNANCE_SCOPE_COUNT, MAX_SYNTHETIC_CONNECTOR_REGISTRY_SIZE } from './governance-limits.js'
 import { deepFreeze, frozenCanonicalJsonCopy, isProxyValue } from './plan-integrity.js'
 import { syntheticResultReviewBinding, validatedSyntheticConnectorResult } from './result-boundary.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
@@ -84,13 +84,55 @@ function connectorMethod(value: object, name: 'run' | 'preflight'): Function | u
   try {
     let current: object | null = value
     while (current && current !== Object.prototype) {
+      // A connector may use a class prototype, but a Proxy prototype or
+      // callable can execute traps while the registry is only trying to
+      // establish its local governance boundary.
+      if (isProxyValue(current)) return null
       const descriptor = Object.getOwnPropertyDescriptor(current, name)
-      if (descriptor) return 'value' in descriptor && typeof descriptor.value === 'function' ? descriptor.value : null
+      if (descriptor) {
+        return 'value' in descriptor && typeof descriptor.value === 'function' && !isProxyValue(descriptor.value)
+          ? descriptor.value
+          : null
+      }
       current = Object.getPrototypeOf(current)
     }
     return undefined
   } catch {
     return null
+  }
+}
+
+/**
+ * Do not iterate caller-owned collections during registry admission. An
+ * iterator, sparse slot, Proxy, or accessor can otherwise run before a
+ * connector has passed its fail-closed registration checks.
+ */
+function registeredConnectorList(value: unknown): Connector[] {
+  try {
+    if (isProxyValue(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+      throw new ConnectorUnavailableError('CONNECTOR_INVALID_REGISTRATION')
+    }
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    if (!lengthDescriptor || !('value' in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) ||
+      lengthDescriptor.value < 0 || lengthDescriptor.value > MAX_SYNTHETIC_CONNECTOR_REGISTRY_SIZE) {
+      throw new ConnectorUnavailableError('CONNECTOR_INVALID_REGISTRATION')
+    }
+    const names = Object.getOwnPropertyNames(value)
+    if (names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+      throw new ConnectorUnavailableError('CONNECTOR_INVALID_REGISTRATION')
+    }
+    const connectors: Connector[] = []
+    for (let index = 0; index < lengthDescriptor.value; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor)) {
+        throw new ConnectorUnavailableError('CONNECTOR_INVALID_REGISTRATION')
+      }
+      connectors.push(descriptor.value as Connector)
+    }
+    return connectors
+  } catch (error) {
+    if (error instanceof ConnectorUnavailableError) throw error
+    throw new ConnectorUnavailableError('CONNECTOR_INVALID_REGISTRATION')
   }
 }
 
@@ -126,8 +168,10 @@ function registerConnector(value: Connector): RegisteredConnector {
       kind,
       authKind,
       scopes: Object.freeze([...scopes]),
-      ...(preflight ? { preflight: preflight.bind(value) as Connector['preflight'] } : {}),
-      run: run.bind(value) as Connector['run'],
+      // Do not resolve a connector-defined `bind` property. The intrinsic
+      // binder locks the approved receiver without invoking caller fields.
+      ...(preflight ? { preflight: Function.prototype.bind.call(preflight, value) as Connector['preflight'] } : {}),
+      run: Function.prototype.bind.call(run, value) as Connector['run'],
     })
   } catch (error) {
     if (error instanceof ConnectorUnavailableError) throw error
@@ -173,7 +217,7 @@ export class ConnectorRegistry {
   private readonly connectors = new Map<string, RegisteredConnector>()
 
   constructor(connectors: readonly Connector[]) {
-    for (const connector of connectors) {
+    for (const connector of registeredConnectorList(connectors)) {
       const registered = registerConnector(connector)
       if (this.connectors.has(registered.id)) throw new ConnectorUnavailableError('DUPLICATE_CONNECTOR')
       this.connectors.set(registered.id, registered)

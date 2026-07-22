@@ -3,7 +3,7 @@ import test from 'node:test'
 import { hashAuditEvent, InMemoryHashChainAuditLog, verifiedAuditChainHead } from '../src/gcl/audit.js'
 import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, QuotaError, ScopeError, SyntheticResultIntegrityError, SyntheticReviewIntegrityError } from '../src/gcl/errors.js'
 import { gameEngineConnectorFromEnvironment, SyntheticGameEngineConnector, type GameEngineBuildInput, type GameEngineBuildPlan } from '../src/gcl/game-engine.js'
-import { MAX_GOVERNANCE_COST_CAP_CENTS, MAX_GOVERNANCE_REQUESTED_ITEMS, MAX_GOVERNANCE_SCOPE_COUNT } from '../src/gcl/governance-limits.js'
+import { MAX_GOVERNANCE_COST_CAP_CENTS, MAX_GOVERNANCE_REQUESTED_ITEMS, MAX_GOVERNANCE_SCOPE_COUNT, MAX_SYNTHETIC_CONNECTOR_REGISTRY_SIZE } from '../src/gcl/governance-limits.js'
 import { ContractOnlyJncPilotMapper, JNC_MAXIMUM_GPU_RUNTIME_MINUTES, JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from '../src/gcl/jnc-pilot.js'
 import { ownerGateError } from '../src/gcl/owner-gate.js'
 import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, isCanonicalJsonData, isSyntheticPlanIntegrity, syntheticPlanSha256, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
@@ -1228,6 +1228,81 @@ test('registry admission seals connector metadata and rejects accessor-backed ru
     (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_INVALID_REGISTRATION',
   )
   assert.equal(runGetterReads, 0)
+})
+
+test('registry admission rejects hostile connector containers and callables before their traps run', () => {
+  const validConnector = (id: string): Connector => ({
+    id, kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { throw new Error('MUST_NOT_RUN') },
+  })
+
+  const collectionTraps = { count: 0 }
+  const proxyCollection = trapCountingProxy([validConnector('proxy-container-proposal')], collectionTraps)
+  assert.throws(
+    () => new ConnectorRegistry(proxyCollection as unknown as readonly Connector[]),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_INVALID_REGISTRATION',
+  )
+  assert.equal(collectionTraps.count, 0)
+
+  const sparseCollection: Connector[] = []
+  sparseCollection.length = 1
+  assert.throws(
+    () => new ConnectorRegistry(sparseCollection),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_INVALID_REGISTRATION',
+  )
+
+  const tooManyConnectors = Array.from(
+    { length: MAX_SYNTHETIC_CONNECTOR_REGISTRY_SIZE + 1 },
+    (_, index) => validConnector(`bounded-registry-proposal-${index}`),
+  )
+  assert.throws(
+    () => new ConnectorRegistry(tooManyConnectors),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_INVALID_REGISTRATION',
+  )
+
+  const callableTraps = { count: 0 }
+  const proxyRun = trapCountingProxy(async () => { throw new Error('MUST_NOT_RUN') }, callableTraps)
+  assert.throws(
+    () => new ConnectorRegistry([{
+      id: 'proxy-run-proposal', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'], run: proxyRun,
+    }]),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_INVALID_REGISTRATION',
+  )
+  assert.equal(callableTraps.count, 0)
+
+  const preflightTraps = { count: 0 }
+  const proxyPreflight = trapCountingProxy(async () => { throw new Error('MUST_NOT_RUN') }, preflightTraps)
+  assert.throws(
+    () => new ConnectorRegistry([{
+      id: 'proxy-preflight-proposal', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+      async run() { throw new Error('MUST_NOT_RUN') }, preflight: proxyPreflight,
+    }]),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_INVALID_REGISTRATION',
+  )
+  assert.equal(preflightTraps.count, 0)
+
+  const prototypeTraps = { count: 0 }
+  const proxyPrototype = trapCountingProxy({ async run() { throw new Error('MUST_NOT_RUN') } }, prototypeTraps)
+  const proxyPrototypeConnector = Object.assign(Object.create(proxyPrototype), {
+    id: 'proxy-prototype-proposal', kind: 'media-3d' as const, authKind: 'owner-approval' as const, scopes: ['3d:generate'],
+  }) as Connector
+  assert.throws(
+    () => new ConnectorRegistry([proxyPrototypeConnector]),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_INVALID_REGISTRATION',
+  )
+  assert.equal(prototypeTraps.count, 0)
+
+  let poisonedBindReads = 0
+  const runWithPoisonedBind = async () => { throw new Error('MUST_NOT_RUN') }
+  Object.defineProperty(runWithPoisonedBind, 'bind', {
+    configurable: true,
+    get() { poisonedBindReads += 1; throw new Error('MUST_NOT_READ_BIND') },
+  })
+  const registry = new ConnectorRegistry([{
+    id: 'intrinsic-bind-proposal', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'], run: runWithPoisonedBind,
+  }])
+  assert.equal(registry.get('intrinsic-bind-proposal').id, 'intrinsic-bind-proposal')
+  assert.equal(poisonedBindReads, 0)
 })
 
 test('governance scope cardinality is bounded consistently before registration, audit, or egress', async () => {

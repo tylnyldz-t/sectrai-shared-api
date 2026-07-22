@@ -290,6 +290,29 @@ These are local validation and accounting controls only. They add no database
 migration, network/provider/JNC call, executable, GPU lease, artifact write,
 credential read, dispatch, or publication capability.
 
+### D6 registry-admission container and callable seal
+
+The connector registry admits only a dense native array of at most 12
+connectors. It reads each indexed own data descriptor directly rather than
+iterating a caller-owned collection. Proxy-backed arrays, array subclasses,
+sparse slots, symbols, non-index properties, and accessor-backed entries are
+unavailable (`503 connector_unavailable` / `CONNECTOR_INVALID_REGISTRATION`)
+before connector registration starts.
+
+The same admission boundary rejects Proxy-backed `run` and `preflight`
+callables and Proxy prototype layers before descriptor reflection. Once a
+normal callable is accepted, its receiver is fixed through the intrinsic
+`Function.prototype.bind`; a connector-owned `bind` property is not read while
+the registry is sealing metadata. This avoids constructor-time trap execution
+and prevents later metadata mutation from changing the registered method
+identity. It does not make an accepted adapter executable: the existing
+`LIVE_DISABLED`, audit, quota, review-snapshot, and egress controls still
+govern every run.
+
+This is a local in-memory registration-shape control only. It adds no
+provider/JNC client, transport, credential, engine process, filesystem write,
+GPU lease, dispatch, artifact creation, or publication capability.
+
 ## Synthetic result egress boundary
 
 After an adapter returns, the governed runner performs one final, local-only
