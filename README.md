@@ -70,6 +70,8 @@ D21 deep-snapshots and freezes generic governed input before the runner touches 
 
 D22 snapshots the selected synthetic connector control plane at registry construction: immutable ID/scopes plus captured descriptor-only callbacks. Shaped collections/metadata/callbacks fail closed, and later connector property replacement cannot retarget audit, quota, scope, or the selected callback path. D23 snapshots the runner's registry/audit/quota method references and local clock at construction; Proxy, accessor, or Proxy-method collaborators fail closed, and later public-property replacement cannot retarget the existing synthetic path. It is not a plug-in/collaborator sandbox and adds no route, credential, provider/device call, handoff, publication, action, or capability.
 
+D24 captures the native `Date` constructor/methods used by governed, audit, fixture, and review timestamps, together with the runner registration/collaborator own-data inspection helpers. Hooks installed after module initialization cannot retarget those existing checks. It is not a clean-realm attestation and adds no time service, route, storage operation, credential, provider/device call, handoff, publication, action, or capability.
+
 No migration, camera connection, notification, action, or publication is part of this connector.
 
 ## Run and migrate
