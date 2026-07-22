@@ -84,7 +84,7 @@ The validator rejects missing, extra, inherited, hidden, accessor-backed, or alt
 
 ## D9 — dense own-data collection boundary
 
-New proposals use `synthetic-document-review-packet-v9`. Its integrity material adds a fixed `collectionBoundaryBinding`: `collectionShape: "array-prototype-dense-own-data-only"`, `sparseOrInheritedElementsAccepted: false`, and `accessorElementsAccepted: false`.
+D9 introduced `synthetic-document-review-packet-v9`. Its integrity material adds a fixed `collectionBoundaryBinding`: `collectionShape: "array-prototype-dense-own-data-only"`, `sparseOrInheritedElementsAccepted: false`, and `accessorElementsAccepted: false`.
 
 Before input or proposal-field elements are read, the module inspects their array descriptors. A field collection must be a bounded dense array with exactly its own numbered, enumerable data elements and the normal `Array.prototype`; holes, inherited elements, extra string or symbol properties, a substituted prototype, hidden indexes, and getters or setters are rejected. The same rule is re-run at review time before audit append. Missing, extra, inherited, hidden, accessor-backed, or altered collection bindings are also rejected; v1 through v8 packets are deliberately non-reviewable. D9 remains metadata-only and does not add a credential, OCR/provider client, persistence, replay state, approval authority, apply/send path, or live mode. D10 supersedes v9 for newly issued packets.
 

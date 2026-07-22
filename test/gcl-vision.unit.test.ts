@@ -539,6 +539,18 @@ test('D10 binds well-formed UTF-8 text handling and rejects ambiguous surrogate 
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
 
+  const pairedSurrogateAudit = new InMemoryHashChainAuditLog()
+  const pairedSurrogateQuota = new TestQuota()
+  const pairedSurrogateRunner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), pairedSurrogateAudit, pairedSurrogateQuota, now)
+  const pairedSurrogateResult = await pairedSurrogateRunner.run({
+    connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID,
+    input: { ...input, syntheticFields: [{ field: 'containerId', value: 'MSCU-\u{1f600}' }] },
+    ...context,
+  }) as ConnectorResult<DocumentFieldExtractionData>
+  assert.equal(pairedSurrogateResult.data.proposal.fields[0]?.value, 'MSCU-\u{1f600}')
+  assert.equal(pairedSurrogateAudit.entries.length, 2)
+  assert.equal(pairedSurrogateQuota.requests.length, 1)
+
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
   assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v10')
