@@ -1062,3 +1062,101 @@ gaps stay classified; no migration occurs; output is proposal-only with no
 action; JARVIS/JNC is not started; and synthetic evidence is never deployment
 or live-enable authority. D13 adds no network, provider, credential,
 real-world input, production mutation, or live output.
+
+## D14 — first immutable successor package
+
+D14 pins the **first committed successor** after every D13 snapshot, never a
+sibling worktree tip: RA OCR `ff0fb55`, RA image `33c53f3`, RA 3D/game
+`63c793a`, RA market `89b9175`, RFID `80e8a7a`, translation `b9a510c`,
+language education `24b3c4a`, and camera `2359558`. RA voice still has no
+successor after its D1 snapshot. All target source is read only with
+`git show <pinned-commit>:<path>` and re-derived against its Git blob ID;
+uncommitted target source, environment files, credentials, connectors,
+providers, sockets, devices, migrations, and production targets are outside
+the audit input boundary.
+
+The fixture additionally pins the D14 image candidate/review ledgers, the 3D
+result boundary and game-engine companion, translation's audit/artifact
+modules, and the language-education type boundary. `node:util` is accepted
+only for in-process Proxy detection in the camera and market closures; it is
+not a provider, device, transport, or worker allowance.
+
+| Connector | D14 source-only evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D14 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Exact-Date checks first prove an object can yield a finite intrinsic timestamp, then require the native prototype and no own keys | `requested` only | Pass | Nonconformant |
+| RA image | Candidate and owner-review audit seams resolve only data-descriptor methods below ordinary prototypes and accept only exact own-data hash responses | `requested` only | Pass | Nonconformant |
+| RA 3D/game | A frozen result-review binding carries exact product/workspace scope, scopes, cost cap, and requested items into synthetic plan/result validation; JNC remains contract-only | `requested` only | Pass | Nonconformant |
+| RA market | The runner copies a plain own-data request envelope and dense scopes before gate, registry, audit, quota, or adapter use | `requested` only | Pass | Nonconformant |
+| RFID | Documentation/test successor; connector and runner remain D13-identical | `requested`, `failed` | Pass | Conformant |
+| Translation | Artifact creation and creation-audit events must share the same canonical instant before the local metadata transaction; no raw translation data is added | `requested`, `failed` | Pass | Conformant |
+| Language education | Adds a bounded `synthetic://langedu/resources/...` fixture-pointer proposal; content, media URLs, links, recommendations, assignments, and learner data remain absent | `requested`, `failed` | Pass | Source-conformant; unit regression |
+| Camera | The governed-run envelope is copied from exact own data, with dense scopes, before clock, registry, audit, quota, or adapter use | `requested`, `failed` | Pass | Source-conformant; unit regression |
+
+`Conformant` is restricted to the immutable synthetic IV GCL envelope. It is
+not approval for a provider, credential/API key, network egress, real
+OCR/media/RFID/camera input, device, database, migration, JARVIS/JNC launch,
+delivery, handoff, publication, production write, or live enablement.
+
+### D14 negative and edge evidence
+
+- The fail-closed scanner now rejects aliasing the `Reflect` or `Object` root,
+  or storing `Reflect.get`, `Object.getOwnPropertyDescriptor(s)`, or
+  `Object.getPrototypeOf` for later use. This blocks a two-step bypass in which
+  a benign-looking local alias subsequently recovers `process.env` or the
+  CommonJS loader. Direct reflection on an ordinary fixture object's own data
+  remains allowed; it cannot grant a host capability.
+- The market and camera D14 runners statically prove their new request-envelope
+  check is before connector lookup/preflight, requested-audit reservation, and
+  quota use. As in prior batches, owner denial remains required before those
+  reservations. Their quota classification is unchanged: market consumes quota
+  before the protected failed-audit lifecycle, while camera consumes it inside
+  the lifecycle linked to `requestedAuditHash`.
+- Image's descriptor-safe method lookup stops before `Object.prototype` and
+  `Function.prototype`, is cycle bounded, and rejects accessor-backed audit
+  methods or returned hashes without evaluating a getter. The 3D/game binding
+  is data only: it reserves no quota, opens no GPU/JNC connection, produces no
+  artifact, and authorizes no publication.
+- The language-education resource connector accepts only a synthetic reference,
+  hash, locale, and one bounded activity. It returns a proposal-only reference;
+  no resource contents, external URL, learner profile, score, or delivery path
+  is present. Translation's timestamp binding is source-only metadata
+  validation; it is neither a persistence migration nor a provider call.
+
+### D14 test evidence and ADOS boundary
+
+`npm run test:conformance` passes the full D1–D14 immutable-pin, local-closure,
+disabled-mode, owner-ordering, quota-classification, and negative-source suite.
+The D14 negative probe covers root and method aliases for reflective host
+capability recovery.
+
+Selected exact-commit synthetic unit files were executed from temporary local
+Git archives with an empty process environment except `PATH`: OCR, image, 3D
+JNC contract, RFID, and the pure translation connector unit file passed. The
+translation HTTP-safety file was intentionally not run because this IV audit
+does not open even an in-process HTTP listener.
+
+Three selected package unit suites did **not** pass and are not counted as
+positive evidence:
+
+- Market's new D14 request envelope correctly rejects the older test helper's
+  spread `ConnectorRunContext` because it carries the non-request `now` field;
+  15 of 24 tests therefore receive `INVALID_CONNECTOR_RUN_REQUEST` before their
+  older expected gate.
+- Language education adds a fifteenth factory connector but its test still
+  asserts 14; 40 of 41 tests pass, while that count assertion fails.
+- Camera's D14 ADOS-control wording adds the governed-run envelope, while its
+  test still requires the older contiguous D8/D10/D11 sentence; 21 of 22 tests
+  pass, but the stale regular expression fails.
+
+These regressions must be corrected in their owning branches before treating
+the D14 language-education or camera package as unit-certified. They do not
+weaken the source fixture's fail-closed classification and are not silently
+reclassified as passing tests.
+
+All ten ADOS rules remain intact: no product data-plane join; default-deny and
+`LIVE_DISABLED`; immutable source/blob pointers only; no inferred owner
+decision; maker–checker where applicable; audit gaps and test regressions
+reported rather than hidden; no migration; proposal-only/no-action output; no
+JARVIS/JNC start; and synthetic evidence is never deployment or live-enable
+authority. D14 used no credential, provider, external network, device,
+database, migration, send, publication, `main` write, or production write.
