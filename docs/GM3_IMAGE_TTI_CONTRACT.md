@@ -178,6 +178,17 @@ decision and must be implemented behind its own bounded approval path.
   rejected before an item is read; this prevents an untrusted host object from
   executing code or exposing prompt text during issuance, review, or chain
   verification.
+- Direct adapter, issuance, and owner-review contexts are closed, copied
+  data envelopes. Each accepts only its documented envelope or the complete
+  shared `ConnectorRunContext`; arbitrary extra fields, accessor fields,
+  malformed scope arrays, or malformed clocks fail before identity, scope, or
+  time values are read.
+  Ledger operations are resolved only from data-method descriptors (including
+  ordinary class methods); accessor-backed `appendIssuance`, `assertIssued`,
+  and `appendDecision` capabilities are never invoked. Ledger response hashes
+  must likewise be a closed `{ hash }` envelope. This keeps host integration
+  seams fail-closed without adding an HTTP route, credential, or dispatch
+  capability.
 - `creativeWorkerPlan.dispatch` remains exactly
   `{ performed: false, gate: "LIVE_DISABLED", network: "not-attempted" }`.
   This package does not invoke Creative Worker, ComfyUI, Docker, loopback, a

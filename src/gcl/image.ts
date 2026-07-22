@@ -255,7 +255,9 @@ function dataMethod(value: unknown, name: string): ((...args: unknown[]) => unkn
   try {
     if (!value || (typeof value !== 'object' && typeof value !== 'function')) return null
     let target: object | null = value
-    while (target) {
+    const visited = new Set<object>()
+    while (target && !visited.has(target)) {
+      visited.add(target)
       const descriptor = Object.getOwnPropertyDescriptor(target, name)
       if (descriptor) return !descriptor.get && !descriptor.set && typeof descriptor.value === 'function' ? descriptor.value as (...args: unknown[]) => unknown : null
       target = Object.getPrototypeOf(target)
@@ -491,14 +493,14 @@ function imageRunContext(value: unknown): ConnectorRunContext {
 /** Copy the small issuance context before its identity or clock is used. */
 function imageIssuanceContext(value: unknown): ImageCandidateIssuanceContext {
   const context = plainRecord(value)
-  if (!context || !hasExactKeys(context, IMAGE_ISSUANCE_CONTEXT_KEYS) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+  if (!context || (!hasExactKeys(context, IMAGE_ISSUANCE_CONTEXT_KEYS) && !hasExactKeys(context, IMAGE_RUN_CONTEXT_KEYS)) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.actor) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
   return { product: context.product, workspaceId: context.workspaceId, actor: context.actor, correlationId: context.correlationId, now: context.now as () => Date }
 }
 
 /** Copy the small review context before scope or clock checks run. */
 function imageReviewContext(value: unknown): ImageOwnerReviewContext {
   const context = plainRecord(value)
-  if (!context || !hasExactKeys(context, IMAGE_REVIEW_CONTEXT_KEYS) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+  if (!context || (!hasExactKeys(context, IMAGE_REVIEW_CONTEXT_KEYS) && !hasExactKeys(context, IMAGE_ISSUANCE_CONTEXT_KEYS) && !hasExactKeys(context, IMAGE_RUN_CONTEXT_KEYS)) || !isSafeIdentifier(context.product) || !isSafeIdentifier(context.workspaceId) || !isSafeIdentifier(context.correlationId) || typeof context.now !== 'function') throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
   return { product: context.product, workspaceId: context.workspaceId, correlationId: context.correlationId, now: context.now as () => Date }
 }
 
