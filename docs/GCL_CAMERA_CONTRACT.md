@@ -578,10 +578,11 @@ durable state, or capability. The connector remains fixture-only,
 D25 completes D24's post-load hook boundary across the governed runner, shared
 audit sealer/canonicalizer, and synthetic camera/review parser. At module
 initialization they capture the own-data inspection, create/freeze, array
-identity/map/sort, numeric, Set cycle/uniqueness, canonical `JSON.stringify`,
-and audit-key ordering operations they use. The recursive input and audit
-snapshots use captured Set `has`/`add`/`delete` operations; they never depend
-on a subsequently replaced global Set or its iterator.
+identity/membership/map/sort, numeric, Set cycle/uniqueness, canonical
+`JSON.stringify`, and audit-key ordering operations they use. The recursive
+input and audit snapshots use captured Set `has`/`add`/`delete` operations and
+the bounded paths use index traversal rather than a replaceable collection
+iterator; they never depend on a subsequently replaced global Set or iterator.
 
 A later replacement of public `Object`, `Array`, `Number`, `Set`,
 `String.prototype.localeCompare`, or `JSON.stringify` helpers therefore cannot

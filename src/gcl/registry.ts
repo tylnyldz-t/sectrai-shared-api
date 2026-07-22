@@ -96,7 +96,7 @@ function registeredConnectorList(value: unknown): readonly unknown[] {
   }
   const connectors: unknown[] = []
   for (let index = 0; index < length; index += 1) {
-    const descriptor = descriptors[String(index)]
+    const descriptor = descriptors[`${index}`]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return connectorRegistrationError()
     connectors[connectors.length] = descriptor.value
   }
@@ -123,7 +123,7 @@ function registeredConnectorScopes(value: unknown): readonly string[] {
   }
   const scopes: string[] = []
   for (let index = 0; index < length; index += 1) {
-    const descriptor = descriptors[String(index)]
+    const descriptor = descriptors[`${index}`]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'string' || !descriptor.value || descriptor.value.length > 80) {
       return connectorRegistrationError()
     }
@@ -200,7 +200,7 @@ function governedRunScopes(value: unknown): string[] {
   const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
   const scopes: string[] = []
   for (let index = 0; index < value.length; index += 1) {
-    const descriptor = descriptors[String(index)]
+    const descriptor = descriptors[`${index}`]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'string' || !descriptor.value || descriptor.value.length > 80) {
       throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_REQUEST')
     }

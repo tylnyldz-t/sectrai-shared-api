@@ -37,3 +37,4 @@ export const intrinsicSetDelete = Set.prototype.delete
 export const intrinsicSetHas = Set.prototype.has
 export const intrinsicStringCharCodeAt = String.prototype.charCodeAt
 export const intrinsicStringLocaleCompare = String.prototype.localeCompare
+export const intrinsicStringTrim = String.prototype.trim

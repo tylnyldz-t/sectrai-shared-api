@@ -1522,6 +1522,7 @@ test('D25 keeps late data-boundary and canonical-JSON hooks out of governed, aud
   const originalSet = globalThis.Set
   const originalCharCodeAt = String.prototype.charCodeAt
   const originalLocaleCompare = String.prototype.localeCompare
+  const originalTrim = String.prototype.trim
   let hostileHookCalls = 0
   const hostileHook = () => { hostileHookCalls += 1; throw new Error('LATE_D25_HOOK_MUST_NOT_RUN') }
   let result: ConnectorResult<CameraObservationResult> | undefined
@@ -1531,7 +1532,7 @@ test('D25 keeps late data-boundary and canonical-JSON hooks out of governed, aud
   try {
     Array.isArray = hostileHook as unknown as typeof Array.isArray
     Array.prototype.includes = hostileHook as unknown as typeof Array.prototype.includes
-    Array.prototype[Symbol.iterator] = hostileHook as unknown as typeof Array.prototype[Symbol.iterator]
+    Array.prototype[Symbol.iterator] = hostileHook as unknown as typeof originalArrayIterator
     Array.prototype.map = hostileHook as unknown as typeof Array.prototype.map
     Array.prototype.sort = hostileHook as unknown as typeof Array.prototype.sort
     JSON.stringify = hostileHook as typeof JSON.stringify
@@ -1548,6 +1549,7 @@ test('D25 keeps late data-boundary and canonical-JSON hooks out of governed, aud
     globalThis.Set = hostileHook as unknown as SetConstructor
     String.prototype.charCodeAt = hostileHook as typeof String.prototype.charCodeAt
     String.prototype.localeCompare = hostileHook as typeof String.prototype.localeCompare
+    String.prototype.trim = hostileHook as typeof String.prototype.trim
 
     result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
     const tampered = {
@@ -1580,6 +1582,7 @@ test('D25 keeps late data-boundary and canonical-JSON hooks out of governed, aud
     globalThis.Set = originalSet
     String.prototype.charCodeAt = originalCharCodeAt
     String.prototype.localeCompare = originalLocaleCompare
+    String.prototype.trim = originalTrim
   }
 
   assert.equal(hostileHookCalls, 0)

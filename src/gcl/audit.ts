@@ -354,7 +354,8 @@ export class InMemoryHashChainAuditLog implements AuditLog {
   readonly entries: AuditRecordValue[] = []
 
   async append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
-    const previousHash = this.entries.at(-1)?.hash ?? null
+    const previous = this.entries.length > 0 ? this.entries[this.entries.length - 1] : undefined
+    const previousHash = previous?.hash ?? null
     const hash = hashAuditEvent(event, previousHash)
     this.entries[this.entries.length] = { event, previousHash, hash }
     return { hash, previousHash }

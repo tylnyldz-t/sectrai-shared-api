@@ -5,7 +5,7 @@ import {
   intrinsicArrayIncludes, intrinsicArrayIsArray, intrinsicArrayPrototype, intrinsicDate, intrinsicDateGetTime, intrinsicDateToISOString, intrinsicIsDate,
   intrinsicIsProxy, intrinsicJsonStringify, intrinsicNumber, intrinsicNumberIsFinite, intrinsicNumberIsNaN, intrinsicNumberIsSafeInteger,
   intrinsicObjectCreate, intrinsicObjectFreeze, intrinsicObjectGetOwnPropertyDescriptors, intrinsicObjectGetOwnPropertyNames,
-  intrinsicObjectGetOwnPropertySymbols, intrinsicObjectGetPrototypeOf, intrinsicObjectPrototype, intrinsicReflectApply, intrinsicStringCharCodeAt,
+  intrinsicObjectGetOwnPropertySymbols, intrinsicObjectGetPrototypeOf, intrinsicObjectPrototype, intrinsicReflectApply, intrinsicStringCharCodeAt, intrinsicStringTrim,
 } from './intrinsics.js'
 import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorResult, ConnectorRunContext } from './types.js'
 
@@ -390,8 +390,9 @@ function containsControlCharacter(value: string): boolean {
 }
 
 function normalizedActor(value: unknown): string | null {
-  if (typeof value !== 'string' || !value.trim() || value.length > 160 || containsControlCharacter(value)) return null
-  const actor = value.trim()
+  if (typeof value !== 'string' || value.length > 160 || containsControlCharacter(value)) return null
+  const actor = intrinsicReflectApply(intrinsicStringTrim, value, []) as string
+  if (!actor) return null
   return ACTOR_PATTERN.test(actor) ? actor : null
 }
 
