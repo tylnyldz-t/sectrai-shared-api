@@ -525,6 +525,52 @@ test('corrupt audit links are rejected instead of silently becoming a new chain 
 
 })
 
+test('audit append and verification accept only own canonical data without invoking hostile fields', async () => {
+  const validEvent = {
+    type: 'connector.run.requested' as const, connectorId: 'text-to-3d', product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace',
+    actor: 'synthetic-owner', scopes: ['3d:generate'], costCapCents: 50, requestedItems: 1,
+    occurredAt: fixedNow().toISOString(), detail: {},
+  }
+  const audit = new InMemoryHashChainAuditLog()
+  await audit.append(validEvent)
+  assert.equal(Object.isFrozen(audit.entries[0]?.event), true)
+  assert.equal(Object.isFrozen(audit.entries[0]?.event.detail ?? {}), true)
+
+  const inheritedEvent = Object.create(validEvent)
+  await assert.rejects(audit.append(inheritedEvent), AuditChainError)
+  assert.throws(() => verifiedAuditChainHead([
+    { event: inheritedEvent, previousHash: null, hash: audit.entries[0]?.hash },
+  ]), AuditChainError)
+
+  let eventGetterReads = 0
+  const accessorEvent = { ...validEvent } as Record<string, unknown>
+  Object.defineProperty(accessorEvent, 'product', {
+    enumerable: true,
+    get() { eventGetterReads += 1; return validEvent.product },
+  })
+  await assert.rejects(audit.append(accessorEvent as unknown as import('../src/gcl/types.js').ConnectorAuditEvent), AuditChainError)
+  assert.throws(() => hashAuditEvent(accessorEvent as unknown as import('../src/gcl/types.js').ConnectorAuditEvent, null), AuditChainError)
+  assert.equal(eventGetterReads, 0)
+
+  let detailGetterReads = 0
+  const accessorDetail: Record<string, unknown> = {}
+  Object.defineProperty(accessorDetail, 'requestedAuditHash', {
+    enumerable: true,
+    get() { detailGetterReads += 1; return 'a'.repeat(64) },
+  })
+  await assert.rejects(audit.append({
+    ...validEvent,
+    type: 'connector.run.succeeded',
+    detail: accessorDetail,
+  }), AuditChainError)
+  assert.equal(detailGetterReads, 0)
+
+  const sparseScopes = ['3d:generate'] as string[]
+  sparseScopes.length = 2
+  await assert.rejects(audit.append({ ...validEvent, scopes: sparseScopes }), AuditChainError)
+  assert.equal(audit.entries.length, 1)
+})
+
 test('runner captures one valid clock instant for audit, quota, and synthetic provenance', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const quota = new InMemoryDailyConnectorQuota({ dailyRuns: 6, dailyItems: 60 })

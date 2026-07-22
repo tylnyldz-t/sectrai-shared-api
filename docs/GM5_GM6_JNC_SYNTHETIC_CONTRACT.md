@@ -102,6 +102,23 @@ request/terminal pair remains valid. Equal timestamps within one run are
 intentional: they describe one local review transaction, not engine execution
 time.
 
+### D1 audit-record data lock
+
+Audit append and historic-chain verification accept only the exact documented
+own, enumerable data fields. Every event, detail object, scope array, prior
+hash, and stored record wrapper is copied as strict canonical JSON before it
+participates in a SHA-256 link. Inherited fields, getters/setters, symbols,
+hidden properties, class instances, cycles, sparse arrays, and non-finite
+values fail closed as `503 gcl_audit_chain_corrupt`; getters are not invoked.
+
+This applies before the durable log chooses its workspace lock or opens its
+transaction, and before the in-memory test seam mutates its entries. A
+malformed direct/internal `AuditLog.append` call therefore cannot create a
+record, alter a hash, or cause a later audit event to trust JavaScript object
+behaviour. Accepted events retain the same data-only record contract; this is
+not a migration, a signature system, an engine/provider call, or a new
+execution or publication capability.
+
 ## Connector mapping
 
 | GM connector | Synthetic result | JNC pilot pattern represented | Execution state |
