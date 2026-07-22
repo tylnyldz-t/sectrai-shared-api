@@ -282,7 +282,6 @@ const intrinsicArrayIsArray = Array.isArray
 const intrinsicArrayPrototype = Array.prototype
 const intrinsicArrayIncludes = Array.prototype.includes
 const intrinsicArrayJoin = Array.prototype.join
-const intrinsicArrayMap = Array.prototype.map
 const intrinsicArraySlice = Array.prototype.slice
 const intrinsicArraySort = Array.prototype.sort
 const IntrinsicDate = Date
@@ -300,6 +299,13 @@ const intrinsicSetHas = Set.prototype.has
 const intrinsicStringCharCodeAt = String.prototype.charCodeAt
 const intrinsicStringToLowerCase = String.prototype.toLowerCase
 const intrinsicStringTrim = String.prototype.trim
+
+/** Dense arrays are descriptor-checked before this helper reads an input item. */
+function arrayMap<T, TResult>(value: readonly T[], mapper: (item: T, index: number) => TResult): TResult[] {
+  const result: TResult[] = []
+  for (let index = 0; index < value.length; index += 1) result[index] = mapper(value[index]!, index)
+  return result
+}
 
 function digest(value: string): string { return createHash('sha256').update(value, 'utf8').digest('hex') }
 /**
@@ -345,7 +351,9 @@ function hasUnpairedSurrogate(value: string): boolean {
 }
 function exactKeys(value: Record<string, unknown>, allowed: readonly string[], error: string): void {
   const ownKeys = intrinsicReflectOwnKeys(value)
-  if (ownKeys.some((key) => typeof key !== 'string' || !intrinsicArrayIncludes.call(allowed, key))) throw new ConnectorInputError(error)
+  for (const key of ownKeys) {
+    if (typeof key !== 'string' || !intrinsicArrayIncludes.call(allowed, key)) throw new ConnectorInputError(error)
+  }
   for (const key of ownKeys) {
     const descriptor = intrinsicObjectGetOwnPropertyDescriptor(value, key)
     if (!descriptor || !descriptor.enumerable || descriptor.get || descriptor.set) throw new ConnectorInputError(error)
@@ -366,36 +374,37 @@ function exactKeys(value: Record<string, unknown>, allowed: readonly string[], e
 function canonicalJson(value: unknown): string {
   if (value === null || typeof value === 'boolean' || typeof value === 'string') return intrinsicJsonStringify(value)
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
+    if (!intrinsicNumberIsFinite(value)) throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
     return intrinsicJsonStringify(value)
   }
   if (isProxyObject(value)) throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
-  if (Array.isArray(value)) {
-    if (Object.getPrototypeOf(value) !== Array.prototype) throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
-    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
-    if (!lengthDescriptor || !('value' in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0) throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
-    const ownKeys = Reflect.ownKeys(value)
+  if (intrinsicArrayIsArray(value)) {
+    if (intrinsicObjectGetPrototypeOf(value) !== intrinsicArrayPrototype) throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
+    const lengthDescriptor = intrinsicObjectGetOwnPropertyDescriptor(value, 'length')
+    if (!lengthDescriptor || !('value' in lengthDescriptor) || !intrinsicNumberIsSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0) throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
+    const ownKeys = intrinsicReflectOwnKeys(value)
     if (ownKeys.length !== lengthDescriptor.value + 1) throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
     const items: string[] = []
     for (let index = 0; index < lengthDescriptor.value; index += 1) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+      const descriptor = intrinsicObjectGetOwnPropertyDescriptor(value, String(index))
       if (!descriptor || !descriptor.enumerable || descriptor.get || descriptor.set || !('value' in descriptor)) throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
       items.push(canonicalJson(descriptor.value))
     }
-    return `[${items.join(',')}]`
+    return `[${intrinsicArrayJoin.call(items, ',')}]`
   }
   if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
-  const keys = Reflect.ownKeys(value)
+  const keys = intrinsicReflectOwnKeys(value)
   const descriptors: Array<{ key: string; value: unknown }> = []
   for (let index = 0; index < keys.length; index += 1) {
     const key = keys[index]
     if (typeof key !== 'string') throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
-    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    const descriptor = intrinsicObjectGetOwnPropertyDescriptor(value, key)
     if (!descriptor || !descriptor.enumerable || descriptor.get || descriptor.set || !('value' in descriptor)) throw new ConnectorInputError('INVALID_DOCUMENT_INTEGRITY_MATERIAL')
     descriptors.push({ key, value: descriptor.value })
   }
-  descriptors.sort((left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
-  return `{${descriptors.map(({ key, value: item }) => `${intrinsicJsonStringify(key)}:${canonicalJson(item)}`).join(',')}}`
+  intrinsicArraySort.call(descriptors, (left, right) => left.key < right.key ? -1 : left.key > right.key ? 1 : 0)
+  const entries = arrayMap(descriptors, ({ key, value: item }) => `${intrinsicJsonStringify(key)}:${canonicalJson(item)}`)
+  return `{${intrinsicArrayJoin.call(entries, ',')}}`
 }
 /**
  * Arrays are an input boundary too: inspect descriptors before an element is
@@ -403,26 +412,26 @@ function canonicalJson(value: unknown): string {
  * cannot influence a synthetic proposal or review.
  */
 function denseOwnDataArray(value: unknown, error: string, maximumLength: number): asserts value is unknown[] {
-  if (isProxyObject(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new ConnectorInputError(error)
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+  if (isProxyObject(value) || !intrinsicArrayIsArray(value) || intrinsicObjectGetPrototypeOf(value) !== intrinsicArrayPrototype) throw new ConnectorInputError(error)
+  const lengthDescriptor = intrinsicObjectGetOwnPropertyDescriptor(value, 'length')
   if (!lengthDescriptor || lengthDescriptor.enumerable || lengthDescriptor.get || lengthDescriptor.set || !('value' in lengthDescriptor)) throw new ConnectorInputError(error)
   const length = lengthDescriptor.value
-  if (!Number.isSafeInteger(length) || length < 1 || length > maximumLength) throw new ConnectorInputError(error)
-  const ownKeys = Reflect.ownKeys(value)
+  if (!intrinsicNumberIsSafeInteger(length) || length < 1 || length > maximumLength) throw new ConnectorInputError(error)
+  const ownKeys = intrinsicReflectOwnKeys(value)
   if (ownKeys.length !== length + 1) throw new ConnectorInputError(error)
   for (let index = 0; index < length; index += 1) {
-    const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+    const descriptor = intrinsicObjectGetOwnPropertyDescriptor(value, String(index))
     if (!descriptor || !descriptor.enumerable || descriptor.get || descriptor.set || !('value' in descriptor)) throw new ConnectorInputError(error)
   }
 }
 function requiredString(value: unknown, error: string, maxLength: number): string {
-  if (typeof value !== 'string' || !value.trim() || value.length > maxLength || hasControlCharacter(value) || hasUnpairedSurrogate(value)) throw new ConnectorInputError(error)
-  return value.trim()
+  if (typeof value !== 'string' || !intrinsicStringTrim.call(value) || value.length > maxLength || hasControlCharacter(value) || hasUnpairedSurrogate(value)) throw new ConnectorInputError(error)
+  return intrinsicStringTrim.call(value)
 }
 function parsedDate(value: unknown, error: string): Date {
   if (typeof value !== 'string') throw new ConnectorInputError(error)
-  const parsed = new Date(value)
-  if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) throw new ConnectorInputError(error)
+  const parsed = new IntrinsicDate(value)
+  if (!intrinsicNumberIsFinite(intrinsicDateGetTime.call(parsed)) || intrinsicDateToISOString.call(parsed) !== value) throw new ConnectorInputError(error)
   return parsed
 }
 /**
@@ -432,12 +441,12 @@ function parsedDate(value: unknown, error: string): Date {
  * toISOString() or allowing NaN through deadline comparisons.
  */
 function checkedDateAddSeconds(value: Date, seconds: number, error: string): Date {
-  const epochMilliseconds = Date.prototype.getTime.call(value)
+  const epochMilliseconds = intrinsicDateGetTime.call(value)
   const intervalMilliseconds = seconds * 1000
   const resultMilliseconds = epochMilliseconds + intervalMilliseconds
-  if (!Number.isSafeInteger(epochMilliseconds) || !Number.isSafeInteger(intervalMilliseconds) || !Number.isSafeInteger(resultMilliseconds) || Math.abs(resultMilliseconds) > MAX_UTC_EPOCH_MILLISECONDS) throw new ConnectorInputError(error)
-  const result = new Date(resultMilliseconds)
-  if (!Number.isFinite(Date.prototype.getTime.call(result))) throw new ConnectorInputError(error)
+  if (!intrinsicNumberIsSafeInteger(epochMilliseconds) || !intrinsicNumberIsSafeInteger(intervalMilliseconds) || !intrinsicNumberIsSafeInteger(resultMilliseconds) || intrinsicMathAbs(resultMilliseconds) > MAX_UTC_EPOCH_MILLISECONDS) throw new ConnectorInputError(error)
+  const result = new IntrinsicDate(resultMilliseconds)
+  if (!intrinsicNumberIsFinite(intrinsicDateGetTime.call(result))) throw new ConnectorInputError(error)
   return result
 }
 /**
@@ -449,19 +458,19 @@ function exactClockDate(value: unknown, error: string): Date {
   if (!value || typeof value !== 'object') throw new ConnectorInputError(error)
   let milliseconds: number
   try {
-    milliseconds = Date.prototype.getTime.call(value)
+    milliseconds = intrinsicDateGetTime.call(value)
   } catch {
     throw new ConnectorInputError(error)
   }
-  if (!Number.isFinite(milliseconds) || Object.getPrototypeOf(value) !== Date.prototype || Reflect.ownKeys(value).length !== 0) throw new ConnectorInputError(error)
-  return new Date(milliseconds)
+  if (!intrinsicNumberIsFinite(milliseconds) || intrinsicObjectGetPrototypeOf(value) !== intrinsicDatePrototype || intrinsicReflectOwnKeys(value).length !== 0) throw new ConnectorInputError(error)
+  return new IntrinsicDate(milliseconds)
 }
-function isFieldName(value: unknown): value is DocumentFieldName { return typeof value === 'string' && (fieldNames as readonly string[]).includes(value) }
+function isFieldName(value: unknown): value is DocumentFieldName { return typeof value === 'string' && intrinsicArrayIncludes.call(fieldNames as readonly string[], value) }
 function isSensitive(field: DocumentFieldName): boolean {
   return field === 'note' || field === 'senderName' || field === 'senderAddress' || field === 'recipientName' || field === 'recipientAddress' || field === 'loadingAddress' || field === 'deliveryAddress' || field === 'identityNumber'
 }
 function fieldsDigestFrom(fields: readonly Pick<SyntheticDocumentField, 'field' | 'valueDigest' | 'privacy'>[]): string {
-  return digest(canonicalJson(fields.map((field) => ({ field: field.field, valueDigest: field.valueDigest, privacy: field.privacy }))))
+  return digest(canonicalJson(arrayMap(fields, (field) => ({ field: field.field, valueDigest: field.valueDigest, privacy: field.privacy }))))
 }
 function proposalIdFor(product: string, workspaceId: string, evidenceSha256: string, fieldsDigest: string): string {
   return `synthetic-document-${digest(`${product}:${workspaceId}:${evidenceSha256}:${fieldsDigest}`).slice(0, 24)}`
@@ -480,6 +489,7 @@ function reviewPacketIntegrityMaterial(
   proxyBoundaryBinding: SyntheticDocumentReviewPacket['proxyBoundaryBinding'],
   dateArithmeticBoundaryBinding: SyntheticDocumentReviewPacket['dateArithmeticBoundaryBinding'],
   integrityEncodingBoundaryBinding: SyntheticDocumentReviewPacket['integrityEncodingBoundaryBinding'],
+  intrinsicBoundaryBinding: SyntheticDocumentReviewPacket['intrinsicBoundaryBinding'],
   evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
   reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): Record<string, unknown> {
@@ -490,7 +500,7 @@ function reviewPacketIntegrityMaterial(
     mode: proposal.mode,
     extraction: proposal.extraction,
     evidence: proposal.evidence,
-    fields: proposal.fields.map((field) => ({
+    fields: arrayMap(proposal.fields, (field) => ({
       field: field.field,
       status: field.status,
       privacy: field.privacy,
@@ -513,6 +523,7 @@ function reviewPacketIntegrityMaterial(
     proxyBoundaryBinding,
     dateArithmeticBoundaryBinding,
     integrityEncodingBoundaryBinding,
+    intrinsicBoundaryBinding,
     evidenceBinding,
     reviewWindow,
   }
@@ -523,10 +534,10 @@ function evidenceBindingFor(
   issuedAt: Date,
   maxEvidenceAgeSeconds: number,
 ): SyntheticDocumentReviewPacket['evidenceBinding'] {
-  const capturedAt = new Date(evidence.capturedAt)
+  const capturedAt = new IntrinsicDate(evidence.capturedAt)
   const expiresAt = checkedDateAddSeconds(capturedAt, maxEvidenceAgeSeconds, 'DOCUMENT_EVIDENCE_EXPIRY_ARITHMETIC_INVALID')
-  if (expiresAt.getTime() <= issuedAt.getTime()) throw new ConnectorInputError('DOCUMENT_EVIDENCE_STALE')
-  return { capturedAt: capturedAt.toISOString(), expiresAt: expiresAt.toISOString() }
+  if (intrinsicDateGetTime.call(expiresAt) <= intrinsicDateGetTime.call(issuedAt)) throw new ConnectorInputError('DOCUMENT_EVIDENCE_STALE')
+  return { capturedAt: intrinsicDateToISOString.call(capturedAt), expiresAt: intrinsicDateToISOString.call(expiresAt) }
 }
 
 function reviewByFor(
@@ -535,10 +546,10 @@ function reviewByFor(
   evidenceExpiresAt: string,
   maxReviewAgeSeconds: number,
 ): Date {
-  return new Date(Math.min(
-    checkedDateAddSeconds(issuedAt, maxReviewAgeSeconds, 'DOCUMENT_REVIEW_WINDOW_ARITHMETIC_INVALID').getTime(),
-    new Date(consentExpiresAt).getTime(),
-    new Date(evidenceExpiresAt).getTime(),
+  return new IntrinsicDate(intrinsicMathMin(
+    intrinsicDateGetTime.call(checkedDateAddSeconds(issuedAt, maxReviewAgeSeconds, 'DOCUMENT_REVIEW_WINDOW_ARITHMETIC_INVALID')),
+    intrinsicDateGetTime.call(new IntrinsicDate(consentExpiresAt)),
+    intrinsicDateGetTime.call(new IntrinsicDate(evidenceExpiresAt)),
   ))
 }
 
@@ -563,11 +574,12 @@ function reviewPacketFor(
   const proxyBoundaryBinding = { ...SYNTHETIC_DOCUMENT_PROXY_BOUNDARY }
   const dateArithmeticBoundaryBinding = { ...SYNTHETIC_DOCUMENT_DATE_ARITHMETIC_BOUNDARY }
   const integrityEncodingBoundaryBinding = { ...SYNTHETIC_DOCUMENT_INTEGRITY_ENCODING_BOUNDARY }
+  const intrinsicBoundaryBinding = { ...SYNTHETIC_DOCUMENT_INTRINSIC_BOUNDARY }
   const evidenceBinding = evidenceBindingFor(proposal.evidence, issuedAt, maxEvidenceAgeSeconds)
-  const reviewWindow = { issuedAt: issuedAt.toISOString(), reviewBy: reviewByFor(issuedAt, consent.expiresAt, evidenceBinding.expiresAt, maxReviewAgeSeconds).toISOString() }
+  const reviewWindow = { issuedAt: intrinsicDateToISOString.call(issuedAt), reviewBy: intrinsicDateToISOString.call(reviewByFor(issuedAt, consent.expiresAt, evidenceBinding.expiresAt, maxReviewAgeSeconds)) }
   return {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
-    integrityDigest: digest(canonicalJson(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, integrityEncodingBoundaryBinding, evidenceBinding, reviewWindow))),
+    integrityDigest: digest(canonicalJson(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, integrityEncodingBoundaryBinding, intrinsicBoundaryBinding, evidenceBinding, reviewWindow))),
     scopeBinding,
     consentBinding,
     governanceBinding,
@@ -580,6 +592,7 @@ function reviewPacketFor(
     proxyBoundaryBinding,
     dateArithmeticBoundaryBinding,
     integrityEncodingBoundaryBinding,
+    intrinsicBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -593,7 +606,7 @@ function normalizedInput(value: unknown, now: Date): SyntheticDocumentScanInput 
   if (!isRecord(value)) throw new ConnectorInputError('INVALID_VISION_DOCUMENT_REQUEST')
   exactKeys(value, ['evidence', 'consent', 'syntheticFields'], 'UNEXPECTED_VISION_DOCUMENT_FIELD')
   if (!isRecord(value.evidence) || !isRecord(value.consent)) throw new ConnectorInputError('INVALID_VISION_DOCUMENT_REQUEST')
-  if (isProxyObject(value.syntheticFields) || !Array.isArray(value.syntheticFields)) throw new ConnectorInputError('INVALID_SYNTHETIC_DOCUMENT_FIELDS')
+  if (isProxyObject(value.syntheticFields) || !intrinsicArrayIsArray(value.syntheticFields)) throw new ConnectorInputError('INVALID_SYNTHETIC_DOCUMENT_FIELDS')
 
   const evidence = value.evidence
   exactKeys(evidence, ['source', 'evidenceId', 'sha256', 'mediaType', 'byteLength', 'capturedAt'], 'UNEXPECTED_DOCUMENT_EVIDENCE_FIELD')
@@ -602,10 +615,10 @@ function normalizedInput(value: unknown, now: Date): SyntheticDocumentScanInput 
   if (!EVIDENCE_ID_PATTERN.test(evidenceId)) throw new ConnectorInputError('INVALID_SYNTHETIC_EVIDENCE_ID')
   const sha256 = requiredString(evidence.sha256, 'INVALID_DOCUMENT_EVIDENCE_SHA256', 64)
   if (!SHA256_PATTERN.test(sha256)) throw new ConnectorInputError('INVALID_DOCUMENT_EVIDENCE_SHA256')
-  if (typeof evidence.mediaType !== 'string' || !DOCUMENT_MEDIA_TYPES.has(evidence.mediaType)) throw new ConnectorInputError('INVALID_DOCUMENT_MEDIA_TYPE')
+  if (typeof evidence.mediaType !== 'string' || !intrinsicSetHas.call(DOCUMENT_MEDIA_TYPES, evidence.mediaType)) throw new ConnectorInputError('INVALID_DOCUMENT_MEDIA_TYPE')
   if (!positiveInteger(evidence.byteLength) || evidence.byteLength > MAX_SYNTHETIC_EVIDENCE_BYTES) throw new ConnectorInputError('INVALID_DOCUMENT_EVIDENCE_SIZE')
   const capturedAt = parsedDate(evidence.capturedAt, 'INVALID_DOCUMENT_CAPTURE_TIME')
-  if (capturedAt.getTime() > now.getTime()) throw new ConnectorInputError('INVALID_DOCUMENT_CAPTURE_TIME')
+  if (intrinsicDateGetTime.call(capturedAt) > intrinsicDateGetTime.call(now)) throw new ConnectorInputError('INVALID_DOCUMENT_CAPTURE_TIME')
 
   const consent = value.consent
   exactKeys(consent, ['purpose', 'status', 'policyVersion', 'expiresAt'], 'UNEXPECTED_DOCUMENT_CONSENT_FIELD')
@@ -613,27 +626,29 @@ function normalizedInput(value: unknown, now: Date): SyntheticDocumentScanInput 
   const policyVersion = requiredString(consent.policyVersion, 'INVALID_DOCUMENT_POLICY_VERSION', 80)
   if (!POLICY_VERSION_PATTERN.test(policyVersion)) throw new ConsentError('INVALID_DOCUMENT_POLICY_VERSION')
   const expiresAt = parsedDate(consent.expiresAt, 'INVALID_DOCUMENT_CONSENT_EXPIRY')
-  if (expiresAt.getTime() <= now.getTime()) throw new ConsentError('DOCUMENT_CONSENT_EXPIRED')
+  if (intrinsicDateGetTime.call(expiresAt) <= intrinsicDateGetTime.call(now)) throw new ConsentError('DOCUMENT_CONSENT_EXPIRED')
 
   denseOwnDataArray(value.syntheticFields, 'INVALID_SYNTHETIC_DOCUMENT_FIELDS', fieldNames.length)
-  const seen = new Set<DocumentFieldName>()
-  const syntheticFields = value.syntheticFields.map((item): DocumentFieldFixture => {
+  const seen = new IntrinsicSet<DocumentFieldName>()
+  const syntheticFields = arrayMap(value.syntheticFields, (item): DocumentFieldFixture => {
     if (!isRecord(item)) throw new ConnectorInputError('INVALID_SYNTHETIC_DOCUMENT_FIELD')
     exactKeys(item, ['field', 'value'], 'UNEXPECTED_SYNTHETIC_DOCUMENT_FIELD')
-    if (!isFieldName(item.field) || seen.has(item.field)) throw new ConnectorInputError('INVALID_SYNTHETIC_DOCUMENT_FIELD')
-    seen.add(item.field)
+    if (!isFieldName(item.field) || intrinsicSetHas.call(seen, item.field)) throw new ConnectorInputError('INVALID_SYNTHETIC_DOCUMENT_FIELD')
+    intrinsicSetAdd.call(seen, item.field)
     return { field: item.field, value: requiredString(item.value, 'INVALID_SYNTHETIC_DOCUMENT_VALUE', 240) }
   })
 
   return {
-    evidence: { source: 'synthetic-fixture', evidenceId, sha256, mediaType: evidence.mediaType as SyntheticDocumentEvidence['mediaType'], byteLength: evidence.byteLength, capturedAt: capturedAt.toISOString() },
-    consent: { purpose: 'document-field-extraction', status: 'granted', policyVersion, expiresAt: expiresAt.toISOString() },
+    evidence: { source: 'synthetic-fixture', evidenceId, sha256, mediaType: evidence.mediaType as SyntheticDocumentEvidence['mediaType'], byteLength: evidence.byteLength, capturedAt: intrinsicDateToISOString.call(capturedAt) },
+    consent: { purpose: 'document-field-extraction', status: 'granted', policyVersion, expiresAt: intrinsicDateToISOString.call(expiresAt) },
     syntheticFields,
   }
 }
 
 function fieldsFrom(input: SyntheticDocumentScanInput): SyntheticDocumentField[] {
-  return [...input.syntheticFields].sort((left, right) => left.field.localeCompare(right.field)).map(({ field, value }) => {
+  const sorted = intrinsicArraySlice.call(input.syntheticFields)
+  intrinsicArraySort.call(sorted, (left, right) => left.field < right.field ? -1 : left.field > right.field ? 1 : 0)
+  return arrayMap(sorted, ({ field, value }) => {
     const valueDigest = digest(value)
     return isSensitive(field)
       ? { field, status: 'synthetic-proposal', privacy: 'kvkk-masked', valueDigest, maskedValue: `KVKK_MASKED:${valueDigest.slice(0, 16)}`, confidence: 0 }
@@ -652,14 +667,14 @@ function reviewNow(context: Pick<ConnectorRunContext, 'now'>): Date {
 }
 
 function reviewActor(reviewer: unknown): string {
-  if (typeof reviewer !== 'string' || !reviewer.trim() || reviewer.length > 160 || hasControlCharacter(reviewer) || hasUnpairedSurrogate(reviewer)) throw new OwnerGateError('OWNER_REVIEWER_REQUIRED')
-  const normalized = reviewer.trim()
+  if (typeof reviewer !== 'string' || !intrinsicStringTrim.call(reviewer) || reviewer.length > 160 || hasControlCharacter(reviewer) || hasUnpairedSurrogate(reviewer)) throw new OwnerGateError('OWNER_REVIEWER_REQUIRED')
+  const normalized = intrinsicStringTrim.call(reviewer)
   if (!ACTOR_PATTERN.test(normalized)) throw new OwnerGateError('OWNER_REVIEWER_REQUIRED')
   return normalized
 }
 
 /** Actor IDs are ASCII-only at this boundary, so locale-free lowercasing is stable. */
-function actorIdentity(actor: string): string { return actor.toLowerCase() }
+function actorIdentity(actor: string): string { return intrinsicStringToLowerCase.call(actor) }
 
 function reviewedEvidence(value: unknown): SyntheticDocumentProposal['evidence'] {
   if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_EVIDENCE')
@@ -668,23 +683,23 @@ function reviewedEvidence(value: unknown): SyntheticDocumentProposal['evidence']
   if (!EVIDENCE_ID_PATTERN.test(evidenceId)) throw new ConnectorInputError('INVALID_SYNTHETIC_EVIDENCE_ID')
   const sha256 = requiredString(value.sha256, 'INVALID_DOCUMENT_EVIDENCE_SHA256', 64)
   if (!SHA256_PATTERN.test(sha256)) throw new ConnectorInputError('INVALID_DOCUMENT_EVIDENCE_SHA256')
-  if (typeof value.mediaType !== 'string' || !DOCUMENT_MEDIA_TYPES.has(value.mediaType)) throw new ConnectorInputError('INVALID_DOCUMENT_MEDIA_TYPE')
+  if (typeof value.mediaType !== 'string' || !intrinsicSetHas.call(DOCUMENT_MEDIA_TYPES, value.mediaType)) throw new ConnectorInputError('INVALID_DOCUMENT_MEDIA_TYPE')
   if (!positiveInteger(value.byteLength) || value.byteLength > MAX_SYNTHETIC_EVIDENCE_BYTES) throw new ConnectorInputError('INVALID_DOCUMENT_EVIDENCE_SIZE')
   const capturedAt = parsedDate(value.capturedAt, 'INVALID_DOCUMENT_CAPTURE_TIME')
   if (value.rawContentStored !== false) throw new ConnectorInputError('RAW_DOCUMENT_CONTENT_NOT_ACCEPTED')
-  return { evidenceId, sha256, mediaType: value.mediaType as SyntheticDocumentEvidence['mediaType'], byteLength: value.byteLength, capturedAt: capturedAt.toISOString(), rawContentStored: false }
+  return { evidenceId, sha256, mediaType: value.mediaType as SyntheticDocumentEvidence['mediaType'], byteLength: value.byteLength, capturedAt: intrinsicDateToISOString.call(capturedAt), rawContentStored: false }
 }
 
 function reviewedFields(value: unknown): SyntheticDocumentField[] {
   denseOwnDataArray(value, 'INVALID_DOCUMENT_PROPOSAL_FIELDS', fieldNames.length)
-  const seen = new Set<DocumentFieldName>()
+  const seen = new IntrinsicSet<DocumentFieldName>()
   let previousField = ''
-  return value.map((item): SyntheticDocumentField => {
+  return arrayMap(value, (item): SyntheticDocumentField => {
     if (!isRecord(item)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_FIELD')
     exactKeys(item, ['field', 'status', 'privacy', 'valueDigest', 'value', 'maskedValue', 'confidence'], 'UNEXPECTED_DOCUMENT_PROPOSAL_FIELD')
     const field = item.field
-    if (!isFieldName(field) || seen.has(field) || (previousField && previousField.localeCompare(field) >= 0)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_FIELD_ORDER')
-    seen.add(field)
+    if (!isFieldName(field) || intrinsicSetHas.call(seen, field) || (previousField && previousField >= field)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_FIELD_ORDER')
+    intrinsicSetAdd.call(seen, field)
     previousField = field
     if (item.status !== 'synthetic-proposal' || item.confidence !== 0 || typeof item.privacy !== 'string') throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_FIELD')
     const valueDigest = requiredString(item.valueDigest, 'INVALID_DOCUMENT_PROPOSAL_FIELD_DIGEST', 64)
@@ -712,8 +727,8 @@ function reviewedConsentBinding(value: unknown, reviewedAt: Date): SyntheticDocu
   const policyVersionDigest = requiredString(value.policyVersionDigest, 'INVALID_DOCUMENT_REVIEW_POLICY_DIGEST', 64)
   if (!SHA256_PATTERN.test(policyVersionDigest)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_POLICY_DIGEST')
   const expiresAt = parsedDate(value.expiresAt, 'INVALID_DOCUMENT_REVIEW_CONSENT_EXPIRY')
-  if (expiresAt.getTime() <= reviewedAt.getTime()) throw new ConsentError('DOCUMENT_REVIEW_CONSENT_EXPIRED')
-  return { purpose: 'document-field-extraction', policyVersionDigest, expiresAt: expiresAt.toISOString() }
+  if (intrinsicDateGetTime.call(expiresAt) <= intrinsicDateGetTime.call(reviewedAt)) throw new ConsentError('DOCUMENT_REVIEW_CONSENT_EXPIRED')
+  return { purpose: 'document-field-extraction', policyVersionDigest, expiresAt: intrinsicDateToISOString.call(expiresAt) }
 }
 
 function reviewedGovernanceBinding(value: unknown): SyntheticDocumentReviewPacket['governanceBinding'] {
@@ -786,6 +801,13 @@ function reviewedIntegrityEncodingBoundaryBinding(value: unknown): SyntheticDocu
   return { ...SYNTHETIC_DOCUMENT_INTEGRITY_ENCODING_BOUNDARY }
 }
 
+function reviewedIntrinsicBoundaryBinding(value: unknown): SyntheticDocumentReviewPacket['intrinsicBoundaryBinding'] {
+  if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_INTRINSIC_BOUNDARY_BINDING')
+  exactKeys(value, ['runtimeIntrinsics', 'latePatchedGlobalsAccepted', 'prototypeMethodHooksAccepted'], 'UNEXPECTED_DOCUMENT_REVIEW_INTRINSIC_BOUNDARY_BINDING_FIELD')
+  if (value.runtimeIntrinsics !== SYNTHETIC_DOCUMENT_INTRINSIC_BOUNDARY.runtimeIntrinsics || value.latePatchedGlobalsAccepted !== false || value.prototypeMethodHooksAccepted !== false) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_INTRINSIC_BOUNDARY_BINDING')
+  return { ...SYNTHETIC_DOCUMENT_INTRINSIC_BOUNDARY }
+}
+
 function reviewedEvidenceBinding(
   value: unknown,
   evidence: SyntheticDocumentProposal['evidence'],
@@ -796,12 +818,12 @@ function reviewedEvidenceBinding(
   exactKeys(value, ['capturedAt', 'expiresAt'], 'UNEXPECTED_DOCUMENT_REVIEW_EVIDENCE_BINDING_FIELD')
   const capturedAt = parsedDate(value.capturedAt, 'INVALID_DOCUMENT_REVIEW_EVIDENCE_CAPTURE_TIME')
   const expiresAt = parsedDate(value.expiresAt, 'INVALID_DOCUMENT_REVIEW_EVIDENCE_EXPIRY')
-  if (capturedAt.toISOString() !== evidence.capturedAt) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_CAPTURE_MISMATCH')
-  const evidenceWindowMilliseconds = expiresAt.getTime() - capturedAt.getTime()
+  if (intrinsicDateToISOString.call(capturedAt) !== evidence.capturedAt) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_CAPTURE_MISMATCH')
+  const evidenceWindowMilliseconds = intrinsicDateGetTime.call(expiresAt) - intrinsicDateGetTime.call(capturedAt)
   if (evidenceWindowMilliseconds <= 0 || evidenceWindowMilliseconds > MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS * 1000) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_EVIDENCE_BINDING')
-  if (expiresAt.toISOString() !== checkedDateAddSeconds(capturedAt, governanceBinding.maxEvidenceAgeSeconds, 'DOCUMENT_REVIEW_EVIDENCE_EXPIRY_ARITHMETIC_INVALID').toISOString()) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_EXPIRY_MISMATCH')
-  if (expiresAt.getTime() <= reviewedAt.getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_EXPIRED')
-  return { capturedAt: capturedAt.toISOString(), expiresAt: expiresAt.toISOString() }
+  if (intrinsicDateToISOString.call(expiresAt) !== intrinsicDateToISOString.call(checkedDateAddSeconds(capturedAt, governanceBinding.maxEvidenceAgeSeconds, 'DOCUMENT_REVIEW_EVIDENCE_EXPIRY_ARITHMETIC_INVALID'))) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_EXPIRY_MISMATCH')
+  if (intrinsicDateGetTime.call(expiresAt) <= intrinsicDateGetTime.call(reviewedAt)) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_EXPIRED')
+  return { capturedAt: intrinsicDateToISOString.call(capturedAt), expiresAt: intrinsicDateToISOString.call(expiresAt) }
 }
 
 function reviewedReviewWindow(value: unknown, reviewedAt: Date): SyntheticDocumentReviewPacket['reviewWindow'] {
@@ -809,11 +831,11 @@ function reviewedReviewWindow(value: unknown, reviewedAt: Date): SyntheticDocume
   exactKeys(value, ['issuedAt', 'reviewBy'], 'UNEXPECTED_DOCUMENT_REVIEW_WINDOW_FIELD')
   const issuedAt = parsedDate(value.issuedAt, 'INVALID_DOCUMENT_REVIEW_WINDOW_ISSUED_AT')
   const reviewBy = parsedDate(value.reviewBy, 'INVALID_DOCUMENT_REVIEW_WINDOW_DEADLINE')
-  const reviewWindowMilliseconds = reviewBy.getTime() - issuedAt.getTime()
+  const reviewWindowMilliseconds = intrinsicDateGetTime.call(reviewBy) - intrinsicDateGetTime.call(issuedAt)
   if (reviewWindowMilliseconds <= 0 || reviewWindowMilliseconds > MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS * 1000) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_WINDOW')
-  if (issuedAt.getTime() > reviewedAt.getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_TIME_BEFORE_ISSUED')
-  if (reviewBy.getTime() <= reviewedAt.getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_EXPIRED')
-  return { issuedAt: issuedAt.toISOString(), reviewBy: reviewBy.toISOString() }
+  if (intrinsicDateGetTime.call(issuedAt) > intrinsicDateGetTime.call(reviewedAt)) throw new ConnectorInputError('DOCUMENT_REVIEW_TIME_BEFORE_ISSUED')
+  if (intrinsicDateGetTime.call(reviewBy) <= intrinsicDateGetTime.call(reviewedAt)) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_EXPIRED')
+  return { issuedAt: intrinsicDateToISOString.call(issuedAt), reviewBy: intrinsicDateToISOString.call(reviewBy) }
 }
 
 /**
@@ -827,13 +849,13 @@ function validateReviewPacketTimeline(
   evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
   reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): void {
-  const capturedAt = new Date(evidenceBinding.capturedAt)
-  const issuedAt = new Date(reviewWindow.issuedAt)
-  const reviewBy = new Date(reviewWindow.reviewBy)
-  if (capturedAt.getTime() > issuedAt.getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_CAPTURE_AFTER_ISSUANCE')
-  if (reviewBy.getTime() > new Date(consentBinding.expiresAt).getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_EXCEEDS_CONSENT')
-  if (reviewBy.getTime() > new Date(evidenceBinding.expiresAt).getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_EXCEEDS_EVIDENCE_FRESHNESS')
-  if (reviewBy.toISOString() !== reviewByFor(issuedAt, consentBinding.expiresAt, evidenceBinding.expiresAt, governanceBinding.maxReviewAgeSeconds).toISOString()) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_DERIVATION_MISMATCH')
+  const capturedAt = new IntrinsicDate(evidenceBinding.capturedAt)
+  const issuedAt = new IntrinsicDate(reviewWindow.issuedAt)
+  const reviewBy = new IntrinsicDate(reviewWindow.reviewBy)
+  if (intrinsicDateGetTime.call(capturedAt) > intrinsicDateGetTime.call(issuedAt)) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_CAPTURE_AFTER_ISSUANCE')
+  if (intrinsicDateGetTime.call(reviewBy) > intrinsicDateGetTime.call(new IntrinsicDate(consentBinding.expiresAt))) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_EXCEEDS_CONSENT')
+  if (intrinsicDateGetTime.call(reviewBy) > intrinsicDateGetTime.call(new IntrinsicDate(evidenceBinding.expiresAt))) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_EXCEEDS_EVIDENCE_FRESHNESS')
+  if (intrinsicDateToISOString.call(reviewBy) !== intrinsicDateToISOString.call(reviewByFor(issuedAt, consentBinding.expiresAt, evidenceBinding.expiresAt, governanceBinding.maxReviewAgeSeconds))) throw new ConnectorInputError('DOCUMENT_REVIEW_WINDOW_DERIVATION_MISMATCH')
 }
 
 function validateSyntheticDocumentProposalForReviewAt(
@@ -869,7 +891,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const mesaEvidenceHandoff: SyntheticDocumentProposal['mesaEvidenceHandoff'] = { state: 'BLOCKED_PENDING_INDEPENDENT_OWNER_REVIEW', referenceOnly: true, rawContentIncluded: false, sent: false }
 
   if (!isRecord(proposal.reviewPacket)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET')
-  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'makerCheckerBinding', 'collectionBoundaryBinding', 'stringBoundaryBinding', 'timeBoundaryBinding', 'fieldRecordBoundaryBinding', 'proxyBoundaryBinding', 'dateArithmeticBoundaryBinding', 'integrityEncodingBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
+  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'makerCheckerBinding', 'collectionBoundaryBinding', 'stringBoundaryBinding', 'timeBoundaryBinding', 'fieldRecordBoundaryBinding', 'proxyBoundaryBinding', 'dateArithmeticBoundaryBinding', 'integrityEncodingBoundaryBinding', 'intrinsicBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
   if (proposal.reviewPacket.version !== SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
   if (!isRecord(proposal.reviewPacket.scopeBinding)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_SCOPE')
   exactKeys(proposal.reviewPacket.scopeBinding, ['productDigest', 'workspaceDigest'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_SCOPE_FIELD')
@@ -888,6 +910,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const proxyBoundaryBinding = reviewedProxyBoundaryBinding(proposal.reviewPacket.proxyBoundaryBinding)
   const dateArithmeticBoundaryBinding = reviewedDateArithmeticBoundaryBinding(proposal.reviewPacket.dateArithmeticBoundaryBinding)
   const integrityEncodingBoundaryBinding = reviewedIntegrityEncodingBoundaryBinding(proposal.reviewPacket.integrityEncodingBoundaryBinding)
+  const intrinsicBoundaryBinding = reviewedIntrinsicBoundaryBinding(proposal.reviewPacket.intrinsicBoundaryBinding)
   const evidenceBinding = reviewedEvidenceBinding(proposal.reviewPacket.evidenceBinding, evidence, governanceBinding, reviewedAt)
   const reviewWindow = reviewedReviewWindow(proposal.reviewPacket.reviewWindow, reviewedAt)
   validateReviewPacketTimeline(consentBinding, governanceBinding, evidenceBinding, reviewWindow)
@@ -906,6 +929,7 @@ function validateSyntheticDocumentProposalForReviewAt(
     proxyBoundaryBinding,
     dateArithmeticBoundaryBinding,
     integrityEncodingBoundaryBinding,
+    intrinsicBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -915,7 +939,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   }
   if (proposal.reviewPacket.state !== reviewPacket.state || proposal.reviewPacket.rawDocumentContentIncluded !== false || proposal.reviewPacket.automaticApply !== false || proposal.reviewPacket.automaticPublication !== false || productDigest !== digest(scoped.product) || workspaceDigest !== digest(scoped.workspaceId)) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_SCOPE_MISMATCH')
   const normalized: SyntheticDocumentProposal = { proposalId, syntheticUri: proposal.syntheticUri, preparedBy, mode: LIVE_DISABLED, extraction: 'SYNTHETIC_PROPOSAL_ONLY_NOT_OCR', evidence, fields, fieldsDigest, ownerReview, reviewPacket, mesaEvidenceHandoff }
-  if (integrityDigest !== digest(canonicalJson(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.makerCheckerBinding, reviewPacket.collectionBoundaryBinding, reviewPacket.stringBoundaryBinding, reviewPacket.timeBoundaryBinding, reviewPacket.fieldRecordBoundaryBinding, reviewPacket.proxyBoundaryBinding, reviewPacket.dateArithmeticBoundaryBinding, reviewPacket.integrityEncodingBoundaryBinding, reviewPacket.evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+  if (integrityDigest !== digest(canonicalJson(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.makerCheckerBinding, reviewPacket.collectionBoundaryBinding, reviewPacket.stringBoundaryBinding, reviewPacket.timeBoundaryBinding, reviewPacket.fieldRecordBoundaryBinding, reviewPacket.proxyBoundaryBinding, reviewPacket.dateArithmeticBoundaryBinding, reviewPacket.integrityEncodingBoundaryBinding, reviewPacket.intrinsicBoundaryBinding, reviewPacket.evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
   return normalized
 }
 
@@ -968,7 +992,7 @@ export class SyntheticVisionDocumentFieldExtractionConnector implements Connecto
     const fields = fieldsFrom(normalized)
     const fieldsDigest = fieldsDigestFrom(fields)
     const proposalId = proposalIdFor(context.product, context.workspaceId, normalized.evidence.sha256, fieldsDigest)
-    const generatedAt = issuedAt.toISOString()
+    const generatedAt = intrinsicDateToISOString.call(issuedAt)
     const proposalWithoutReviewPacket: Omit<SyntheticDocumentProposal, 'reviewPacket'> = {
       proposalId,
       syntheticUri: `synthetic://gcl/${this.id}/${proposalId}`,
@@ -990,7 +1014,7 @@ export class SyntheticVisionDocumentFieldExtractionConnector implements Connecto
         retrievedAt: generatedAt,
         untrustedContent: {
           source: 'synthetic-document-field-fixture',
-          value: { evidenceSha256: normalized.evidence.sha256, policyVersion: normalized.consent.policyVersion, fields: fields.map((field) => ({ field: field.field, valueDigest: field.valueDigest, privacy: field.privacy })) },
+          value: { evidenceSha256: normalized.evidence.sha256, policyVersion: normalized.consent.policyVersion, fields: arrayMap(fields, (field) => ({ field: field.field, valueDigest: field.valueDigest, privacy: field.privacy })) },
           handling: 'data-only',
           instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS',
         },
@@ -1011,7 +1035,7 @@ export async function independentlyReviewSyntheticDocumentProposal(proposal: Syn
   const reviewedAt = reviewNow(context)
   const normalizedProposal = validateSyntheticDocumentProposalForReviewAt(proposal, context, reviewedAt)
   if (actorIdentity(normalizedReviewer) === actorIdentity(normalizedProposal.preparedBy)) throw new MakerCheckerError('DOCUMENT_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
-  const occurredAt = reviewedAt.toISOString()
+  const occurredAt = intrinsicDateToISOString.call(reviewedAt)
   const audit = await auditLog.append({
     type: 'connector.document.owner_reviewed', connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, actor: normalizedReviewer,
     scopes: [VISION_DOCUMENT_FIELD_EXTRACTION_SCOPE], costCapCents: 0, requestedItems: 1, occurredAt,
