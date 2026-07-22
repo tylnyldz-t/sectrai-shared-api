@@ -46,8 +46,12 @@ export interface Connector<TInput = unknown, TData = unknown> {
    */
   quotaGroup?: string
   scopes: readonly string[]
-  /** Optional non-mutating configuration gate, executed before audit/quota reservation. */
-  preflight?(input: TInput, ctx: ConnectorRunContext): Promise<void> | void
+  /**
+   * Optional non-mutating configuration gate, executed before audit/quota
+   * reservation. A connector may return a canonical input snapshot; when it
+   * does, the governed runner passes only that snapshot to `run`.
+   */
+  preflight?(input: TInput, ctx: ConnectorRunContext): Promise<TInput | void> | TInput | void
   run(input: TInput, ctx: ConnectorRunContext): Promise<ConnectorResult<TData>>
 }
 

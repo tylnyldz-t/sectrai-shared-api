@@ -98,4 +98,7 @@ action. D12 snapshots the governed-run request envelope and scope strings as
 exact own data before connector preflight, audit, or quota; accessor-, Proxy-,
 inherited-, hidden-, symbol-, sparse-, and extra credential-shaped fields fail
 closed. The market input itself remains bounded synthetic data for its own
-parser, never a credential or live action.
+parser, never a credential or live action. D13 preserves that parser's
+canonical preflight copy across the runner's asynchronous audit, quota, and
+run seams, so a caller cannot mutate the original input into a different
+proposal or provider-shaped request after ingress.

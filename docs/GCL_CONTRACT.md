@@ -14,7 +14,7 @@ interface Connector<TInput, TData> {
   authKind: 'owner-token' | 'oauth'
   quotaGroup?: string
   scopes: readonly string[]
-  preflight?(input: TInput, ctx: ConnectorRunContext): Promise<void> | void
+  preflight?(input: TInput, ctx: ConnectorRunContext): Promise<TInput | void> | TInput | void
   run(input: TInput, ctx: ConnectorRunContext): Promise<{
     data: TData
     provenance: ConnectorProvenance
@@ -60,7 +60,9 @@ Every registered connector is governed by these rules:
   direct market, and independent-review boundaries before later seams are
   reached. D12 snapshots the complete governed-run envelope and its scope
   array through descriptors before connector preflight, audit, or quota can
-  read it. None reads audit storage, writes, or approves execution.
+  read it. D13 lets `market` return a canonical preflight snapshot, which the
+  runner carries across its later asynchronous seams instead of the
+  caller-held input. None reads audit storage, writes, or approves execution.
   All resulting evidence remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
@@ -157,8 +159,12 @@ costCapCents, requestedItems }`; accessor-, Proxy-, inherited-, hidden-,
 symbol-, sparse-scope-, and extra-field (including credential-shaped) values
 fail closed as `INVALID_CONNECTOR_RUN_REQUEST` before preflight, audit, or
 quota. It copies the envelope primitives and scope strings only; `input`
-remains opaque data for the selected connector's own parser. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 are local mutation checks or boundary hardening, never
-signatures, credentials, approval workflows, or execution paths. The specific market
+remains opaque data for the selected connector's own parser. D13 lets that
+parser return a canonical market copy for the runner to use after its audit
+and quota awaits, so a caller mutation cannot alter an already accepted market
+request. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13 are local mutation checks or
+boundary hardening, never signatures, credentials, approval workflows, or
+execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
 
 ## Privacy, KVKK, and content boundary

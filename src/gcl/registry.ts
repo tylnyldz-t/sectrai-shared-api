@@ -143,14 +143,19 @@ export class GovernedConnectorRunner {
       requestedItems: safeRequest.requestedItems,
       now: this.now,
     }
-    await connector.preflight?.(safeRequest.input, context)
+    // A connector that returns a canonical preflight value owns its input
+    // schema and can close a caller-mutation gap before any async audit or
+    // quota seam. Connectors that return undefined retain the generic,
+    // opaque-input contract.
+    const preparedInput = await connector.preflight?.(safeRequest.input, context)
+    const connectorInput = preparedInput === undefined ? safeRequest.input : preparedInput
     const requestedAudit = await this.auditLog.append({
       type: 'connector.run.requested', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
       scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(), detail: {},
     })
     await this.quota.consume({ ...context, connectorId: connector.id, quotaGroup: connector.quotaGroup, occurredAt })
     try {
-      const result = await connector.run(safeRequest.input, context)
+      const result = await connector.run(connectorInput, context)
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
         scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(), detail: { requestedAuditHash: requestedAudit.hash },

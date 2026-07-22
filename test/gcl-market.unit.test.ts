@@ -328,6 +328,37 @@ test('D12 snapshots the exact governed-run envelope before preflight, audit, or 
   assert.equal(setup.quota.requests.length, 1)
 })
 
+test('D13 retains the canonical market preflight input across async runner seams when the caller mutates its original object', async () => {
+  const setup = marketRunner()
+  const mutableInput = { ...capacityQuote }
+  const run = setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: mutableInput, ...runContext })
+
+  // `preflight` has already copied this bounded market request before the
+  // runner yields to its audit/quota seams. These changes must not turn the
+  // accepted synthetic request into a different request or a credential path.
+  mutableInput.originCountry = 'fr'
+  mutableInput.requestedListings = 2
+  mutableInput.requestedCapacityUnits = 9
+  Object.defineProperty(mutableInput, 'providerCredential', { value: 'must-not-cross-preflight' })
+
+  const result = await run
+  const plan = result.data as SyntheticMarketPlan
+  assert.deepEqual(plan.request, {
+    operation: 'capacity-quote',
+    transportMode: 'road',
+    originCountry: 'TR',
+    destinationCountry: 'DE',
+    requestedListings: 1,
+    requestedCapacityUnits: 2,
+  })
+  assert.equal(plan.liveStatus, 'LIVE_DISABLED')
+  assert.deepEqual(plan.sideEffects, { externalNetwork: false, reservation: false, booking: false, publication: false })
+  assert.equal(setup.audit.entries.length, 2)
+  assert.equal(setup.audit.entries[0]?.event.type, 'connector.run.requested')
+  assert.equal(setup.audit.entries[1]?.event.type, 'connector.run.succeeded')
+  assert.equal(setup.quota.requests.length, 1)
+})
+
 test('a distinct owner can audit a market review, but neither decision can authorize an execution', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
@@ -1233,6 +1264,7 @@ test('ADOS 10 controls are complete and explicitly prohibit egress and productio
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D12 snapshots the runner envelope/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D13 retains the market preflight snapshot/i)
   assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
   assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
