@@ -3,7 +3,7 @@ import { JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from './jnc-pilot.js'
 import { deepFreeze, isCanonicalJsonData, syntheticPlanSha256 } from './plan-integrity.js'
 import { verifiesSyntheticReviewSnapshot } from './review-snapshot.js'
 import { LIVE_DISABLED } from './safety.js'
-import type { ConnectorResult, IsolatedContent } from './types.js'
+import type { ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
 
 type DataRecord = Record<string, unknown>
 
@@ -16,6 +16,13 @@ const GAME_DATA_PREMIUM_KEYS = [...GAME_DATA_BASE_KEYS, 'gpuResourceCard', 'jncP
 const GPU_CARD_STOP_CONDITIONS = ['LIVE_DISABLED', 'AUTOSTART_DISABLED', 'NO_JNC_TRANSPORT', 'SEPARATE_OWNER_APPROVAL_REQUIRED'] as const
 const BLENDER_ARTIFACT_REQUIREMENTS = ['BLEND', 'GLB', 'ASSET_MANIFEST_JSON', 'VALIDATION_JSON'] as const
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
+const PRODUCT_PATTERN = /^sectrai-[a-z0-9-]{1,80}$/
+const WORKSPACE_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
+
+export type SyntheticResultReviewBinding = {
+  scope: { product: string; workspaceId: string }
+  governance: { scopes: readonly string[]; costCapCents: number; requestedItems: number }
+}
 
 /**
  * Copies only own enumerable data descriptors. Getter-backed, inherited,
@@ -46,6 +53,59 @@ function exactKeys(value: DataRecord, expected: readonly string[]): boolean {
 function exactOptionalKeys(value: DataRecord, required: readonly string[], allowed: readonly string[]): boolean {
   const names = Object.keys(value)
   return required.every((name) => Object.hasOwn(value, name)) && names.every((name) => allowed.includes(name))
+}
+
+function strictStringArray(value: unknown): string[] | null {
+  try {
+    if (!Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
+    const names = Object.getOwnPropertyNames(value)
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    if (!lengthDescriptor || !('value' in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 1 ||
+      names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return null
+    const output: string[] = []
+    for (let index = 0; index < lengthDescriptor.value; index += 1) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
+      if (!descriptor || !descriptor.enumerable || !('value' in descriptor) || typeof descriptor.value !== 'string' ||
+        !descriptor.value || descriptor.value.length > 120) return null
+      output.push(descriptor.value)
+    }
+    return new Set(output).size === output.length ? output : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Captures the governed scope and reservation units that a displayed plan is
+ * allowed to represent. This is data only; it neither reserves quota nor
+ * authorises any execution, transport, artifact write, or publication.
+ */
+export function syntheticResultReviewBinding(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'scopes' | 'costCapCents' | 'requestedItems'>): SyntheticResultReviewBinding {
+  return deepFreeze({
+    scope: { product: context.product, workspaceId: context.workspaceId },
+    governance: {
+      scopes: [...context.scopes],
+      costCapCents: context.costCapCents,
+      requestedItems: context.requestedItems,
+    },
+  })
+}
+
+function normalizedReviewBinding(value: unknown): SyntheticResultReviewBinding | null {
+  const binding = ownDataRecord(value)
+  if (!binding || !exactKeys(binding, ['scope', 'governance'])) return null
+  const scope = ownDataRecord(binding.scope)
+  const governance = ownDataRecord(binding.governance)
+  if (!scope || !exactKeys(scope, ['product', 'workspaceId']) || typeof scope.product !== 'string' || !PRODUCT_PATTERN.test(scope.product) ||
+    typeof scope.workspaceId !== 'string' || !WORKSPACE_PATTERN.test(scope.workspaceId) ||
+    !governance || !exactKeys(governance, ['scopes', 'costCapCents', 'requestedItems']) ||
+    typeof governance.costCapCents !== 'number' || !Number.isSafeInteger(governance.costCapCents) || governance.costCapCents < 1 ||
+    typeof governance.requestedItems !== 'number' || !Number.isSafeInteger(governance.requestedItems) || governance.requestedItems < 1) return null
+  const scopes = strictStringArray(governance.scopes)
+  return scopes === null ? null : {
+    scope: { product: scope.product, workspaceId: scope.workspaceId },
+    governance: { scopes, costCapCents: governance.costCapCents, requestedItems: governance.requestedItems },
+  }
 }
 
 function sameCanonicalData(left: unknown, right: unknown): boolean {
@@ -177,13 +237,14 @@ function deeplyFrozenCanonicalData(value: unknown, seen = new WeakSet<object>())
   }
 }
 
-function snapshotAndCoreData(data: DataRecord, connectorId: string, submission: SubmissionBinding): DataRecord | null {
+function snapshotAndCoreData(data: DataRecord, connectorId: string, submission: SubmissionBinding, binding: SyntheticResultReviewBinding): DataRecord | null {
   if (data.liveMode !== LIVE_DISABLED) return null
   if (!verifiesSyntheticReviewSnapshot(data.reviewSnapshot)) return null
   const snapshot = ownDataRecord(data.reviewSnapshot)
   if (!snapshot || !sameCanonicalData(data.integrity, snapshot.integrity) || !sameCanonicalData(data.reviewReceipt, snapshot.reviewReceipt)) return null
   const payload = ownDataRecord(snapshot.payload)
   if (!payload || payload.connectorId !== connectorId || payload.submittedInputSha256 !== submission.sha256 ||
+    !sameCanonicalData(payload.scope, binding.scope) || !sameCanonicalData(payload.governance, binding.governance) ||
     !sameCanonicalData(payload.input, submission.normalizedInput)) return null
   return payload
 }
@@ -253,9 +314,9 @@ function validThreeDArtifact(value: unknown, connectorId: string, payload: DataR
     artifact.reviewState === 'OWNER_REVIEW_REQUIRED' && artifact.publicationState === 'NOT_PUBLISHED')
 }
 
-function threeDResultMatchesSnapshot(data: DataRecord, connectorId: string, submission: SubmissionBinding): boolean {
+function threeDResultMatchesSnapshot(data: DataRecord, connectorId: string, submission: SubmissionBinding, binding: SyntheticResultReviewBinding): boolean {
   if (!exactKeys(data, THREE_D_DATA_KEYS) || data.connectorKind !== connectorId) return false
-  const payload = snapshotAndCoreData(data, connectorId, submission)
+  const payload = snapshotAndCoreData(data, connectorId, submission, binding)
   return Boolean(payload &&
     sameCanonicalData(data.artifact, payload.artifact) &&
     sameCanonicalData(data.gpuResourceCard, payload.gpuResourceCard) &&
@@ -292,10 +353,10 @@ function validGamePipeline(value: unknown, input: GameInputPolicy): boolean {
   return sameCanonicalData(value, expected)
 }
 
-function gameResultMatchesSnapshot(data: DataRecord, connectorId: string, submission: SubmissionBinding): boolean {
+function gameResultMatchesSnapshot(data: DataRecord, connectorId: string, submission: SubmissionBinding, binding: SyntheticResultReviewBinding): boolean {
   if (!exactOptionalKeys(data, GAME_DATA_BASE_KEYS, GAME_DATA_PREMIUM_KEYS) ||
     data.adapter !== 'SYNTHETIC' || data.execution !== 'SYNTHETIC_PLAN_ONLY_NOT_EXECUTED') return false
-  const payload = snapshotAndCoreData(data, connectorId, submission)
+  const payload = snapshotAndCoreData(data, connectorId, submission, binding)
   const input = payload ? gameInputPolicy(payload.input) : null
   if (!payload || !input || typeof data.buildId !== 'string' || !/^synthetic-game-[a-f0-9]{20}$/.test(data.buildId) ||
     !sameCanonicalData(data.buildId, payload.buildId) ||
@@ -304,7 +365,15 @@ function gameResultMatchesSnapshot(data: DataRecord, connectorId: string, submis
     !sameCanonicalData(data.publication, payload.publication) ||
     data.tier !== input.tier || data.engine !== input.engine || data.target !== input.target ||
     !validGamePipeline(data.pipeline, input) || !sameCanonicalData(data.buildOutput, { state: 'OWNER_APPROVAL_REQUIRED', evidence: 'SYNTHETIC_BUILD_PLAN_ONLY' }) ||
-    !sameCanonicalData(data.publication, { automatic: false, state: 'DISABLED_NOT_IMPLEMENTED' })) return false
+    !sameCanonicalData(data.publication, { automatic: false, state: 'DISABLED_NOT_IMPLEMENTED' }) ||
+    data.buildId !== `synthetic-game-${syntheticPlanSha256({
+      input: payload.input,
+      product: binding.scope.product,
+      workspaceId: binding.scope.workspaceId,
+      scopes: [...binding.governance.scopes].sort(),
+      costCapCents: binding.governance.costCapCents,
+      requestedItems: binding.governance.requestedItems,
+    }).slice(0, 20)}`) return false
 
   const premium = input.tier === 'premium'
   if (premium !== Object.hasOwn(data, 'gpuResourceCard') || premium !== Object.hasOwn(data, 'jncPilotHandoff')) return false
@@ -319,14 +388,15 @@ function gameResultMatchesSnapshot(data: DataRecord, connectorId: string, submis
     (input.engine === 'unreal' ? validUnrealPilotHandoff(data.jncPilotHandoff) : validBlenderPilotHandoff(data.jncPilotHandoff))
 }
 
-function syntheticDataMatchesSnapshot(data: unknown, connectorId: string, submittedInput: unknown): data is DataRecord {
+function syntheticDataMatchesSnapshot(data: unknown, connectorId: string, submittedInput: unknown, reviewBinding: unknown): data is DataRecord {
   const submission = submissionBinding(connectorId, submittedInput)
-  if (!submission) return false
+  const binding = normalizedReviewBinding(reviewBinding)
+  if (!submission || !binding) return false
   if (!deeplyFrozenCanonicalData(data)) return false
   const record = ownDataRecord(data)
   if (!record) return false
-  if (connectorId === 'text-to-3d' || connectorId === 'image-text-to-3d') return threeDResultMatchesSnapshot(record, connectorId, submission)
-  if (connectorId === 'game-engine') return gameResultMatchesSnapshot(record, connectorId, submission)
+  if (connectorId === 'text-to-3d' || connectorId === 'image-text-to-3d') return threeDResultMatchesSnapshot(record, connectorId, submission, binding)
+  if (connectorId === 'game-engine') return gameResultMatchesSnapshot(record, connectorId, submission, binding)
   return false
 }
 
@@ -387,9 +457,9 @@ function provenanceMatchesSnapshot(data: unknown, provenance: ConnectorResult['p
  * a fresh frozen envelope.
  * This has no I/O and cannot turn a plan into an execution path.
  */
-export function validatedSyntheticConnectorResult<TData = unknown>(value: unknown, connectorId: string, submittedInput: unknown): ConnectorResult<TData> {
+export function validatedSyntheticConnectorResult<TData = unknown>(value: unknown, connectorId: string, submittedInput: unknown, reviewBinding: SyntheticResultReviewBinding): ConnectorResult<TData> {
   const result = ownDataRecord(value)
-  if (!result || !exactKeys(result, RESULT_KEYS) || result.confidence !== 0 || !syntheticDataMatchesSnapshot(result.data, connectorId, submittedInput)) {
+  if (!result || !exactKeys(result, RESULT_KEYS) || result.confidence !== 0 || !syntheticDataMatchesSnapshot(result.data, connectorId, submittedInput, reviewBinding)) {
     throw new SyntheticResultIntegrityError()
   }
   const provenance = safeProvenance(result.provenance, connectorId)

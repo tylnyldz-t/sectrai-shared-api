@@ -1,7 +1,7 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, JNC_MAXIMUM_GPU_RUNTIME_SECONDS, type GpuResourceRequest, type JncBlenderPilotHandoff, type JncGpuResourceCard } from './jnc-pilot.js'
 import { deepFreeze, frozenCanonicalJsonCopy, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
-import { validatedSyntheticConnectorResult } from './result-boundary.js'
+import { syntheticResultReviewBinding, validatedSyntheticConnectorResult } from './result-boundary.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
 import type { SyntheticReviewReceipt } from './review-receipt.js'
 import { validatedConnectorRunContext } from './run-context.js'
@@ -238,6 +238,11 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
     const planPayload = {
       connectorId: this.id,
       scope: { product: validatedContext.product, workspaceId: validatedContext.workspaceId },
+      governance: {
+        scopes: [...validatedContext.scopes],
+        costCapCents: validatedContext.costCapCents,
+        requestedItems: validatedContext.requestedItems,
+      },
       submittedInputSha256,
       input: validated,
       artifact,
@@ -263,7 +268,7 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
       data,
       provenance: { connectorId: this.id, source, retrievedAt: validatedContext.now().toISOString(), untrustedContent: isolatedContent(source, validated) },
       confidence: 0,
-    }, this.id, rawInput)
+    }, this.id, rawInput, syntheticResultReviewBinding(validatedContext))
   }
 }
 

@@ -1,7 +1,7 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
 import { ContractOnlyJncPilotMapper, JNC_MAXIMUM_GPU_RUNTIME_MINUTES, type JncBlenderPilotHandoff, type JncGpuResourceCard, type JncUnrealPilotHandoff } from './jnc-pilot.js'
 import { deepFreeze, frozenCanonicalJsonCopy, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
-import { validatedSyntheticConnectorResult } from './result-boundary.js'
+import { syntheticResultReviewBinding, validatedSyntheticConnectorResult } from './result-boundary.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
 import type { SyntheticReviewReceipt } from './review-receipt.js'
 import { validatedConnectorRunContext } from './run-context.js'
@@ -205,6 +205,11 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
     const planPayload = {
       connectorId: this.id,
       scope: { product: validatedContext.product, workspaceId: validatedContext.workspaceId },
+      governance: {
+        scopes: [...validatedContext.scopes],
+        costCapCents: validatedContext.costCapCents,
+        requestedItems: validatedContext.requestedItems,
+      },
       submittedInputSha256,
       input,
       buildId: id,
@@ -240,7 +245,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
       data,
       provenance: { connectorId: this.id, source: 'synthetic-game-engine-plan', retrievedAt: validatedContext.now().toISOString(), runId: id, untrustedContent: isolatedContent(input) },
       confidence: 0,
-    }, this.id, rawInput)
+    }, this.id, rawInput, syntheticResultReviewBinding(validatedContext))
   }
 }
 
