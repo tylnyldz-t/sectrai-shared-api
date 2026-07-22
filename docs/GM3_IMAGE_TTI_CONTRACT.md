@@ -229,6 +229,25 @@ exact-deadline direct ledger decision cannot create a terminal receipt. These
 are redacted integrity checks only—no provider, network, GPU, or publication
 capability is added.
 
+## D5 — sealed ledger write and lookup snapshots
+
+Candidate issuance and terminal-review events are copied into private,
+data-only snapshots immediately after their strict validation. Both durable
+and test-only ledger implementations use only that copy through their later
+async transaction/audit append and receipt write. Therefore, changing the
+caller-owned event object while an audit append or database transaction is
+pending cannot substitute a candidate fingerprint, deadline, scope, artifact
+identifier, decision, or any other audited field after lineage has passed.
+
+The public candidate-receipt lookup is an async boundary as well. It first
+validates the complete synthetic candidate and then uses an isolated copy for
+the persistence query and receipt comparison. An accessor-bearing candidate is
+rejected without evaluating its accessor; a mutable candidate cannot switch
+workspace, correlation, deadline, or fingerprint during a pending lookup.
+These snapshots contain the same redacted local metadata as before and add no
+provider, network, GPU, dispatch, credential, migration, send, or publication
+capability.
+
 ## Negative and edge-case guarantees
 
 - Prompt fields accept only the documented four keys. Empty text, a value over
@@ -335,6 +354,12 @@ capability is added.
   envelope. Accessor-backed audit capabilities, entries, or hash responses are
   rejected without evaluating their getters; this test-only seam cannot become
   an alternate dispatch or persistence path.
+- Candidate-issuance and terminal-review event objects are copied immediately
+  after strict validation and before any awaited transaction or audit call.
+  Receipt lookup performs the same validation-and-copy operation for its
+  candidate. A caller therefore cannot mutate an already-validated event or
+  candidate while a persistence seam yields; an accessor-shaped direct lookup
+  candidate fails closed without its accessor being evaluated.
 - `creativeWorkerPlan.dispatch` remains exactly
   `{ performed: false, gate: "LIVE_DISABLED", network: "not-attempted" }`.
   This package does not invoke Creative Worker, ComfyUI, Docker, loopback, a

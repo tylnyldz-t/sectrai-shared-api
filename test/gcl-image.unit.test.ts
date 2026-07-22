@@ -596,6 +596,83 @@ test('D4 re-hashes an issuance candidate set before a direct terminal ledger dec
   assert.equal(audit.entries.length, 3)
 })
 
+test('D5 seals direct ledger snapshots across async seams and rejects accessor candidates without reading them', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  const runAuditHash = result.provenance.auditHash
+  if (typeof runAuditHash !== 'string') throw new Error('D5_TEST_RUN_AUDIT_HASH_MISSING')
+  const issuanceEntries = result.data.candidates.map((item) => ({
+    candidateId: item.candidateId,
+    fingerprint: imageCandidateFingerprint(item),
+    reviewExpiresAt: item.ownerReview.reviewExpiresAt,
+  }))
+  const issuanceEvent = {
+    type: 'connector.artifact.candidates_issued' as const,
+    connectorId: 'image-tti', product: context.product, workspaceId: context.workspaceId, actor: context.actor, correlationId: context.correlationId,
+    scopes: ['image:generate'], costCapCents: 0, requestedItems: issuanceEntries.length, occurredAt: now().toISOString(),
+    detail: { candidateSetDigest: imageCandidateSetDigest(result.data.candidates), candidateCount: issuanceEntries.length, candidates: issuanceEntries, publication: 'blocked' as const, runAuditHash },
+  }
+  const expectedIssuance = structuredClone(issuanceEvent)
+  let releaseIssuance: (() => void) | undefined
+  const issuanceGate = new Promise<void>((resolve) => { releaseIssuance = resolve })
+  const delayedIssuanceAudit = {
+    entries: audit.entries,
+    append: async (event: Parameters<InMemoryHashChainAuditLog['append']>[0]) => {
+      await issuanceGate
+      return audit.append(event)
+    },
+  }
+  const candidates = new InMemoryImageCandidateLedger(delayedIssuanceAudit)
+  const pendingIssuance = candidates.appendIssuance(issuanceEvent)
+  await Promise.resolve()
+  issuanceEvent.detail.candidates[0]!.fingerprint = '0'.repeat(64)
+  if (!releaseIssuance) throw new Error('D5_TEST_ISSUANCE_GATE_MISSING')
+  releaseIssuance()
+  await pendingIssuance
+  assert.deepEqual(audit.entries[2]?.event, expectedIssuance)
+  await candidates.assertIssued(candidate)
+
+  const accessorCandidate = structuredClone(candidate)
+  let candidateGetterRead = false
+  Object.defineProperty(accessorCandidate, 'scope', { enumerable: true, get: () => { candidateGetterRead = true; return candidate.scope } })
+  await assert.rejects(() => candidates.assertIssued(accessorCandidate as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
+  assert.equal(candidateGetterRead, false)
+
+  const issuance = await candidates.assertIssued(candidate)
+  const decisionEvent = {
+    type: 'connector.artifact.owner_liked' as const,
+    connectorId: 'image-tti', product: context.product, workspaceId: context.workspaceId, actor: 'checker@example.test', correlationId: context.correlationId,
+    scopes: ['image:generate'], costCapCents: 0, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: {
+      candidateId: candidate.candidateId, candidateFingerprint: issuance.candidateFingerprint, reviewExpiresAt: issuance.reviewExpiresAt, maker: context.actor,
+      publication: 'blocked' as const, issuanceAuditHash: issuance.issuanceAuditHash, runAuditHash: issuance.runAuditHash,
+      artifactId: `owner-liked-${candidate.candidateId}`, ownerReview: 'liked' as const,
+    },
+  }
+  const expectedDecision = structuredClone(decisionEvent)
+  let releaseDecision: (() => void) | undefined
+  const decisionGate = new Promise<void>((resolve) => { releaseDecision = resolve })
+  const delayedDecisionAudit = {
+    entries: audit.entries,
+    append: async (event: Parameters<InMemoryHashChainAuditLog['append']>[0]) => {
+      await decisionGate
+      return audit.append(event)
+    },
+  }
+  const reviews = new InMemoryImageOwnerReviewLedger(delayedDecisionAudit)
+  const pendingDecision = reviews.appendDecision(decisionEvent)
+  await Promise.resolve()
+  decisionEvent.detail.candidateFingerprint = '0'.repeat(64)
+  if (!releaseDecision) throw new Error('D5_TEST_DECISION_GATE_MISSING')
+  releaseDecision()
+  await pendingDecision
+  assert.deepEqual(audit.entries[3]?.event, expectedDecision)
+  await reviews.assertRecorded(expectedDecision)
+})
+
 test('candidate issuance and terminal review cannot be backdated across the governed lineage', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)

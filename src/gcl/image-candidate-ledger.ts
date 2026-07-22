@@ -1,6 +1,6 @@
 import { appendAuditEvent, GCL_AUDIT_MODULE_ID, verifyAuditChain } from './audit.js'
 import { ConnectorInputError, ConnectorUnavailableError } from './errors.js'
-import { IMAGE_CANDIDATE_SET_AUDIT_FIELD, MAX_SYNTHETIC_IMAGE_CANDIDATES, imageCandidateFingerprint } from './image.js'
+import { IMAGE_CANDIDATE_SET_AUDIT_FIELD, MAX_SYNTHETIC_IMAGE_CANDIDATES, assertSyntheticImageCandidate, imageCandidateFingerprint } from './image.js'
 import type { SyntheticImageCandidate } from './image.js'
 import type { GclPersistence } from './persistence.js'
 import type { ConnectorAuditEvent } from './types.js'
@@ -136,6 +136,41 @@ function canonicalTimestamp(value: unknown): value is string {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value
 }
 
+/**
+ * Seal an accepted write envelope before an async transaction or test seam
+ * can yield. The original caller object remains mutable, so retaining it
+ * would allow a valid event to become a different receipt or audit event
+ * after its first validation. All accepted event shapes are data-only.
+ */
+function sealedIssuanceEvent(value: unknown): ImageCandidateIssuanceEvent {
+  assertImageCandidateIssuanceEvent(value)
+  try {
+    const event = structuredClone(value)
+    assertImageCandidateIssuanceEvent(event)
+    return event
+  } catch (error) {
+    if (error instanceof ConnectorInputError) throw error
+    throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
+  }
+}
+
+/**
+ * Receipt lookup is also an async persistence boundary. Copy the exact,
+ * locally valid synthetic candidate before using its scope after a query;
+ * this prevents a caller from changing the lookup target while it is pending.
+ */
+function sealedCandidate(value: unknown): SyntheticImageCandidate {
+  try {
+    assertSyntheticImageCandidate(value)
+    const candidate = structuredClone(value)
+    assertSyntheticImageCandidate(candidate)
+    return candidate
+  } catch (error) {
+    if (error instanceof ConnectorInputError) throw error
+    throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+  }
+}
+
 function canonicalEntries(entries: readonly ImageCandidateIssuanceEntry[]): ImageCandidateIssuanceEntry[] {
   return [...entries].sort((left, right) => left.candidateId.localeCompare(right.candidateId))
 }
@@ -254,31 +289,31 @@ export class PrismaImageCandidateLedger implements ImageCandidateLedger {
   constructor(private readonly prisma: GclPersistence) {}
 
   async appendIssuance(event: ImageCandidateIssuanceEvent): Promise<{ hash: string }> {
-    assertImageCandidateIssuanceEvent(event)
+    const sealedEvent = sealedIssuanceEvent(event)
     return this.prisma.$transaction(async (transaction) => {
-      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${event.product}:${event.workspaceId}:${GCL_AUDIT_MODULE_ID}`}))`
+      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${sealedEvent.product}:${sealedEvent.workspaceId}:${GCL_AUDIT_MODULE_ID}`}))`
       const records = await transaction.record.findMany({
-        where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_IMAGE_CANDIDATE_MODULE_ID },
+        where: { product: sealedEvent.product, workspaceId: sealedEvent.workspaceId, moduleId: GCL_IMAGE_CANDIDATE_MODULE_ID },
         select: { values: true },
       })
       const auditRecords = await transaction.record.findMany({
-        where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
+        where: { product: sealedEvent.product, workspaceId: sealedEvent.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { values: true },
       })
-      assertSourceRunAudit(auditRecords.map((record) => record.values), event)
+      assertSourceRunAudit(auditRecords.map((record) => record.values), sealedEvent)
       const prior = records.map((record) => storedReceipt(record.values))
       if (prior.some((receipt) => !receipt)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_LEDGER_INVALID')
-      const candidateIds = new Set(event.detail.candidates.map((entry) => entry.candidateId))
-      if (prior.some((receipt) => receipt && receipt.correlationId === event.correlationId && candidateIds.has(receipt.candidateId))) throw new ConnectorInputError('IMAGE_CANDIDATE_ALREADY_ISSUED')
-      const audit = await appendAuditEvent(transaction, event)
-      for (const entry of event.detail.candidates) {
+      const candidateIds = new Set(sealedEvent.detail.candidates.map((entry) => entry.candidateId))
+      if (prior.some((receipt) => receipt && receipt.correlationId === sealedEvent.correlationId && candidateIds.has(receipt.candidateId))) throw new ConnectorInputError('IMAGE_CANDIDATE_ALREADY_ISSUED')
+      const audit = await appendAuditEvent(transaction, sealedEvent)
+      for (const entry of sealedEvent.detail.candidates) {
         await transaction.record.create({
           data: {
-            product: event.product,
-            workspaceId: event.workspaceId,
+            product: sealedEvent.product,
+            workspaceId: sealedEvent.workspaceId,
             moduleId: GCL_IMAGE_CANDIDATE_MODULE_ID,
-            values: receiptFor(event, entry, audit.hash),
+            values: receiptFor(sealedEvent, entry, audit.hash),
             status: 'issued',
             createdBy: 'gcl-image-candidate',
           },
@@ -289,14 +324,15 @@ export class PrismaImageCandidateLedger implements ImageCandidateLedger {
   }
 
   async assertIssued(candidate: SyntheticImageCandidate): Promise<ImageCandidateIssuanceProof> {
-    const expected = receiptForCandidate(candidate)
+    const sealed = sealedCandidate(candidate)
+    const expected = receiptForCandidate(sealed)
     const { records, auditRecords } = await this.prisma.$transaction(async (transaction) => ({
       records: await transaction.record.findMany({
-        where: { product: candidate.scope.product, workspaceId: candidate.scope.workspaceId, moduleId: GCL_IMAGE_CANDIDATE_MODULE_ID },
+        where: { product: sealed.scope.product, workspaceId: sealed.scope.workspaceId, moduleId: GCL_IMAGE_CANDIDATE_MODULE_ID },
         select: { values: true },
       }),
       auditRecords: await transaction.record.findMany({
-        where: { product: candidate.scope.product, workspaceId: candidate.scope.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
+        where: { product: sealed.scope.product, workspaceId: sealed.scope.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { values: true },
       }),
@@ -318,21 +354,21 @@ export class InMemoryImageCandidateLedger implements ImageCandidateLedger {
   constructor(private readonly auditLog: { append(event: ConnectorAuditEvent): Promise<{ hash: string }>; entries?: readonly unknown[] }) {}
 
   async appendIssuance(event: ImageCandidateIssuanceEvent): Promise<{ hash: string }> {
-    assertImageCandidateIssuanceEvent(event)
+    const sealedEvent = sealedIssuanceEvent(event)
     const append = dataMethod(this.auditLog, 'append')
     const entries = auditEntries(this.auditLog)
     if (!append || !entries) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
-    assertSourceRunAudit(entries, event)
-    const keys = event.detail.candidates.map((entry) => JSON.stringify([event.product, event.workspaceId, event.correlationId, entry.candidateId]))
+    assertSourceRunAudit(entries, sealedEvent)
+    const keys = sealedEvent.detail.candidates.map((entry) => JSON.stringify([sealedEvent.product, sealedEvent.workspaceId, sealedEvent.correlationId, entry.candidateId]))
     if (keys.some((key) => this.issuanceStates.get(key) === 'final' || this.receipts.has(key))) throw new ConnectorInputError('IMAGE_CANDIDATE_ALREADY_ISSUED')
     if (keys.some((key) => this.issuanceStates.get(key) === 'in-flight')) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_ISSUANCE_IN_FLIGHT')
     for (const key of keys) this.issuanceStates.set(key, 'in-flight')
     try {
-      const auditHash = returnedAuditHash(await append.call(this.auditLog, event))
+      const auditHash = returnedAuditHash(await append.call(this.auditLog, sealedEvent))
       if (!auditHash) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
-      for (const entry of event.detail.candidates) {
-        const key = JSON.stringify([event.product, event.workspaceId, event.correlationId, entry.candidateId])
-        this.receipts.set(key, receiptFor(event, entry, auditHash))
+      for (const entry of sealedEvent.detail.candidates) {
+        const key = JSON.stringify([sealedEvent.product, sealedEvent.workspaceId, sealedEvent.correlationId, entry.candidateId])
+        this.receipts.set(key, receiptFor(sealedEvent, entry, auditHash))
         this.issuanceStates.set(key, 'final')
       }
       return { hash: auditHash }
@@ -345,8 +381,9 @@ export class InMemoryImageCandidateLedger implements ImageCandidateLedger {
   }
 
   async assertIssued(candidate: SyntheticImageCandidate): Promise<ImageCandidateIssuanceProof> {
-    const expected = receiptForCandidate(candidate)
-    const key = JSON.stringify([candidate.scope.product, candidate.scope.workspaceId, expected.correlationId, expected.candidateId])
+    const sealed = sealedCandidate(candidate)
+    const expected = receiptForCandidate(sealed)
+    const key = JSON.stringify([sealed.scope.product, sealed.scope.workspaceId, expected.correlationId, expected.candidateId])
     const receipt = this.receipts.get(key)
     if (!receipt || receipt.fingerprint !== expected.fingerprint || receipt.reviewExpiresAt !== expected.reviewExpiresAt || receipt.publication !== 'blocked') throw new ConnectorInputError('IMAGE_CANDIDATE_NOT_ISSUED')
     const entries = auditEntries(this.auditLog)

@@ -667,7 +667,13 @@ function assertCandidateScope(value: unknown, error: string): asserts value is I
   if (!hasExactKeys(scope, ['product', 'workspaceId', 'correlationId']) || !isSafeIdentifier(scope.product) || !isSafeIdentifier(scope.workspaceId) || !isSafeIdentifier(scope.correlationId)) throw new ConnectorInputError(error)
 }
 
-function assertSyntheticCandidate(candidate: unknown): asserts candidate is SyntheticImageCandidate {
+/**
+ * Validate the complete redacted candidate snapshot before any issuance or
+ * terminal-review path consumes it. Candidate ledgers use this exported guard
+ * too: their public assertion seam must not trust TypeScript-only typing or
+ * read a caller-owned accessor while locating a durable receipt.
+ */
+export function assertSyntheticImageCandidate(candidate: unknown): asserts candidate is SyntheticImageCandidate {
   const value = plainRecord(candidate)
   if (!value) throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
   const candidateKeys = value.negativePromptDigest === undefined
@@ -725,7 +731,7 @@ export async function issueSyntheticImageCandidates(runResult: ConnectorResult<T
   const candidates: SyntheticImageCandidate[] = []
   for (let index = 0; index < candidateValues.length; index += 1) {
     const candidate = candidateValues[index]
-    assertSyntheticCandidate(candidate)
+    assertSyntheticImageCandidate(candidate)
     assertReviewNotExpired(candidate, occurredAt)
     if (candidate.candidateIndex !== index || candidate.requestedBy !== issuanceContext.actor || candidate.scope.product !== issuanceContext.product || candidate.scope.workspaceId !== issuanceContext.workspaceId || candidate.scope.correlationId !== issuanceContext.correlationId) throw new ConnectorInputError('INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
     candidates.push(candidate)
@@ -769,7 +775,7 @@ function assertOwnerReviewContext(candidate: SyntheticImageCandidate, context: u
 function assertOwnerReviewRequest(candidate: unknown, ownerApproved: boolean, actor: unknown, reviewLedger: unknown, context: ImageOwnerReviewContext): { candidate: SyntheticImageCandidate; actor: string; context: ImageOwnerReviewContext; occurredAt: Date; appendDecision: (...args: unknown[]) => unknown; assertRecorded: (...args: unknown[]) => unknown } {
   if (ownerApproved !== true) throw new OwnerGateError()
   if (!isSafeIdentifier(actor)) throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
-  assertSyntheticCandidate(candidate)
+  assertSyntheticImageCandidate(candidate)
   if (actor === candidate.requestedBy) throw new OwnerGateError('MAKER_CHECKER_SEPARATION_REQUIRED')
   const appendDecision = dataMethod(reviewLedger, 'appendDecision')
   const assertRecorded = dataMethod(reviewLedger, 'assertRecorded')

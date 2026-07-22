@@ -44,6 +44,14 @@ independently reject copied candidate-set digests, changed fingerprint/deadline
 data, and issuance or decision at the exact expiry instant; all output remains
 synthetic, owner-only, and publication-blocked.
 
+D5 seals all candidate-issuance and terminal-review ledger inputs into private
+data snapshots before an asynchronous persistence or audit seam can yield.
+The direct receipt lookup validates and snapshots the candidate too, so a
+mutable caller object or accessor cannot switch scope, fingerprint, deadline,
+or terminal decision after validation. This is integrity hardening only:
+`LIVE_DISABLED`, local SVG output, owner-only review, and publication blocking
+remain unchanged.
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:

@@ -123,6 +123,23 @@ function canonicalTimestamp(value: unknown): value is string {
   return !Number.isNaN(parsed.getTime()) && parsed.toISOString() === value
 }
 
+/**
+ * Keep an accepted terminal decision private to the ledger before an async
+ * transaction or audit seam yields. This closes the mutable-object gap between
+ * validation, lineage checks, audit append, and receipt creation.
+ */
+function sealedDecisionEvent(value: unknown): ImageOwnerReviewDecisionEvent {
+  assertImageOwnerReviewEvent(value)
+  try {
+    const event = structuredClone(value)
+    assertImageOwnerReviewEvent(event)
+    return event
+  } catch (error) {
+    if (error instanceof ConnectorInputError) throw error
+    throw new ConnectorInputError('INVALID_IMAGE_OWNER_REVIEW_EVENT')
+  }
+}
+
 function imageScope(value: unknown): boolean {
   const scopes = plainArray(value)
   return Boolean(scopes && scopes.length === 1 && scopes[0] === IMAGE_SCOPE)
@@ -286,31 +303,31 @@ export class PrismaImageOwnerReviewLedger implements ImageOwnerReviewLedger {
   constructor(private readonly prisma: GclPersistence) {}
 
   async appendDecision(event: ImageOwnerReviewDecisionEvent): Promise<{ hash: string }> {
-    assertImageOwnerReviewEvent(event)
+    const sealedEvent = sealedDecisionEvent(event)
     return this.prisma.$transaction(async (transaction) => {
-      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${event.product}:${event.workspaceId}:${GCL_AUDIT_MODULE_ID}`}))`
+      await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${sealedEvent.product}:${sealedEvent.workspaceId}:${GCL_AUDIT_MODULE_ID}`}))`
       const records = await transaction.record.findMany({
-        where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_IMAGE_OWNER_REVIEW_MODULE_ID },
+        where: { product: sealedEvent.product, workspaceId: sealedEvent.workspaceId, moduleId: GCL_IMAGE_OWNER_REVIEW_MODULE_ID },
         select: { values: true },
       })
       const auditRecords = await transaction.record.findMany({
-        where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
+        where: { product: sealedEvent.product, workspaceId: sealedEvent.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { values: true },
       })
-      assertDecisionLineage(auditRecords.map((record) => record.values), event)
+      assertDecisionLineage(auditRecords.map((record) => record.values), sealedEvent)
       for (const record of records) {
         const receipt = storedReceipt(record.values)
         if (!receipt) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_INVALID')
-        if (receipt.candidateId === event.detail.candidateId && receipt.correlationId === event.correlationId) throw new ConnectorInputError('IMAGE_OWNER_REVIEW_ALREADY_DECIDED')
+        if (receipt.candidateId === sealedEvent.detail.candidateId && receipt.correlationId === sealedEvent.correlationId) throw new ConnectorInputError('IMAGE_OWNER_REVIEW_ALREADY_DECIDED')
       }
-      const audit = await appendAuditEvent(transaction, event)
+      const audit = await appendAuditEvent(transaction, sealedEvent)
       await transaction.record.create({
         data: {
-          product: event.product,
-          workspaceId: event.workspaceId,
+          product: sealedEvent.product,
+          workspaceId: sealedEvent.workspaceId,
           moduleId: GCL_IMAGE_OWNER_REVIEW_MODULE_ID,
-          values: receiptFor(event, audit.hash),
+          values: receiptFor(sealedEvent, audit.hash),
           status: 'terminal',
           createdBy: 'gcl-image-review',
         },
@@ -320,23 +337,23 @@ export class PrismaImageOwnerReviewLedger implements ImageOwnerReviewLedger {
   }
 
   async assertRecorded(event: ImageOwnerReviewDecisionEvent): Promise<ImageOwnerReviewDecisionProof> {
-    assertImageOwnerReviewEvent(event)
+    const sealedEvent = sealedDecisionEvent(event)
     const { records, auditRecords } = await this.prisma.$transaction(async (transaction) => ({
       records: await transaction.record.findMany({
-        where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_IMAGE_OWNER_REVIEW_MODULE_ID },
+        where: { product: sealedEvent.product, workspaceId: sealedEvent.workspaceId, moduleId: GCL_IMAGE_OWNER_REVIEW_MODULE_ID },
         select: { values: true },
       }),
       auditRecords: await transaction.record.findMany({
-        where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
+        where: { product: sealedEvent.product, workspaceId: sealedEvent.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { values: true },
       }),
     }))
     const receipts = records.map((record) => storedReceipt(record.values))
     if (receipts.some((receipt) => !receipt)) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_INVALID')
-    const receipt = receipts.find((item) => item && item.candidateId === event.detail.candidateId && item.correlationId === event.correlationId)
+    const receipt = receipts.find((item) => item && item.candidateId === sealedEvent.detail.candidateId && item.correlationId === sealedEvent.correlationId)
     if (!receipt) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_INVALID')
-    return assertDecisionReceipt(auditRecords.map((record) => record.values), receipt, event)
+    return assertDecisionReceipt(auditRecords.map((record) => record.values), receipt, sealedEvent)
   }
 }
 
@@ -348,24 +365,24 @@ export class InMemoryImageOwnerReviewLedger implements ImageOwnerReviewLedger {
   constructor(private readonly auditLog: AuditLog & { entries?: readonly unknown[] }) {}
 
   async appendDecision(event: ImageOwnerReviewDecisionEvent): Promise<{ hash: string }> {
-    assertImageOwnerReviewEvent(event)
+    const sealedEvent = sealedDecisionEvent(event)
     const append = dataMethod(this.auditLog, 'append')
     const entries = auditEntries(this.auditLog)
     if (!append || !entries) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_AUDIT_UNAVAILABLE')
-    assertDecisionLineage(entries, event)
-    const key = decisionKey(event)
+    assertDecisionLineage(entries, sealedEvent)
+    const key = decisionKey(sealedEvent)
     const state = this.decisions.get(key)
     if (state === 'final') throw new ConnectorInputError('IMAGE_OWNER_REVIEW_ALREADY_DECIDED')
     if (state === 'in-flight') throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_IN_FLIGHT')
     this.decisions.set(key, 'in-flight')
     try {
-      const auditHash = returnedAuditHash(await append.call(this.auditLog, event))
+      const auditHash = returnedAuditHash(await append.call(this.auditLog, sealedEvent))
       if (!auditHash) {
         this.decisions.set(key, 'final')
         throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_AUDIT_UNAVAILABLE')
       }
       this.decisions.set(key, 'final')
-      this.receipts.set(key, receiptFor(event, auditHash))
+      this.receipts.set(key, receiptFor(sealedEvent, auditHash))
       return { hash: auditHash }
     } catch (error) {
       if (this.decisions.get(key) === 'in-flight') this.decisions.delete(key)
@@ -374,11 +391,11 @@ export class InMemoryImageOwnerReviewLedger implements ImageOwnerReviewLedger {
   }
 
   async assertRecorded(event: ImageOwnerReviewDecisionEvent): Promise<ImageOwnerReviewDecisionProof> {
-    assertImageOwnerReviewEvent(event)
+    const sealedEvent = sealedDecisionEvent(event)
     const entries = auditEntries(this.auditLog)
     if (!entries) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_AUDIT_UNAVAILABLE')
-    const receipt = this.receipts.get(decisionKey(event))
+    const receipt = this.receipts.get(decisionKey(sealedEvent))
     if (!receipt) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_INVALID')
-    return assertDecisionReceipt(entries, receipt, event)
+    return assertDecisionReceipt(entries, receipt, sealedEvent)
   }
 }
