@@ -2,6 +2,7 @@ import { createHash, Hash } from 'node:crypto'
 import { types as nodeTypes } from 'node:util'
 import { appendVerifiedAuditEvent, hashAuditEvent } from './audit.js'
 import { CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError } from './errors.js'
+import { intrinsicDate, intrinsicDateGetTime, intrinsicDateToISOString, intrinsicIsDate, intrinsicNumberIsFinite, intrinsicNumberIsNaN, intrinsicReflectApply } from './intrinsics.js'
 import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export const CAMERA_CONNECTOR_ID = 'camera-observation'
@@ -28,12 +29,12 @@ export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every audit and review packet is bound to one product and workspace digest.' },
   { id: 'ADOS-02', control: 'MINIMIZED_SYNTHETIC_FIXTURE', enforcement: 'Only an allowlisted synthetic fixture ID and fixed finding are resolved.' },
   { id: 'ADOS-03', control: 'DEFAULT_DENY_LIVE_DISABLED', enforcement: 'Synthetic enablement and positive limits are required; a live flag is rejected.' },
-  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown, hidden, symbol, proxy, accessor, sparse, cyclic, or over-deep input, evidence, D8 caller-context fields, D10 execution-context/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result/provenance control plane, D14/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, D18 SHA-256 operations, D19 camera result data/provenance values, the D20 governed context snapshot, the D21 governed input snapshot, D22 registry/control-plane values, and D23 runner-collaborator control-plane values—plus media, device identifiers, identity resolution, and biometric inference—are denied.' },
+  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown, hidden, symbol, proxy, accessor, sparse, cyclic, or over-deep input, evidence, D8 caller-context fields, D10 execution-context/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result/provenance control plane, D14/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, D18 SHA-256 operations, D19 camera result data/provenance values, the D20 governed context snapshot, the D21 governed input snapshot, D22 registry/control-plane values, D23 runner-collaborator control-plane values, and D24 late own-data/time intrinsic hooks—plus media, device identifiers, identity resolution, and biometric inference—are denied.' },
   { id: 'ADOS-05', control: 'PURPOSE_BOUND_CONSENT', enforcement: 'A granted synthetic KVKK consent assertion must match the selected fixture and purpose.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'The governed run requires owner approval and separate request/check actors; review rejects the original maker.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIAL_INTERFACE', enforcement: 'The adapter has no camera SDK, network client, stream URL, credential, or provider configuration surface.' },
-  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment, D6/D7 only render minimized evidence, D8/D9 protect review context and its local clock, D10 rejects shaped execution context or an invalid provenance clock before a fixture result, D11 freezes one safe runner timestamp, D12 rejects shaped governed-run envelopes before any collaborator is used, D13 rejects malformed result/provenance control planes before a success audit, D14 accepts only an exact audit receipt shape, D15 seals the immutable audit event before its collaborator receives it, D16 verifies the existing durable head before a successor can bind to it, D17 re-hashes the sealed event against its receipt predecessor while pinning the runner-known requested predecessor, D18 uses module-captured SHA-256 operations, D19 reconstructs the camera result data plane before success, D20 seals the admitted context before a connector can observe it, D21 deep-snapshots its input before the clock or any collaborator is used, D22 seals the selected connector identity, scopes, and method references at registry construction, and D23 seals the runner’s registry/audit/quota methods and local clock at construction.' },
-  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6/D7 witnesses record only an approved or rejected decision; D8/D9 validate review context and its local clock, D10 validates only synthetic result provenance, D11 validates only local runner time, D12 validates only the request envelope, D13 permits only a fixed synthetic/no-egress result control plane, D14/D17 validate and bind the review append receipt without granting a handoff, D15 prevents the audit collaborator from mutating the review event, D16 rejects a malformed durable head without starting a review transition, D18 keeps late SHA-256 hooks outside review integrity, D19 rejects camera data or isolated-content values that are not the fixed no-media observation, D20 prevents connector mutation of its governed scope, D21 prevents retargeting the camera input after admission, D22 prevents later connector metadata or callback replacement from retargeting the selected synthetic path, and D23 keeps later runner collaborator replacement outside that path; action, notification, publication, and handoff remain not sent.' },
+  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment, D6/D7 only render minimized evidence, D8/D9 protect review context and its local clock, D10 rejects shaped execution context or an invalid provenance clock before a fixture result, D11 freezes one safe runner timestamp, D12 rejects shaped governed-run envelopes before any collaborator is used, D13 rejects malformed result/provenance control planes before a success audit, D14 accepts only an exact audit receipt shape, D15 seals the immutable audit event before its collaborator receives it, D16 verifies the existing durable head before a successor can bind to it, D17 re-hashes the sealed event against its receipt predecessor while pinning the runner-known requested predecessor, D18 uses module-captured SHA-256 operations, D19 reconstructs the camera result data plane before success, D20 seals the admitted context before a connector can observe it, D21 deep-snapshots its input before the clock or any collaborator is used, D22 seals the selected connector identity, scopes, and method references at registry construction, D23 seals the runner’s registry/audit/quota methods and local clock at construction, and D24 captures the native timestamp and registration/collaborator inspection operations at module initialization.' },
+  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6/D7 witnesses record only an approved or rejected decision; D8/D9 validate review context and its local clock, D10 validates only synthetic result provenance, D11 validates only local runner time, D12 validates only the request envelope, D13 permits only a fixed synthetic/no-egress result control plane, D14/D17 validate and bind the review append receipt without granting a handoff, D15 prevents the audit collaborator from mutating the review event, D16 rejects a malformed durable head without starting a review transition, D18 keeps late SHA-256 hooks outside review integrity, D19 rejects camera data or isolated-content values that are not the fixed no-media observation, D20 prevents connector mutation of its governed scope, D21 prevents retargeting the camera input after admission, D22 prevents later connector metadata or callback replacement from retargeting the selected synthetic path, D23 keeps later runner collaborator replacement outside that path, and D24 keeps late Date-prototype hooks out of synthetic run/review timestamps; action, notification, publication, and handoff remain not sent.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or camera connection is part of this connector.' },
 ])
 
@@ -252,8 +253,6 @@ const CAMERA_REVIEW_CONTEXT_FIELDS = [
 const intrinsicCreateHash = createHash
 const intrinsicHashUpdate = Hash.prototype.update
 const intrinsicHashDigest = Hash.prototype.digest
-const intrinsicReflectApply = Reflect.apply
-
 const FIXTURES: Readonly<Record<string, CameraFixture>> = Object.freeze({
   'synthetic-loading-dock-001': {
     purpose: 'operational-safety', consentReceiptRef: 'synthetic-consent-safety-001',
@@ -415,10 +414,10 @@ function localCameraOccurredAt(now: () => Date, errorCode: string): string {
   } catch {
     throw new ConnectorInputError(errorCode)
   }
-  if (!nodeTypes.isDate(candidate) || nodeTypes.isProxy(candidate)) throw new ConnectorInputError(errorCode)
+  if (!intrinsicIsDate(candidate) || nodeTypes.isProxy(candidate)) throw new ConnectorInputError(errorCode)
   try {
-    if (!Number.isFinite(Date.prototype.getTime.call(candidate))) throw new ConnectorInputError(errorCode)
-    return canonicalIsoInstant(Date.prototype.toISOString.call(candidate), errorCode)
+    if (!intrinsicNumberIsFinite(intrinsicReflectApply(intrinsicDateGetTime, candidate, []) as number)) throw new ConnectorInputError(errorCode)
+    return canonicalIsoInstant(intrinsicReflectApply(intrinsicDateToISOString, candidate, []), errorCode)
   } catch (error) {
     if (error instanceof ConnectorInputError) throw error
     throw new ConnectorInputError(errorCode)
@@ -534,8 +533,8 @@ function reviewStateFor(decision: 'approved' | 'rejected'): ReviewedCameraObserv
 
 function canonicalIsoInstant(value: unknown, error: string): string {
   const instant = requiredString(value, error, 30)
-  const parsed = new Date(instant)
-  if (Number.isNaN(parsed.getTime()) || parsed.toISOString() !== instant) throw new ConnectorInputError(error)
+  const parsed = new intrinsicDate(instant)
+  if (intrinsicNumberIsNaN(intrinsicReflectApply(intrinsicDateGetTime, parsed, []) as number) || intrinsicReflectApply(intrinsicDateToISOString, parsed, []) !== instant) throw new ConnectorInputError(error)
   return instant
 }
 
@@ -914,7 +913,10 @@ export function validateCameraReviewAuditTrailWitness(sourceResult: unknown, rev
   if (succeeded.event.detail.requestedAuditHash !== requested.hash || succeeded.previousHash !== requested.hash || reviewed.previousHash !== succeeded.hash) {
     throw new ConnectorInputError('CAMERA_AUDIT_TRAIL_CHAIN_MISMATCH')
   }
-  if (new Date(requested.event.occurredAt).getTime() > new Date(succeeded.event.occurredAt).getTime() || new Date(succeeded.event.occurredAt).getTime() > new Date(reviewed.event.occurredAt).getTime()) {
+  const requestedAt = intrinsicReflectApply(intrinsicDateGetTime, new intrinsicDate(requested.event.occurredAt), []) as number
+  const succeededAt = intrinsicReflectApply(intrinsicDateGetTime, new intrinsicDate(succeeded.event.occurredAt), []) as number
+  const reviewedAt = intrinsicReflectApply(intrinsicDateGetTime, new intrinsicDate(reviewed.event.occurredAt), []) as number
+  if (requestedAt > succeededAt || succeededAt > reviewedAt) {
     throw new ConnectorInputError('CAMERA_AUDIT_TRAIL_TIME_MISMATCH')
   }
 

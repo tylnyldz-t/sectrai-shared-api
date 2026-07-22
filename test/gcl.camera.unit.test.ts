@@ -1427,6 +1427,80 @@ test('D23 rejects Proxy, accessor, and Proxy-method runner collaborators at cons
   assert.equal(quota.requests.length, 0)
 })
 
+test('D24 keeps late own-data inspection hooks out of connector and runner admission', async () => {
+  const connector = enabledConnector()
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const originalArrayIsArray = Array.isArray
+  const originalGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor
+  const originalGetOwnPropertyDescriptors = Object.getOwnPropertyDescriptors
+  const originalGetOwnPropertyNames = Object.getOwnPropertyNames
+  const originalGetOwnPropertySymbols = Object.getOwnPropertySymbols
+  const originalGetPrototypeOf = Object.getPrototypeOf
+  const originalIsSafeInteger = Number.isSafeInteger
+  let hostileHookCalls = 0
+  const hostileHook = () => { hostileHookCalls += 1; throw new Error('LATE_ADMISSION_HOOK_MUST_NOT_RUN') }
+  let runner: GovernedConnectorRunner | undefined
+
+  try {
+    Array.isArray = hostileHook as typeof Array.isArray
+    Object.getOwnPropertyDescriptor = hostileHook as typeof Object.getOwnPropertyDescriptor
+    Object.getOwnPropertyDescriptors = hostileHook as typeof Object.getOwnPropertyDescriptors
+    Object.getOwnPropertyNames = hostileHook as typeof Object.getOwnPropertyNames
+    Object.getOwnPropertySymbols = hostileHook as typeof Object.getOwnPropertySymbols
+    Object.getPrototypeOf = hostileHook as typeof Object.getPrototypeOf
+    Number.isSafeInteger = hostileHook as typeof Number.isSafeInteger
+
+    const registry = new ConnectorRegistry([connector])
+    runner = new GovernedConnectorRunner(registry, audit, quota, now)
+  } finally {
+    Array.isArray = originalArrayIsArray
+    Object.getOwnPropertyDescriptor = originalGetOwnPropertyDescriptor
+    Object.getOwnPropertyDescriptors = originalGetOwnPropertyDescriptors
+    Object.getOwnPropertyNames = originalGetOwnPropertyNames
+    Object.getOwnPropertySymbols = originalGetOwnPropertySymbols
+    Object.getPrototypeOf = originalGetPrototypeOf
+    Number.isSafeInteger = originalIsSafeInteger
+  }
+
+  assert.equal(hostileHookCalls, 0)
+  assert.ok(runner)
+  const result = await runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
+  assert.equal(result.data.mode, 'SYNTHETIC')
+  assert.deepEqual(audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.succeeded'])
+  assert.deepEqual(quota.requests, [{ connectorId: CAMERA_CONNECTOR_ID, requestedItems: 1 }])
+})
+
+test('D24 keeps late Date prototype hooks out of governed, audit, fixture, and review timestamps', async () => {
+  const originalGetTime = Date.prototype.getTime
+  const originalToISOString = Date.prototype.toISOString
+  let hostileHookCalls = 0
+  const hostileHook = () => { hostileHookCalls += 1; throw new Error('LATE_DATE_HOOK_MUST_NOT_RUN') }
+  let result: ConnectorResult<CameraObservationResult> | undefined
+  let reviewed: Awaited<ReturnType<typeof independentlyReviewCameraObservation>> | undefined
+
+  try {
+    Date.prototype.getTime = hostileHook as typeof Date.prototype.getTime
+    Date.prototype.toISOString = hostileHook as typeof Date.prototype.toISOString
+
+    const setup = runnerFor()
+    result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
+    reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
+    assert.equal((setup.quota as TestQuota).requests.length, 1)
+    assert.deepEqual(setup.audit.entries.map((entry) => entry.event.type), [
+      'connector.run.requested', 'connector.run.succeeded', 'connector.camera.owner_reviewed',
+    ])
+  } finally {
+    Date.prototype.getTime = originalGetTime
+    Date.prototype.toISOString = originalToISOString
+  }
+
+  assert.equal(hostileHookCalls, 0)
+  assert.equal(result?.provenance.retrievedAt, '2026-07-22T12:00:00.000Z')
+  assert.equal(reviewed?.ownerReview.occurredAt, '2026-07-22T12:00:00.000Z')
+  assert.equal(reviewed?.handoff.sent, false)
+})
+
 test('D15 seals audit events before append: shaped or cyclic events never reach the audit collaborator', async () => {
   const received: ConnectorAuditEvent[] = []
   const audit: AuditLog = {

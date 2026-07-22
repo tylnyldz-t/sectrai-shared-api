@@ -1,6 +1,7 @@
 import { createHash, Hash } from 'node:crypto'
 import { types as nodeTypes } from 'node:util'
 import { AuditChainError, AuditEventError, AuditReceiptError } from './errors.js'
+import { intrinsicDate, intrinsicDateGetTime, intrinsicDateToISOString, intrinsicNumberIsFinite, intrinsicReflectApply } from './intrinsics.js'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import type { AuditAppendReceipt, AuditLog, ConnectorAuditEvent } from './types.js'
 
@@ -32,8 +33,6 @@ const MAX_AUDIT_JSON_STRING_LENGTH = 4096
 const intrinsicCreateHash = createHash
 const intrinsicHashUpdate = Hash.prototype.update
 const intrinsicHashDigest = Hash.prototype.digest
-const intrinsicReflectApply = Reflect.apply
-
 type AuditRecordValue = {
   event: ConnectorAuditEvent
   previousHash: string | null
@@ -185,9 +184,9 @@ function sealedAuditJson(value: unknown, depth = 0, ancestors = new Set<object>(
 
 function sealedAuditOccurredAt(value: unknown): string {
   const occurredAt = auditString(value, 40)
-  const date = new Date(occurredAt)
+  const date = new intrinsicDate(occurredAt)
   try {
-    if (!Number.isFinite(Date.prototype.getTime.call(date)) || Date.prototype.toISOString.call(date) !== occurredAt) throw new AuditEventError()
+    if (!intrinsicNumberIsFinite(intrinsicReflectApply(intrinsicDateGetTime, date, []) as number) || intrinsicReflectApply(intrinsicDateToISOString, date, []) !== occurredAt) throw new AuditEventError()
   } catch (error) {
     if (error instanceof AuditEventError) throw error
     throw new AuditEventError()

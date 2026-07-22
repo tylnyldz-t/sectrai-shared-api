@@ -1,6 +1,12 @@
 import { types as nodeTypes } from 'node:util'
 import { appendVerifiedAuditEvent } from './audit.js'
 import { AuditChainError, AuditEventError, AuditReceiptError, ConnectorInputError, ConnectorResultError, CostCapError, GclError, MakerCheckerError, OwnerGateError, ScopeError, ConnectorUnavailableError } from './errors.js'
+import {
+  intrinsicArrayIsArray, intrinsicDate, intrinsicDateGetTime, intrinsicDateToISOString, intrinsicIsDate, intrinsicIsProxy,
+  intrinsicNumberIsFinite, intrinsicNumberIsSafeInteger, intrinsicObjectFreeze, intrinsicObjectGetOwnPropertyDescriptor,
+  intrinsicObjectGetOwnPropertyDescriptors, intrinsicObjectGetOwnPropertyNames, intrinsicObjectGetOwnPropertySymbols,
+  intrinsicObjectGetPrototypeOf, intrinsicReflectApply,
+} from './intrinsics.js'
 import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export type RunConnectorRequest = {
@@ -17,7 +23,7 @@ export type RunConnectorRequest = {
   requestedItems: number
 }
 
-function isSafePositiveInteger(value: number): boolean { return Number.isSafeInteger(value) && value > 0 }
+function isSafePositiveInteger(value: number): boolean { return intrinsicNumberIsSafeInteger(value) && value > 0 }
 
 const GOVERNED_RUN_REQUEST_FIELDS = [
   'connectorId', 'input', 'product', 'workspaceId', 'requestedBy', 'checkedBy',
@@ -33,8 +39,6 @@ const MAX_GOVERNED_INPUT_KEYS = 48
 const MAX_GOVERNED_INPUT_ARRAY_ITEMS = 48
 const MAX_GOVERNED_INPUT_STRING_LENGTH = 4096
 const MAX_REGISTERED_CONNECTORS = 12
-const intrinsicReflectApply = Reflect.apply
-
 type RegisteredConnector = Readonly<{
   id: string
   kind: Connector['kind']
@@ -60,14 +64,14 @@ function connectorRegistrationError(): never {
 }
 
 function registeredConnectorList(value: unknown): readonly unknown[] {
-  if (!Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+  if (!intrinsicArrayIsArray(value) || intrinsicIsProxy(value) || intrinsicObjectGetPrototypeOf(value) !== Array.prototype || intrinsicObjectGetOwnPropertySymbols(value).length > 0) {
     return connectorRegistrationError()
   }
-  const names = Object.getOwnPropertyNames(value)
-  const descriptors = Object.getOwnPropertyDescriptors(value)
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+  const names = intrinsicObjectGetOwnPropertyNames(value)
+  const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
+  const lengthDescriptor = intrinsicObjectGetOwnPropertyDescriptor(value, 'length')
   const length = lengthDescriptor?.value
-  if (!lengthDescriptor || !('value' in lengthDescriptor) || typeof length !== 'number' || !Number.isSafeInteger(length) || length > MAX_REGISTERED_CONNECTORS ||
+  if (!lengthDescriptor || !('value' in lengthDescriptor) || typeof length !== 'number' || !intrinsicNumberIsSafeInteger(length) || length > MAX_REGISTERED_CONNECTORS ||
     names.length !== length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
     return connectorRegistrationError()
   }
@@ -77,24 +81,24 @@ function registeredConnectorList(value: unknown): readonly unknown[] {
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return connectorRegistrationError()
     connectors.push(descriptor.value)
   }
-  return Object.freeze(connectors)
+  return intrinsicObjectFreeze(connectors)
 }
 
 function registeredConnectorMetadata(value: object, field: typeof REGISTERED_CONNECTOR_METADATA_FIELDS[number]): unknown {
-  const descriptor = Object.getOwnPropertyDescriptor(value, field)
+  const descriptor = intrinsicObjectGetOwnPropertyDescriptor(value, field)
   if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) return connectorRegistrationError()
   return descriptor.value
 }
 
 function registeredConnectorScopes(value: unknown): readonly string[] {
-  if (!Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+  if (!intrinsicArrayIsArray(value) || intrinsicIsProxy(value) || intrinsicObjectGetPrototypeOf(value) !== Array.prototype || intrinsicObjectGetOwnPropertySymbols(value).length > 0) {
     return connectorRegistrationError()
   }
-  const names = Object.getOwnPropertyNames(value)
-  const descriptors = Object.getOwnPropertyDescriptors(value)
-  const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+  const names = intrinsicObjectGetOwnPropertyNames(value)
+  const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
+  const lengthDescriptor = intrinsicObjectGetOwnPropertyDescriptor(value, 'length')
   const length = lengthDescriptor?.value
-  if (!lengthDescriptor || !('value' in lengthDescriptor) || typeof length !== 'number' || !Number.isSafeInteger(length) || length < 1 || length > 12 ||
+  if (!lengthDescriptor || !('value' in lengthDescriptor) || typeof length !== 'number' || !intrinsicNumberIsSafeInteger(length) || length < 1 || length > 12 ||
     names.length !== length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
     return connectorRegistrationError()
   }
@@ -107,26 +111,26 @@ function registeredConnectorScopes(value: unknown): readonly string[] {
     scopes.push(descriptor.value)
   }
   if (new Set(scopes).size !== scopes.length) return connectorRegistrationError()
-  return Object.freeze(scopes.sort())
+  return intrinsicObjectFreeze(scopes.sort())
 }
 
 function registeredConnectorMethod(value: object, field: typeof REGISTERED_CONNECTOR_METHOD_FIELDS[number], required: boolean): Function | undefined {
   let candidate: object | null = value
   for (let depth = 0; candidate !== null && candidate !== Object.prototype && depth < 8; depth += 1) {
-    if (nodeTypes.isProxy(candidate)) return connectorRegistrationError()
-    const descriptor = Object.getOwnPropertyDescriptor(candidate, field)
+    if (intrinsicIsProxy(candidate)) return connectorRegistrationError()
+    const descriptor = intrinsicObjectGetOwnPropertyDescriptor(candidate, field)
     if (descriptor) {
-      if (!('value' in descriptor) || typeof descriptor.value !== 'function' || nodeTypes.isProxy(descriptor.value)) return connectorRegistrationError()
+      if (!('value' in descriptor) || typeof descriptor.value !== 'function' || intrinsicIsProxy(descriptor.value)) return connectorRegistrationError()
       return descriptor.value
     }
-    candidate = Object.getPrototypeOf(candidate)
+    candidate = intrinsicObjectGetPrototypeOf(candidate)
   }
   if (required || (candidate !== null && candidate !== Object.prototype)) return connectorRegistrationError()
   return undefined
 }
 
 function registeredConnector(value: unknown): RegisteredConnector {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) return connectorRegistrationError()
+  if (!value || typeof value !== 'object' || intrinsicArrayIsArray(value) || intrinsicIsProxy(value)) return connectorRegistrationError()
   const candidate = value as object
   const id = registeredConnectorMetadata(candidate, 'id')
   const kind = registeredConnectorMetadata(candidate, 'kind')
@@ -141,7 +145,7 @@ function registeredConnector(value: unknown): RegisteredConnector {
   const validateResult = registeredConnectorMethod(candidate, 'validateResult', false)
   const call = (method: Function, args: readonly unknown[]): unknown => intrinsicReflectApply(method, candidate, args)
 
-  return Object.freeze({
+  return intrinsicObjectFreeze({
     id,
     kind,
     authKind,
@@ -320,7 +324,7 @@ function governedConnectorResult(value: unknown, connectorId: string, occurredAt
   const result = governedResultRecord(value, GOVERNED_CONNECTOR_RESULT_FIELDS)
   const provenance = governedResultRecord(result.provenance, GOVERNED_CONNECTOR_PROVENANCE_FIELDS)
   const untrustedContent = governedResultRecord(provenance.untrustedContent, GOVERNED_UNTRUSTED_CONTENT_FIELDS)
-  const expectedRetrievedAt = Date.prototype.toISOString.call(occurredAt)
+  const expectedRetrievedAt = intrinsicReflectApply(intrinsicDateToISOString, occurredAt, []) as string
 
   if (nodeTypes.isProxy(result.data) || nodeTypes.isProxy(untrustedContent.value) ||
     typeof result.confidence !== 'number' || !Number.isFinite(result.confidence) || result.confidence < 0 || result.confidence > 1 ||
@@ -374,18 +378,18 @@ function governedVerifiedConnectorResult(value: unknown, connector: Connector, c
  * multi-call input that can change between preflight, quota, and audit steps.
  */
 function governedRunTimeSnapshot(clock: unknown): Date {
-  if (typeof clock !== 'function' || nodeTypes.isProxy(clock)) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
+  if (typeof clock !== 'function' || intrinsicIsProxy(clock)) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
   let candidate: unknown
   try {
     candidate = clock()
   } catch {
     throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
   }
-  if (!nodeTypes.isDate(candidate) || nodeTypes.isProxy(candidate)) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
+  if (!intrinsicIsDate(candidate) || intrinsicIsProxy(candidate)) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
   try {
-    const milliseconds = Date.prototype.getTime.call(candidate)
-    if (!Number.isFinite(milliseconds)) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
-    return new Date(milliseconds)
+    const milliseconds = intrinsicReflectApply(intrinsicDateGetTime, candidate, []) as number
+    if (!intrinsicNumberIsFinite(milliseconds)) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
+    return new intrinsicDate(milliseconds)
   } catch (error) {
     if (error instanceof ConnectorInputError) throw error
     throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_CLOCK')
@@ -393,7 +397,7 @@ function governedRunTimeSnapshot(clock: unknown): Date {
 }
 
 function snapshotClock(snapshot: Date): () => Date {
-  return () => new Date(Date.prototype.getTime.call(snapshot))
+  return () => new intrinsicDate(intrinsicReflectApply(intrinsicDateGetTime, snapshot, []) as number)
 }
 
 /**
@@ -445,28 +449,28 @@ function runnerCollaboratorError(): never {
 }
 
 function capturedRunnerCollaboratorMethod(value: unknown, field: string): (...args: unknown[]) => unknown {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) return runnerCollaboratorError()
+  if (!value || typeof value !== 'object' || intrinsicArrayIsArray(value) || intrinsicIsProxy(value)) return runnerCollaboratorError()
   const receiver = value as object
   let candidate: object | null = receiver
   for (let depth = 0; candidate !== null && candidate !== Object.prototype && depth < 8; depth += 1) {
-    if (nodeTypes.isProxy(candidate)) return runnerCollaboratorError()
-    const descriptor = Object.getOwnPropertyDescriptor(candidate, field)
+    if (intrinsicIsProxy(candidate)) return runnerCollaboratorError()
+    const descriptor = intrinsicObjectGetOwnPropertyDescriptor(candidate, field)
     if (descriptor) {
-      if (!('value' in descriptor) || typeof descriptor.value !== 'function' || nodeTypes.isProxy(descriptor.value)) return runnerCollaboratorError()
+      if (!('value' in descriptor) || typeof descriptor.value !== 'function' || intrinsicIsProxy(descriptor.value)) return runnerCollaboratorError()
       const method = descriptor.value
       return (...args: unknown[]): unknown => intrinsicReflectApply(method, receiver, args)
     }
-    candidate = Object.getPrototypeOf(candidate)
+    candidate = intrinsicObjectGetPrototypeOf(candidate)
   }
   return runnerCollaboratorError()
 }
 
 function governedRunnerCollaborators(registry: ConnectorRegistry, auditLog: AuditLog, quota: ConnectorQuota, now: () => Date): GovernedRunnerCollaborators {
-  if (typeof now !== 'function' || nodeTypes.isProxy(now)) return runnerCollaboratorError()
+  if (typeof now !== 'function' || intrinsicIsProxy(now)) return runnerCollaboratorError()
   const resolve = capturedRunnerCollaboratorMethod(registry, 'get')
   const append = capturedRunnerCollaboratorMethod(auditLog, 'append')
   const consume = capturedRunnerCollaboratorMethod(quota, 'consume')
-  return Object.freeze({
+  return intrinsicObjectFreeze({
     resolve: (connectorId: string) => resolve(connectorId) as RegisteredConnector,
     auditLog: Object.freeze({ append: (event: ConnectorAuditEvent) => append(event) as ReturnType<AuditLog['append']> }),
     consume: (request: Parameters<ConnectorQuota['consume']>[0]) => consume(request) as ReturnType<ConnectorQuota['consume']>,
@@ -505,7 +509,7 @@ export class GovernedConnectorRunner {
       type, connectorId, product: context.product, workspaceId: context.workspaceId,
       requestedBy: context.requestedBy, checkedBy: context.checkedBy, correlationId: context.correlationId,
       scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,
-      occurredAt: Date.prototype.toISOString.call(occurredAt), detail,
+      occurredAt: intrinsicReflectApply(intrinsicDateToISOString, occurredAt, []) as string, detail,
     }
   }
 
