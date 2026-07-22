@@ -53,22 +53,8 @@ The service stores only product-owned synthetic demo records. It does not make A
 
 ## GM5/GM6 synthetic connectors
 
-The optional GCL routes expose only reviewable GM5 3D proposals and GM6 game
-engine plans. Their JNC Blender/Unreal mapping is contract-only: no provider,
-GPU, Blender, Unreal, shell, credential, or publication path exists. See
+The optional GCL routes return only frozen, `LIVE_DISABLED` GM5 3D proposals
+and GM6 game plans. JNC cards and Blender/Unreal handoffs are contract data
+with no transport or dispatch capability. Owner approval, scope/cap checks,
+daily quota, and the fail-closed audit chain remain runner-owned. See
 [`docs/GM5_GM6_JNC_SYNTHETIC_CONTRACT.md`](docs/GM5_GM6_JNC_SYNTHETIC_CONTRACT.md).
-GM5/GM6 outputs are immutable, scope-bound synthetic review snapshots; a
-broken GCL audit chain fails closed rather than being silently restarted. Each
-snapshot additionally includes a deterministic review receipt that records no
-transport, process, artifact write, or publication capability.
-Before a GM5/GM6 result is returned, the runner also verifies the frozen output
-shape and its field-by-field binding to that review snapshot; malformed output
-fails closed and is never serialized.
-The runner separately snapshots each submitted connector input as frozen
-canonical JSON and binds that submission digest to the review snapshot, so a
-different valid synthetic plan cannot be substituted after preflight.
-Its final boundary also binds the snapshot's product/workspace, owner actor,
-and cost/item reservation data to the governed request, rejecting replay from
-a different synthetic scope, owner, or quota context. GM5 proposal IDs and
-optional GPU-card requests are bound to that same frozen review plan; its
-displayed output format must also match the submitted synthetic proposal.

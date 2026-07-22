@@ -1,7 +1,7 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, GclError, OwnerGateError, ScopeError } from './errors.js'
 import { isGovernanceCostCapCents, isGovernanceRequestedItems, MAX_GOVERNANCE_SCOPE_COUNT, MAX_SYNTHETIC_CONNECTOR_REGISTRY_SIZE } from './governance-limits.js'
 import { deepFreeze, frozenCanonicalJsonCopy, isProxyValue } from './plan-integrity.js'
-import { syntheticResultReviewBinding, validatedSyntheticConnectorResult } from './result-boundary.js'
+import { validatedSyntheticConnectorResult } from './result-boundary.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export type RunConnectorRequest = {
@@ -285,7 +285,7 @@ export class GovernedConnectorRunner {
       occurredAt: runTime.occurredAt,
     })
     try {
-      const result = validatedSyntheticConnectorResult(await connector.run(input, context), connector.id, input, syntheticResultReviewBinding(context, runTime.iso))
+      const result = validatedSyntheticConnectorResult(await connector.run(input, context), connector.id)
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId,
         actor: context.actor, scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,
