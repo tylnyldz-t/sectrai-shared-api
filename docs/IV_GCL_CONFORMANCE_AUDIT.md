@@ -1581,3 +1581,88 @@ introduced; output is proposal-only/no-action; no JARVIS/JNC job launches; and
 synthetic evidence is never deployment or live-enable authority. D19 loaded no
 credential, contacted no provider/network, used no device or production
 database, sent nothing, and made no `main`/production write.
+
+## D20 — next immutable direct-successor package
+
+D20 pins the immediate child of every D19 package: RA OCR `c1d330c`, RA image
+`988c41b`, RA 3D/game `e2aca2f`, RA market `9b993a6`, RFID `5727465`,
+translation `2443f1d`, language education `a48bd08`, and camera `79f758c`.
+Each commit names its D19 revision as its exact direct parent. RA voice still
+has no successor beyond D1. The fixture reads only local Git objects with
+`git show <revision>:<path>` and pins every public connector and runner plus
+the changed local GCL boundary modules: 3D's audit helper, translation's
+supplemental audit module, language education's types, and camera's audit and
+errors modules. It never reads the mutable sibling source as audit evidence.
+
+D20 remains source-only and fail closed. It does not import a target runtime,
+load an environment file or credential, open a socket, contact a provider,
+capture media, access RFID hardware, write a database, run a migration, start
+JARVIS/JNC, publish, send, or write `main`/production.
+
+| Connector | D20 source-only evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D20 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Binds checked UTC-epoch arithmetic into the review packet and rejects evidence-expiry/review-window overflow before an invalid deadline can serialize | `requested` only | Pass | Nonconformant; truthy-owner and quota-audit gaps remain |
+| RA image | Direct successor changes unit evidence only; connector and runner blobs are byte-identical to D19 | `requested`, `failed` | Pass | Conformant |
+| RA 3D/game | Captures one validated clock for preflight/audit/quota/run, and rejects durable audit clock rollback or a terminal record predating its request | `requested` only | Pass | Nonconformant; quota gap remains |
+| RA market | Direct validation retains the unavailable frozen-configuration state and rejects it before request parsing or any governed-run side effect | `requested` only | Pass | Nonconformant; quota gap remains |
+| RFID | Direct successor changes README/contract documentation only; connector and runner blobs are byte-identical to D19 | `requested`, `failed` | Pass | Nonconformant; truthy-owner gap remains |
+| Translation | A present live-opt-in configuration property is rejected even if false; durable success evidence must still have future review authority at the run instant | `requested`, `failed` | Pass | Nonconformant; truthy-owner gap remains |
+| Language education | Adds a family-learning-brief fixture-pointer connector with an independent review scope; prompts, responses, guardian identity/consent, learner profile, inference, and recommendation are not accepted | `requested`, `failed` | Pass | Conformant |
+| Camera | Seals and verifies the exact durable audit-chain head before a successor write; Proxy, hidden, accessor, shaped, or hash-mismatched heads stop the lifecycle without a synthetic follow-up transition | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` is limited to this IV synthetic GCL envelope. It is not authority
+to set a key, enable a provider, use a device, capture audio/video/RFID data,
+launch JARVIS/JNC, migrate, persist production data, reserve/book/publish,
+handoff, send an output, or enable a live operation.
+
+### D20 negative and edge evidence
+
+- The direct-parent assertion covers all eight D20 commits. A skipped,
+  rebased, missing, or later descendant fails before its source is classified.
+- OCR's checked addition rejects unsafe/non-finite values and the exact
+  ECMAScript epoch ceiling. The arithmetic binding is integrity-bound into the
+  review packet and independently revalidated, so a packet cannot merely claim
+  overflow safety.
+- 3D's audit helper rejects chain-wide clock rollback and a terminal event
+  whose timestamp predates its request; it verifies the prospective link before
+  durable creation. This is only a no-transport audit boundary, not a JNC/GPU
+  capability or execution path.
+- Market's nullable configuration reaches `configured(...)`, whose null branch
+  throws `MARKET_GOVERNANCE_LIMITS_NOT_CONFIGURED`; the static probe prevents a
+  shaped or rejected constructor snapshot from becoming a direct-call bypass.
+- Translation rejects a constructor/configuration live-opt-in *surface* via
+  `Object.hasOwn`, including false-like values, and its supplemental audit
+  source rejects a success event when `reviewExpiresAt` is not strictly after
+  the canonical run time.
+- The language-education probe pins the new allowlist
+  `synthetic`, `familyBriefRef`, `familyBriefHash`, `locale`, and `activity`,
+  its dedicated scope, reference-only delivery, and the explicit no-profile /
+  no-recommendation output. It rejects adding raw family prompts/responses or
+  guardian/learner identity fields to that contract.
+- Camera's head probe requires non-Proxy plain data, exactly `event`,
+  `previousHash`, and `hash` own enumerable data fields, a sealed event, and a
+  recomputed hash. `AuditChainError` is terminal in the runner, preventing a
+  fabricated `failed` event after uncertain durable state.
+- The inherited closure scan still rejects egress/endpoints, credential-like
+  environment reads, subprocess/worker launch, dynamic/runtime escape, and
+  automatic publication. Market, translation, language education, and camera
+  hard-deny live opt-in; the other audited connectors expose no live-enable
+  surface.
+
+### D20 test evidence and ADOS boundary
+
+`npm run test:conformance` passes with the D1–D20 immutable fixture. It checks
+the eight exact direct-parent links, connector/runner and selected-boundary
+blob hashes, local source closures, disabled-mode/egress rules, owner and
+quota classifications, and the D20 overflow, configuration, expired-review,
+family-brief, temporal-audit, and durable-head negative edges. The fixture is
+in-process TypeScript parsing over local Git objects; it does not execute a
+target connector, integration suite, migration, or external call.
+
+All ten ADOS rules remain active: product/workspace boundaries stay isolated;
+data stays minimal and synthetic; absent/malformed gates deny; maker–checker
+requirements remain; gaps are reported rather than waived; no migration is
+introduced; outputs are proposal-only/no-action; no JARVIS/JNC job launches;
+and synthetic evidence is never deployment or live-enable authority. D20
+loaded no credential, contacted no provider/network, used no device or
+production database, sent nothing, and made no `main`/production write.
