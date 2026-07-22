@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { InMemoryHashChainAuditLog, hashAuditEvent } from '../src/gcl/audit.js'
-import { CameraConsentError, ConnectorInputError, ConnectorUnavailableError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
+import { CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
 import { ownerTokenMatches } from '../src/gcl/owner.js'
 import { cameraDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
-import type { ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
+import type { Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
 import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION, CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, CAMERA_REVIEW_AUDIT_WITNESS_VERSION, CAMERA_REVIEW_EVIDENCE_MANIFEST_VERSION, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, createCameraReviewAuditTrailReceipt, createCameraReviewEvidenceManifest, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewAuditTrailReceipt, validateCameraReviewAuditTrailWitness, validateCameraReviewAuditWitness, validateCameraReviewEvidenceManifest, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
@@ -39,6 +39,16 @@ function enabledConnector(overrides: SyntheticCameraConnectorConfig = {}): Synth
 function runnerFor(connector = enabledConnector(), quota: ConnectorQuota = new TestQuota()) {
   const audit = new InMemoryHashChainAuditLog()
   return { audit, quota, runner: new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now) }
+}
+
+function connectorReturning(result: unknown): Connector {
+  return {
+    id: CAMERA_CONNECTOR_ID,
+    kind: 'synthetic-camera',
+    authKind: 'owner-token',
+    scopes: ['camera:observe'],
+    async run() { return result as ConnectorResult },
+  }
 }
 
 test('camera connector defaults closed and a live opt-in remains closed', async () => {
@@ -945,6 +955,39 @@ test('D11 governed runner freezes one trusted local timestamp and rejects malfor
   assert.equal(proxyDateTrapRead, false)
 })
 
+test('D13 governed runner rejects shaped, stale, injected, or non-synthetic result control planes before a success audit', async () => {
+  const valid = await enabledConnector().run(loadingDockInput, context)
+  let resultProxyTrapRead = false
+  const proxiedResult = new Proxy(structuredClone(valid), {
+    get() { resultProxyTrapRead = true; throw new Error('RESULT_PROXY_MUST_NOT_RUN') },
+  })
+  const accessorResult = structuredClone(valid)
+  let provenanceAccessorRead = false
+  Object.defineProperty(accessorResult, 'provenance', {
+    enumerable: true,
+    get() { provenanceAccessorRead = true; throw new Error('RESULT_ACCESSOR_MUST_NOT_RUN') },
+  })
+  const staleProvenance = structuredClone(valid)
+  staleProvenance.provenance.retrievedAt = '2026-07-22T12:00:01.000Z'
+  const injectedAuditHash = structuredClone(valid)
+  injectedAuditHash.provenance.auditHash = '0'.repeat(64)
+  const liveClaim = structuredClone(valid)
+  liveClaim.provenance.liveStatus = 'LIVE_ENABLED' as never
+
+  for (const malformed of [proxiedResult, accessorResult, staleProvenance, injectedAuditHash, liveClaim]) {
+    const setup = runnerFor(connectorReturning(malformed))
+    await assert.rejects(
+      () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
+      (error: unknown) => error instanceof ConnectorResultError && error.message === 'INVALID_GOVERNED_CONNECTOR_RESULT',
+    )
+    assert.deepEqual(setup.audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.failed'])
+    assert.equal((setup.quota as TestQuota).requests.length, 1)
+    assert.equal(setup.audit.entries[1]?.event.detail.errorCode, 'invalid_connector_result')
+  }
+  assert.equal(resultProxyTrapRead, false)
+  assert.equal(provenanceAccessorRead, false)
+})
+
 test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
   const setup = runnerFor()
   const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
@@ -1007,8 +1050,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, and the D11 runner clock/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, and the D13 result\/provenance control plane/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 

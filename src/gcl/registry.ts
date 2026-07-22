@@ -1,5 +1,5 @@
 import { types as nodeTypes } from 'node:util'
-import { ConnectorInputError, CostCapError, GclError, MakerCheckerError, OwnerGateError, ScopeError, ConnectorUnavailableError } from './errors.js'
+import { ConnectorInputError, ConnectorResultError, CostCapError, GclError, MakerCheckerError, OwnerGateError, ScopeError, ConnectorUnavailableError } from './errors.js'
 import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export type RunConnectorRequest = {
@@ -22,6 +22,11 @@ const GOVERNED_RUN_REQUEST_FIELDS = [
   'connectorId', 'input', 'product', 'workspaceId', 'requestedBy', 'checkedBy',
   'correlationId', 'ownerApproved', 'scopes', 'costCapCents', 'requestedItems',
 ] as const
+
+const GOVERNED_CONNECTOR_RESULT_FIELDS = ['data', 'provenance', 'confidence'] as const
+const GOVERNED_CONNECTOR_PROVENANCE_FIELDS = ['connectorId', 'source', 'retrievedAt', 'liveStatus', 'synthetic', 'untrustedContent'] as const
+const GOVERNED_UNTRUSTED_CONTENT_FIELDS = ['source', 'value', 'handling', 'instructionPolicy'] as const
+const SYNTHETIC_SOURCE_PATTERN = /^[a-z0-9][a-z0-9:_-]{0,199}$/
 
 /**
  * D12's runner boundary accepts only a dense, ordinary array of own enumerable
@@ -92,6 +97,71 @@ function governedRunRequest(value: unknown): RunConnectorRequest {
     scopes: governedRunScopes(scopes),
     costCapCents,
     requestedItems,
+  }
+}
+
+/**
+ * D13 uses the same no-getter/no-Proxy data boundary for adapter-produced
+ * envelopes. It deliberately does not parse generic `data` or untrusted
+ * content values: individual adapters retain that responsibility. The runner
+ * only accepts and reconstructs the control-plane wrapper it needs to audit.
+ */
+function governedResultRecord(value: unknown, fields: readonly string[]): Record<string, unknown> {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) {
+    throw new ConnectorResultError('INVALID_GOVERNED_CONNECTOR_RESULT')
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) throw new ConnectorResultError('INVALID_GOVERNED_CONNECTOR_RESULT')
+  const names = Object.getOwnPropertyNames(value)
+  if (Object.getOwnPropertySymbols(value).length > 0 || names.length !== fields.length || names.some((name) => !fields.includes(name))) {
+    throw new ConnectorResultError('INVALID_GOVERNED_CONNECTOR_RESULT')
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const normalized = Object.create(null) as Record<string, unknown>
+  for (const field of fields) {
+    const descriptor = descriptors[field]
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorResultError('INVALID_GOVERNED_CONNECTOR_RESULT')
+    normalized[field] = descriptor.value
+  }
+  return normalized
+}
+
+/**
+ * D13 verifies and copies the result/provenance control plane after adapter
+ * execution but before a success audit is appended or a result is returned.
+ * `auditHash` is intentionally absent here: the runner is its sole writer.
+ */
+function governedConnectorResult(value: unknown, connectorId: string, occurredAt: Date): ConnectorResult {
+  const result = governedResultRecord(value, GOVERNED_CONNECTOR_RESULT_FIELDS)
+  const provenance = governedResultRecord(result.provenance, GOVERNED_CONNECTOR_PROVENANCE_FIELDS)
+  const untrustedContent = governedResultRecord(provenance.untrustedContent, GOVERNED_UNTRUSTED_CONTENT_FIELDS)
+  const expectedRetrievedAt = Date.prototype.toISOString.call(occurredAt)
+
+  if (nodeTypes.isProxy(result.data) || nodeTypes.isProxy(untrustedContent.value) ||
+    typeof result.confidence !== 'number' || !Number.isFinite(result.confidence) || result.confidence < 0 || result.confidence > 1 ||
+    provenance.connectorId !== connectorId || typeof provenance.source !== 'string' || !SYNTHETIC_SOURCE_PATTERN.test(provenance.source) ||
+    provenance.retrievedAt !== expectedRetrievedAt || provenance.liveStatus !== 'LIVE_DISABLED' || provenance.synthetic !== true ||
+    typeof untrustedContent.source !== 'string' || !SYNTHETIC_SOURCE_PATTERN.test(untrustedContent.source) ||
+    untrustedContent.handling !== 'data-only' || untrustedContent.instructionPolicy !== 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS') {
+    throw new ConnectorResultError('INVALID_GOVERNED_CONNECTOR_RESULT')
+  }
+
+  return {
+    data: result.data,
+    confidence: result.confidence,
+    provenance: {
+      connectorId,
+      source: provenance.source,
+      retrievedAt: expectedRetrievedAt,
+      liveStatus: 'LIVE_DISABLED',
+      synthetic: true,
+      untrustedContent: {
+        source: untrustedContent.source,
+        value: untrustedContent.value,
+        handling: 'data-only',
+        instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS',
+      },
+    },
   }
 }
 
@@ -199,7 +269,7 @@ export class GovernedConnectorRunner {
     const requestedAudit = await this.auditLog.append(this.event('connector.run.requested', connector.id, context, occurredAt, {}))
     try {
       await this.quota.consume({ ...context, connectorId: connector.id, occurredAt: snapshotClock(occurredAt)() })
-      const result = await connector.run(normalizedRequest.input, context)
+      const result = governedConnectorResult(await connector.run(normalizedRequest.input, context), connector.id, occurredAt)
       const succeededAudit = await this.auditLog.append(this.event('connector.run.succeeded', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash }))
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
     } catch (error) {

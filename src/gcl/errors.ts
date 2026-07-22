@@ -36,3 +36,8 @@ export class CameraConsentError extends GclError {
 export class ConnectorInputError extends GclError {
   constructor(message = 'INVALID_CONNECTOR_INPUT') { super(message, 422, 'invalid_connector_input') }
 }
+
+/** A connector returned an unsafe or non-synthetic result envelope. */
+export class ConnectorResultError extends GclError {
+  constructor(message = 'INVALID_CONNECTOR_RESULT') { super(message, 502, 'invalid_connector_result') }
+}
