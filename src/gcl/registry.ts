@@ -150,8 +150,9 @@ type CapturedRunTime = { occurredAt: Date; iso: string; now: () => Date }
  */
 function capturedRunTime(now: () => Date): CapturedRunTime {
   try {
+    if (typeof now !== 'function' || isProxyValue(now)) throw new TypeError('INVALID_GOVERNANCE_CLOCK')
     const value = now()
-    if (!value || typeof value !== 'object' || Object.getPrototypeOf(value) !== Date.prototype) throw new TypeError('INVALID_GOVERNANCE_CLOCK')
+    if (!value || typeof value !== 'object' || isProxyValue(value) || Object.getPrototypeOf(value) !== Date.prototype) throw new TypeError('INVALID_GOVERNANCE_CLOCK')
     const milliseconds = Date.prototype.getTime.call(value)
     if (!Number.isFinite(milliseconds)) throw new TypeError('INVALID_GOVERNANCE_CLOCK')
     const occurredAt = new Date(milliseconds)

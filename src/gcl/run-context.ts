@@ -1,4 +1,4 @@
-import { ConnectorInputError, CostCapError, OwnerGateError, ScopeError } from './errors.js'
+import { ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError } from './errors.js'
 import { isProxyValue } from './plan-integrity.js'
 import type { ConnectorRunContext } from './types.js'
 
@@ -69,7 +69,7 @@ export function validatedConnectorRunContext(value: unknown, connectorScopes: re
   const context = exactDataRecord(value, CONTEXT_KEYS)
   if (!context || typeof context.product !== 'string' || !PRODUCT_PATTERN.test(context.product) ||
     typeof context.workspaceId !== 'string' || !WORKSPACE_PATTERN.test(context.workspaceId) ||
-    typeof context.actor !== 'string' || !ACTOR_PATTERN.test(context.actor) || typeof context.now !== 'function') {
+    typeof context.actor !== 'string' || !ACTOR_PATTERN.test(context.actor) || typeof context.now !== 'function' || isProxyValue(context.now)) {
     throw new ConnectorInputError('CONNECTOR_INVALID_CONTEXT')
   }
   if (context.ownerApproved !== true) throw new OwnerGateError()
@@ -90,4 +90,24 @@ export function validatedConnectorRunContext(value: unknown, connectorScopes: re
     requestedItems: context.requestedItems,
     now: context.now as () => Date,
   })
+}
+
+/**
+ * Capture a direct adapter's test/internal clock through native Date methods.
+ * A caller-owned Date may carry a shadowed `toISOString`; a Proxy may run a
+ * trap during reflection. Neither is governance evidence, so reject it before
+ * any plan field is constructed and return a fresh, exact ISO instant.
+ */
+export function capturedSyntheticContextTimestamp(context: ConnectorRunContext): string {
+  try {
+    const value = context.now()
+    if (!value || typeof value !== 'object' || isProxyValue(value) || Object.getPrototypeOf(value) !== Date.prototype) {
+      throw new TypeError('INVALID_CONNECTOR_CLOCK')
+    }
+    const milliseconds = Date.prototype.getTime.call(value)
+    if (!Number.isFinite(milliseconds)) throw new TypeError('INVALID_CONNECTOR_CLOCK')
+    return new Date(milliseconds).toISOString()
+  } catch {
+    throw new ConnectorUnavailableError('CONNECTOR_CLOCK_UNAVAILABLE')
+  }
 }

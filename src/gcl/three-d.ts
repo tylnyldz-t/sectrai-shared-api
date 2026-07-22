@@ -4,7 +4,7 @@ import { deepFreeze, frozenCanonicalJsonCopy, isProxyValue, syntheticPlanSha256,
 import { syntheticResultReviewBinding, validatedSyntheticConnectorResult } from './result-boundary.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
 import type { SyntheticReviewReceipt } from './review-receipt.js'
-import { validatedConnectorRunContext } from './run-context.js'
+import { capturedSyntheticContextTimestamp, validatedConnectorRunContext } from './run-context.js'
 import { LIVE_DISABLED, type LiveDisabled } from './safety.js'
 import type { Connector, ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
 
@@ -236,6 +236,7 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
 
   async run(input: TInput, context: ConnectorRunContext): Promise<ConnectorResult<SyntheticThreeDResult>> {
     const validatedContext = validatedConnectorRunContext(context, this.scopes)
+    const retrievedAt = capturedSyntheticContextTimestamp(validatedContext)
     const rawInput = submittedInput<TInput>(input)
     const submittedInputSha256 = syntheticPlanSha256(rawInput)
     const validated = this.validate(rawInput)
@@ -285,7 +286,7 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
     })
     return validatedSyntheticConnectorResult<SyntheticThreeDResult>({
       data,
-      provenance: { connectorId: this.id, source, retrievedAt: validatedContext.now().toISOString(), untrustedContent: isolatedContent(source, validated) },
+      provenance: { connectorId: this.id, source, retrievedAt, untrustedContent: isolatedContent(source, validated) },
       confidence: 0,
     }, this.id, rawInput, syntheticResultReviewBinding(validatedContext))
   }

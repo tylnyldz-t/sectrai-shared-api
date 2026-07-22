@@ -4,7 +4,7 @@ import { deepFreeze, frozenCanonicalJsonCopy, isProxyValue, syntheticPlanSha256,
 import { syntheticResultReviewBinding, validatedSyntheticConnectorResult } from './result-boundary.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
 import type { SyntheticReviewReceipt } from './review-receipt.js'
-import { validatedConnectorRunContext } from './run-context.js'
+import { capturedSyntheticContextTimestamp, validatedConnectorRunContext } from './run-context.js'
 import { LIVE_DISABLED, type LiveDisabled } from './safety.js'
 import type { Connector, ConnectorResult, ConnectorRunContext, IsolatedContent } from './types.js'
 
@@ -184,6 +184,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
 
   async run(value: GameEngineBuildInput, context: ConnectorRunContext): Promise<ConnectorResult<GameEngineBuildPlan>> {
     const validatedContext = validatedConnectorRunContext(context, this.scopes)
+    const retrievedAt = capturedSyntheticContextTimestamp(validatedContext)
     const rawInput = submittedInput(value)
     const submittedInputSha256 = syntheticPlanSha256(rawInput)
     const input = inputFrom(rawInput)
@@ -244,7 +245,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
     })
     return validatedSyntheticConnectorResult<GameEngineBuildPlan>({
       data,
-      provenance: { connectorId: this.id, source: 'synthetic-game-engine-plan', retrievedAt: validatedContext.now().toISOString(), runId: id, untrustedContent: isolatedContent(input) },
+      provenance: { connectorId: this.id, source: 'synthetic-game-engine-plan', retrievedAt, runId: id, untrustedContent: isolatedContent(input) },
       confidence: 0,
     }, this.id, rawInput, syntheticResultReviewBinding(validatedContext))
   }
