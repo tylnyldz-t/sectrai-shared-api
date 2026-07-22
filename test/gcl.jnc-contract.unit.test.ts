@@ -5,7 +5,7 @@ import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCa
 import { gameEngineConnectorFromEnvironment, SyntheticGameEngineConnector, type GameEngineBuildInput, type GameEngineBuildPlan } from '../src/gcl/game-engine.js'
 import { ContractOnlyJncPilotMapper, JNC_MAXIMUM_GPU_RUNTIME_MINUTES, JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from '../src/gcl/jnc-pilot.js'
 import { ownerGateError } from '../src/gcl/owner-gate.js'
-import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, isCanonicalJsonData, syntheticPlanSha256, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
+import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, isCanonicalJsonData, isSyntheticPlanIntegrity, syntheticPlanSha256, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
 import { InMemoryDailyConnectorQuota } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner, type RunConnectorRequest } from '../src/gcl/registry.js'
 import { createSyntheticReviewReceipt, verifiesSyntheticReviewReceipt } from '../src/gcl/review-receipt.js'
@@ -270,10 +270,90 @@ test('plan digests reject JavaScript-only values and verifier predicates do not 
   assert.equal(isCanonicalJsonData(accessorPayload), false)
   assert.equal(isCanonicalJsonData(sparsePayload), false)
   assert.throws(() => syntheticPlanSha256(sparsePayload), /SYNTHETIC_PLAN_SPARSE_ARRAY/)
-  assert.throws(() => createSyntheticReviewSnapshot({ connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, payload: nonPlainPayload }), /SYNTHETIC_PLAN_NON_PLAIN_OBJECT/)
+  assert.throws(
+    () => createSyntheticReviewSnapshot({ connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, payload: nonPlainPayload }),
+    SyntheticReviewIntegrityError,
+  )
   const integrity = createSyntheticPlanIntegrity({ connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' } })
   assert.equal(verifiesSyntheticPlanIntegrity(integrity, accessorPayload), false)
   assert.equal(verifiesSyntheticReviewSnapshot({ payload: sparsePayload, integrity, reviewReceipt: {} }), false)
+})
+
+test('review evidence helpers copy own canonical data and never invoke hostile fields', () => {
+  const payload = {
+    connectorId: 'text-to-3d',
+    scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' },
+    input: { prompt: 'A local review-only proposal' },
+  }
+  const integrity = createSyntheticPlanIntegrity(payload)
+  const receipt = createSyntheticReviewReceipt({
+    connectorId: 'text-to-3d',
+    scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' },
+    planIntegrity: integrity,
+  })
+  const snapshot = createSyntheticReviewSnapshot({
+    connectorId: 'text-to-3d',
+    scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' },
+    payload,
+  })
+  assert.equal(Object.isFrozen(integrity), true)
+  assert.equal(Object.isFrozen(receipt), true)
+  assert.equal(Object.isFrozen(receipt.externalEffects), true)
+  assert.equal(snapshot.payload === payload, false)
+  payload.scope.workspaceId = 'changed-after-snapshot'
+  assert.equal((snapshot.payload.scope as unknown as { workspaceId: string }).workspaceId, 'gm-workspace')
+
+  let integrityGetterReads = 0
+  const accessorIntegrity: Record<string, unknown> = { contract: integrity.contract, content: integrity.content, mutation: integrity.mutation }
+  Object.defineProperty(accessorIntegrity, 'payloadSha256', {
+    enumerable: true,
+    get() { integrityGetterReads += 1; return integrity.payloadSha256 },
+  })
+  assert.equal(isSyntheticPlanIntegrity(accessorIntegrity), false)
+  assert.equal(verifiesSyntheticPlanIntegrity(accessorIntegrity, payload), false)
+  assert.equal(integrityGetterReads, 0)
+
+  let receiptGetterReads = 0
+  const accessorReceipt = { ...receipt } as Record<string, unknown>
+  Object.defineProperty(accessorReceipt, 'contract', {
+    enumerable: true,
+    get() { receiptGetterReads += 1; return receipt.contract },
+  })
+  assert.equal(verifiesSyntheticReviewReceipt(accessorReceipt), false)
+  assert.equal(receiptGetterReads, 0)
+
+  let snapshotGetterReads = 0
+  const accessorSnapshot = { integrity: snapshot.integrity, reviewReceipt: snapshot.reviewReceipt } as Record<string, unknown>
+  Object.defineProperty(accessorSnapshot, 'payload', {
+    enumerable: true,
+    get() { snapshotGetterReads += 1; return snapshot.payload },
+  })
+  assert.equal(verifiesSyntheticReviewSnapshot(accessorSnapshot), false)
+  assert.equal(snapshotGetterReads, 0)
+
+  let creationGetterReads = 0
+  const accessorReceiptInput = {
+    scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' },
+    planIntegrity: integrity,
+  } as Record<string, unknown>
+  Object.defineProperty(accessorReceiptInput, 'connectorId', {
+    enumerable: true,
+    get() { creationGetterReads += 1; return 'text-to-3d' },
+  })
+  assert.throws(() => createSyntheticReviewReceipt(accessorReceiptInput as unknown as Parameters<typeof createSyntheticReviewReceipt>[0]), SyntheticReviewIntegrityError)
+  assert.equal(creationGetterReads, 0)
+
+  let snapshotCreationGetterReads = 0
+  const accessorSnapshotInput = {
+    connectorId: 'text-to-3d',
+    scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' },
+  } as Record<string, unknown>
+  Object.defineProperty(accessorSnapshotInput, 'payload', {
+    enumerable: true,
+    get() { snapshotCreationGetterReads += 1; return payload },
+  })
+  assert.throws(() => createSyntheticReviewSnapshot(accessorSnapshotInput as unknown as Parameters<typeof createSyntheticReviewSnapshot>[0]), SyntheticReviewIntegrityError)
+  assert.equal(snapshotCreationGetterReads, 0)
 })
 
 test('GM5 image-plus-text accepts only an immutable local reference and closes before audit for a URL', async () => {

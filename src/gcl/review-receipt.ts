@@ -1,4 +1,4 @@
-import { syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { frozenCanonicalJsonCopy, frozenCanonicalJsonRecord, isSyntheticPlanIntegrity, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
 import { SyntheticReviewIntegrityError } from './errors.js'
 import { LIVE_DISABLED, type LiveDisabled } from './safety.js'
 
@@ -52,33 +52,56 @@ function receiptPayload({ connectorId, scope, planIntegrity }: ReviewReceiptInpu
   }
 }
 
+function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
+  return Object.keys(value).length === expected.length && Object.keys(value).every((key) => expected.includes(key))
+}
+
+function reviewScope(value: unknown): ReviewScope | null {
+  const scope = frozenCanonicalJsonRecord(value)
+  return scope && exactKeys(scope, ['product', 'workspaceId']) && typeof scope.product === 'string' && PRODUCT_PATTERN.test(scope.product) &&
+    typeof scope.workspaceId === 'string' && WORKSPACE_PATTERN.test(scope.workspaceId)
+    ? { product: scope.product, workspaceId: scope.workspaceId }
+    : null
+}
+
+function reviewReceiptInput(value: unknown): ReviewReceiptInput | null {
+  const input = frozenCanonicalJsonRecord(value)
+  if (!input || !exactKeys(input, ['connectorId', 'scope', 'planIntegrity']) ||
+    typeof input.connectorId !== 'string' || !CONNECTOR_ID_PATTERN.test(input.connectorId)) return null
+  const scope = reviewScope(input.scope)
+  const planIntegrity = frozenCanonicalJsonRecord(input.planIntegrity)
+  if (!scope || !planIntegrity || !isSyntheticPlanIntegrity(planIntegrity)) return null
+  return {
+    connectorId: input.connectorId,
+    scope,
+    planIntegrity,
+  }
+}
+
 /**
  * A pure, scope-bound receipt for a synthetic review snapshot. It is data
  * only: it neither sends a hand-off nor authorises a later executor.
  */
 export function createSyntheticReviewReceipt(input: ReviewReceiptInput): SyntheticReviewReceipt {
-  const payload = receiptPayload(input)
-  return { ...payload, receiptId: `synthetic-review-${syntheticPlanSha256(payload).slice(0, 24)}` }
-}
-
-function exactKeys(value: Record<string, unknown>, expected: readonly string[]): boolean {
-  return Object.keys(value).length === expected.length && Object.keys(value).every((key) => expected.includes(key))
+  const safeInput = reviewReceiptInput(input)
+  if (!safeInput) throw new SyntheticReviewIntegrityError('SYNTHETIC_REVIEW_RECEIPT_INVALID')
+  const payload = receiptPayload(safeInput)
+  return frozenCanonicalJsonCopy<SyntheticReviewReceipt>({ ...payload, receiptId: `synthetic-review-${syntheticPlanSha256(payload).slice(0, 24)}` })
 }
 
 /** Validates every static non-execution control and the deterministic receipt id. */
 export function verifiesSyntheticReviewReceipt(value: unknown): value is SyntheticReviewReceipt {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const candidate = value as Record<string, unknown>
+  const candidate = frozenCanonicalJsonRecord(value)
+  if (!candidate) return false
   if (!exactKeys(candidate, ['contract', 'receiptId', 'connectorId', 'scope', 'liveMode', 'planPayloadSha256', 'ownerReview', 'execution', 'externalEffects'])) return false
   if (candidate.contract !== SYNTHETIC_REVIEW_RECEIPT_CONTRACT || typeof candidate.receiptId !== 'string' ||
     typeof candidate.connectorId !== 'string' || !CONNECTOR_ID_PATTERN.test(candidate.connectorId) ||
     candidate.liveMode !== LIVE_DISABLED || typeof candidate.planPayloadSha256 !== 'string' || !SHA256_PATTERN.test(candidate.planPayloadSha256) ||
     candidate.ownerReview !== 'REQUIRED' || candidate.execution !== 'NOT_EXECUTED') return false
-  if (!candidate.scope || typeof candidate.scope !== 'object' || Array.isArray(candidate.scope)) return false
-  const scope = candidate.scope as Record<string, unknown>
-  if (!exactKeys(scope, ['product', 'workspaceId']) || typeof scope.product !== 'string' || !PRODUCT_PATTERN.test(scope.product) || typeof scope.workspaceId !== 'string' || !WORKSPACE_PATTERN.test(scope.workspaceId)) return false
-  if (!candidate.externalEffects || typeof candidate.externalEffects !== 'object' || Array.isArray(candidate.externalEffects)) return false
-  const externalEffects = candidate.externalEffects as Record<string, unknown>
+  const scope = reviewScope(candidate.scope)
+  if (!scope) return false
+  const externalEffects = frozenCanonicalJsonRecord(candidate.externalEffects)
+  if (!externalEffects) return false
   if (!exactKeys(externalEffects, ['network', 'process', 'artifactWrite', 'publication']) ||
     externalEffects.network !== 'DISABLED_NO_TRANSPORT' || externalEffects.process !== 'DISABLED_NO_LAUNCHER' ||
     externalEffects.artifactWrite !== 'DISABLED_NO_FILE' || externalEffects.publication !== 'DISABLED_NOT_PUBLISHED') return false

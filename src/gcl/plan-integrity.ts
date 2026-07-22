@@ -82,6 +82,20 @@ export function frozenCanonicalJsonCopy<T = unknown>(value: unknown): T {
   return deepFreeze(JSON.parse(canonicalJson(value)) as T)
 }
 
+/**
+ * Read an object as strict canonical data before a verifier inspects fields.
+ * The returned object is a fresh frozen copy, so public predicate helpers do
+ * not invoke caller-provided getters or retain a caller-owned reference.
+ */
+export function frozenCanonicalJsonRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  try {
+    return frozenCanonicalJsonCopy<Record<string, unknown>>(value)
+  } catch {
+    return null
+  }
+}
+
 /** A non-throwing boundary check for data-only review payloads. */
 export function isCanonicalJsonData(value: unknown): boolean {
   try {
@@ -93,24 +107,27 @@ export function isCanonicalJsonData(value: unknown): boolean {
 }
 
 export function createSyntheticPlanIntegrity(payload: unknown): SyntheticPlanIntegrity {
-  return {
+  return deepFreeze({
     contract: SYNTHETIC_PLAN_INTEGRITY_CONTRACT,
     payloadSha256: syntheticPlanSha256(payload),
     content: 'DATA_ONLY_CANONICAL_JSON',
     mutation: 'DEEP_FROZEN',
-  }
+  })
+}
+
+function normalizedSyntheticPlanIntegrity(value: unknown): SyntheticPlanIntegrity | null {
+  const candidate = frozenCanonicalJsonRecord(value)
+  if (!candidate) return null
+  const allowed = ['contract', 'payloadSha256', 'content', 'mutation']
+  if (!(Object.keys(candidate).length === allowed.length && Object.keys(candidate).every((key) => allowed.includes(key)) &&
+    candidate.contract === SYNTHETIC_PLAN_INTEGRITY_CONTRACT &&
+    typeof candidate.payloadSha256 === 'string' && /^[a-f0-9]{64}$/.test(candidate.payloadSha256) &&
+    candidate.content === 'DATA_ONLY_CANONICAL_JSON' && candidate.mutation === 'DEEP_FROZEN')) return null
+  return candidate as SyntheticPlanIntegrity
 }
 
 export function isSyntheticPlanIntegrity(value: unknown): value is SyntheticPlanIntegrity {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const prototype = Object.getPrototypeOf(value)
-  if (prototype !== Object.prototype && prototype !== null) return false
-  const candidate = value as Record<string, unknown>
-  const allowed = ['contract', 'payloadSha256', 'content', 'mutation']
-  return Object.keys(candidate).length === allowed.length && Object.keys(candidate).every((key) => allowed.includes(key)) &&
-    candidate.contract === SYNTHETIC_PLAN_INTEGRITY_CONTRACT &&
-    typeof candidate.payloadSha256 === 'string' && /^[a-f0-9]{64}$/.test(candidate.payloadSha256) &&
-    candidate.content === 'DATA_ONLY_CANONICAL_JSON' && candidate.mutation === 'DEEP_FROZEN'
+  return normalizedSyntheticPlanIntegrity(value) !== null
 }
 
 /**
@@ -119,7 +136,8 @@ export function isSyntheticPlanIntegrity(value: unknown): value is SyntheticPlan
  */
 export function verifiesSyntheticPlanIntegrity(integrity: unknown, payload: unknown): integrity is SyntheticPlanIntegrity {
   try {
-    return isSyntheticPlanIntegrity(integrity) && integrity.payloadSha256 === syntheticPlanSha256(payload)
+    const safeIntegrity = normalizedSyntheticPlanIntegrity(integrity)
+    return safeIntegrity !== null && safeIntegrity.payloadSha256 === syntheticPlanSha256(payload)
   } catch {
     return false
   }

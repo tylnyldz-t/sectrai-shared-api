@@ -1,5 +1,5 @@
 import { SyntheticReviewIntegrityError } from './errors.js'
-import { createSyntheticPlanIntegrity, deepFreeze, isCanonicalJsonData, verifiesSyntheticPlanIntegrity, type SyntheticPlanIntegrity } from './plan-integrity.js'
+import { createSyntheticPlanIntegrity, deepFreeze, frozenCanonicalJsonRecord, verifiesSyntheticPlanIntegrity, type SyntheticPlanIntegrity } from './plan-integrity.js'
 import { createSyntheticReviewReceipt, verifiesSyntheticReviewReceipt, type SyntheticReviewReceipt } from './review-receipt.js'
 
 export type SyntheticReviewSnapshot = {
@@ -19,10 +19,16 @@ function exactKeys(value: Record<string, unknown>, expected: readonly string[]):
   return Object.keys(value).length === expected.length && Object.keys(value).every((key) => expected.includes(key))
 }
 
+function reviewScope(value: unknown): ReviewScope | null {
+  const scope = frozenCanonicalJsonRecord(value)
+  return scope && exactKeys(scope, ['product', 'workspaceId']) && typeof scope.product === 'string' && typeof scope.workspaceId === 'string'
+    ? { product: scope.product, workspaceId: scope.workspaceId }
+    : null
+}
+
 function scopeMatches(value: unknown, scope: ReviewScope): boolean {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-  const candidate = value as Record<string, unknown>
-  return exactKeys(candidate, ['product', 'workspaceId']) && candidate.product === scope.product && candidate.workspaceId === scope.workspaceId
+  const candidate = reviewScope(value)
+  return candidate !== null && candidate.product === scope.product && candidate.workspaceId === scope.workspaceId
 }
 
 /**
@@ -31,9 +37,17 @@ function scopeMatches(value: unknown, scope: ReviewScope): boolean {
  * unusable when grafted onto otherwise valid plan data.
  */
 function payloadMatchesReceipt(payload: unknown, receipt: SyntheticReviewReceipt): payload is Record<string, unknown> {
-  if (!payload || typeof payload !== 'object' || Array.isArray(payload) || !isCanonicalJsonData(payload)) return false
-  const candidate = payload as Record<string, unknown>
+  const candidate = frozenCanonicalJsonRecord(payload)
+  if (!candidate) return false
   return candidate.connectorId === receipt.connectorId && scopeMatches(candidate.scope, receipt.scope)
+}
+
+function reviewSnapshotInput(value: unknown): CreateSyntheticReviewSnapshotInput | null {
+  const input = frozenCanonicalJsonRecord(value)
+  if (!input || !exactKeys(input, ['connectorId', 'scope', 'payload']) || typeof input.connectorId !== 'string') return null
+  const scope = reviewScope(input.scope)
+  const payload = frozenCanonicalJsonRecord(input.payload)
+  return scope && payload ? { connectorId: input.connectorId, scope, payload } : null
 }
 
 /**
@@ -42,9 +56,11 @@ function payloadMatchesReceipt(payload: unknown, receipt: SyntheticReviewReceipt
  * capability.
  */
 export function createSyntheticReviewSnapshot(input: CreateSyntheticReviewSnapshotInput): SyntheticReviewSnapshot {
-  const integrity = createSyntheticPlanIntegrity(input.payload)
-  const reviewReceipt = createSyntheticReviewReceipt({ connectorId: input.connectorId, scope: input.scope, planIntegrity: integrity })
-  const snapshot = { payload: input.payload, integrity, reviewReceipt }
+  const safeInput = reviewSnapshotInput(input)
+  if (!safeInput) throw new SyntheticReviewIntegrityError('SYNTHETIC_REVIEW_SNAPSHOT_INVALID')
+  const integrity = createSyntheticPlanIntegrity(safeInput.payload)
+  const reviewReceipt = createSyntheticReviewReceipt({ connectorId: safeInput.connectorId, scope: safeInput.scope, planIntegrity: integrity })
+  const snapshot = { payload: safeInput.payload, integrity, reviewReceipt }
   if (!verifiesSyntheticReviewSnapshot(snapshot)) throw new SyntheticReviewIntegrityError('SYNTHETIC_REVIEW_SNAPSHOT_INVALID')
   return deepFreeze(snapshot)
 }
@@ -56,8 +72,8 @@ export function createSyntheticReviewSnapshot(input: CreateSyntheticReviewSnapsh
  */
 export function verifiesSyntheticReviewSnapshot(value: unknown): value is SyntheticReviewSnapshot {
   try {
-    if (!value || typeof value !== 'object' || Array.isArray(value)) return false
-    const candidate = value as Record<string, unknown>
+    const candidate = frozenCanonicalJsonRecord(value)
+    if (!candidate) return false
     if (!exactKeys(candidate, ['payload', 'integrity', 'reviewReceipt'])) return false
     if (!verifiesSyntheticReviewReceipt(candidate.reviewReceipt)) return false
     const receipt = candidate.reviewReceipt

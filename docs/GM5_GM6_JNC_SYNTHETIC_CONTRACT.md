@@ -54,6 +54,22 @@ other JavaScript-only values are rejected rather than being silently collapsed
 to a potentially colliding digest. Verifier predicates return `false` for such
 data; asserting variants fail closed.
 
+### D1 review-evidence data lock
+
+Plan-integrity metadata, review-receipt creation and verification, and
+review-snapshot creation and verification each first take an exact canonical
+JSON copy of their caller-supplied object. They inspect that frozen copy only;
+they do not invoke accessors or retain caller-owned receipt, scope, integrity,
+or plan-payload references. Inherited fields, symbols, hidden properties,
+class instances, cycles, sparse arrays, and getters/setters fail closed as
+review-integrity errors (or `false` from a predicate).
+
+Creating a snapshot therefore does not freeze or later observe the caller's
+payload object: the displayed snapshot remains an independent, recursively
+frozen review record. This is an in-memory data-boundary control only. It does
+not sign a receipt, authorize execution, send to JNC, start Blender/Unreal/
+Godot, read a credential, write an artifact, or publish anything.
+
 GM5 synthetic artifact IDs and integrity hashes include the product/workspace
 scope, owner actor, approved scopes, cost cap, and requested-item reservation
 units. The same governed input therefore produces a stable proposal only inside
