@@ -1,7 +1,12 @@
 import { createHash, Hash } from 'node:crypto'
-import { types as nodeTypes } from 'node:util'
 import { AuditChainError, AuditEventError, AuditReceiptError } from './errors.js'
-import { intrinsicDate, intrinsicDateGetTime, intrinsicDateToISOString, intrinsicNumberIsFinite, intrinsicReflectApply } from './intrinsics.js'
+import {
+  intrinsicArrayIsArray, intrinsicArrayMap, intrinsicArrayPrototype, intrinsicArraySort, intrinsicDate, intrinsicDateGetTime,
+  intrinsicDateToISOString, intrinsicIsProxy, intrinsicJsonStringify, intrinsicNumberIsFinite, intrinsicNumberIsSafeInteger,
+  intrinsicObjectCreate, intrinsicObjectEntries, intrinsicObjectFreeze, intrinsicObjectFromEntries, intrinsicObjectGetOwnPropertyDescriptors,
+  intrinsicObjectGetOwnPropertyNames, intrinsicObjectGetOwnPropertySymbols, intrinsicObjectGetPrototypeOf, intrinsicObjectPrototype,
+  intrinsicReflectApply, intrinsicSet, intrinsicSetAdd, intrinsicSetDelete, intrinsicSetHas, intrinsicStringLocaleCompare,
+} from './intrinsics.js'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import type { AuditAppendReceipt, AuditLog, ConnectorAuditEvent } from './types.js'
 
@@ -40,9 +45,11 @@ type AuditRecordValue = {
 }
 
 function normalize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(normalize)
+  if (intrinsicArrayIsArray(value)) return intrinsicReflectApply(intrinsicArrayMap, value, [normalize])
   if (value && typeof value === 'object') {
-    return Object.fromEntries(Object.entries(value as Record<string, unknown>).sort(([left], [right]) => left.localeCompare(right)).map(([key, item]) => [key, normalize(item)]))
+    const entries = intrinsicObjectEntries(value as Record<string, unknown>)
+    const ordered = intrinsicReflectApply(intrinsicArraySort, entries, [([left], [right]) => intrinsicReflectApply(intrinsicStringLocaleCompare, left, [right]) as number]) as [string, unknown][]
+    return intrinsicObjectFromEntries(intrinsicReflectApply(intrinsicArrayMap, ordered, [([key, item]) => [key, normalize(item)]]) as [string, unknown][])
   }
   return value
 }
@@ -54,7 +61,7 @@ function sha256(value: string): string {
 }
 
 export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string | null): string {
-  return sha256(JSON.stringify(normalize({ event, previousHash })))
+  return sha256(intrinsicJsonStringify(normalize({ event, previousHash })))
 }
 
 /**
@@ -64,37 +71,37 @@ export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string 
  * signature check.
  */
 export function validateAuditAppendReceipt(value: unknown): AuditAppendReceipt {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) {
+  if (!value || typeof value !== 'object' || intrinsicArrayIsArray(value) || intrinsicIsProxy(value)) {
     throw new AuditReceiptError()
   }
-  const prototype = Object.getPrototypeOf(value)
-  if (prototype !== Object.prototype && prototype !== null) throw new AuditReceiptError()
-  const names = Object.getOwnPropertyNames(value)
-  if (Object.getOwnPropertySymbols(value).length > 0 || names.length !== AUDIT_APPEND_RECEIPT_FIELDS.length || names.some((name) => !AUDIT_APPEND_RECEIPT_FIELDS.includes(name as typeof AUDIT_APPEND_RECEIPT_FIELDS[number]))) {
+  const prototype = intrinsicObjectGetPrototypeOf(value)
+  if (prototype !== intrinsicObjectPrototype && prototype !== null) throw new AuditReceiptError()
+  const names = intrinsicObjectGetOwnPropertyNames(value)
+  if (intrinsicObjectGetOwnPropertySymbols(value).length > 0 || names.length !== AUDIT_APPEND_RECEIPT_FIELDS.length || names.some((name) => !AUDIT_APPEND_RECEIPT_FIELDS.includes(name as typeof AUDIT_APPEND_RECEIPT_FIELDS[number]))) {
     throw new AuditReceiptError()
   }
-  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
   const hash = descriptors.hash
   const previousHash = descriptors.previousHash
   if (!hash || !('value' in hash) || !hash.enumerable || typeof hash.value !== 'string' || !SHA256_PATTERN.test(hash.value) ||
     !previousHash || !('value' in previousHash) || !previousHash.enumerable || (previousHash.value !== null && (typeof previousHash.value !== 'string' || !SHA256_PATTERN.test(previousHash.value)))) {
     throw new AuditReceiptError()
   }
-  return Object.freeze({ hash: hash.value, previousHash: previousHash.value })
+  return intrinsicObjectFreeze({ hash: hash.value, previousHash: previousHash.value })
 }
 
 function auditEventRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) {
+  if (!value || typeof value !== 'object' || intrinsicArrayIsArray(value) || intrinsicIsProxy(value)) {
     throw new AuditEventError()
   }
-  const prototype = Object.getPrototypeOf(value)
-  if (prototype !== Object.prototype && prototype !== null) throw new AuditEventError()
-  const names = Object.getOwnPropertyNames(value)
-  if (Object.getOwnPropertySymbols(value).length > 0 || names.length !== AUDIT_EVENT_FIELDS.length || names.some((name) => !AUDIT_EVENT_FIELDS.includes(name as typeof AUDIT_EVENT_FIELDS[number]))) {
+  const prototype = intrinsicObjectGetPrototypeOf(value)
+  if (prototype !== intrinsicObjectPrototype && prototype !== null) throw new AuditEventError()
+  const names = intrinsicObjectGetOwnPropertyNames(value)
+  if (intrinsicObjectGetOwnPropertySymbols(value).length > 0 || names.length !== AUDIT_EVENT_FIELDS.length || names.some((name) => !AUDIT_EVENT_FIELDS.includes(name as typeof AUDIT_EVENT_FIELDS[number]))) {
     throw new AuditEventError()
   }
-  const descriptors = Object.getOwnPropertyDescriptors(value)
-  const normalized = Object.create(null) as Record<string, unknown>
+  const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
+  const normalized = intrinsicObjectCreate(null) as Record<string, unknown>
   for (const field of AUDIT_EVENT_FIELDS) {
     const descriptor = descriptors[field]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new AuditEventError()
@@ -109,28 +116,28 @@ function auditString(value: unknown, maximumLength: number): string {
 }
 
 function auditPositiveInteger(value: unknown): number {
-  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value <= 0) throw new AuditEventError()
+  if (typeof value !== 'number' || !intrinsicNumberIsSafeInteger(value) || value <= 0) throw new AuditEventError()
   return value
 }
 
 function sealedAuditScopes(value: unknown): readonly string[] {
-  if (!Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype || value.length > 12 || Object.getOwnPropertySymbols(value).length > 0) {
+  if (!intrinsicArrayIsArray(value) || intrinsicIsProxy(value) || intrinsicObjectGetPrototypeOf(value) !== intrinsicArrayPrototype || value.length > 12 || intrinsicObjectGetOwnPropertySymbols(value).length > 0) {
     throw new AuditEventError()
   }
-  const names = Object.getOwnPropertyNames(value)
+  const names = intrinsicObjectGetOwnPropertyNames(value)
   if (names.length !== value.length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
     throw new AuditEventError()
   }
-  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
   const scopes: string[] = []
   for (let index = 0; index < value.length; index += 1) {
-    const descriptor = descriptors[String(index)]
+    const descriptor = descriptors[`${index}`]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'string' || !descriptor.value || descriptor.value.length > 80) {
       throw new AuditEventError()
     }
     scopes.push(descriptor.value)
   }
-  return Object.freeze(scopes)
+  return intrinsicObjectFreeze(scopes)
 }
 
 /**
@@ -139,47 +146,55 @@ function sealedAuditScopes(value: unknown): readonly string[] {
  * accessors, Proxy values, cycles, non-finite numbers, and mutable aliases
  * fail closed rather than entering the hash-chain append boundary.
  */
-function sealedAuditJson(value: unknown, depth = 0, ancestors = new Set<object>()): unknown {
+function sealedAuditJson(value: unknown, depth = 0, ancestors = new intrinsicSet<object>()): unknown {
   if (value === null || typeof value === 'boolean') return value
   if (typeof value === 'string') return auditString(value, MAX_AUDIT_JSON_STRING_LENGTH)
   if (typeof value === 'number') {
-    if (!Number.isFinite(value)) throw new AuditEventError()
+    if (!intrinsicNumberIsFinite(value)) throw new AuditEventError()
     return value
   }
-  if (!value || typeof value !== 'object' || nodeTypes.isProxy(value) || depth >= MAX_AUDIT_JSON_DEPTH || ancestors.has(value)) {
+  if (!value || typeof value !== 'object' || intrinsicIsProxy(value) || depth >= MAX_AUDIT_JSON_DEPTH || intrinsicReflectApply(intrinsicSetHas, ancestors, [value])) {
     throw new AuditEventError()
   }
-  if (Array.isArray(value)) {
-    if (Object.getPrototypeOf(value) !== Array.prototype || value.length > MAX_AUDIT_JSON_ARRAY_ITEMS || Object.getOwnPropertySymbols(value).length > 0) {
+  if (intrinsicArrayIsArray(value)) {
+    if (intrinsicObjectGetPrototypeOf(value) !== intrinsicArrayPrototype || value.length > MAX_AUDIT_JSON_ARRAY_ITEMS || intrinsicObjectGetOwnPropertySymbols(value).length > 0) {
       throw new AuditEventError()
     }
-    const names = Object.getOwnPropertyNames(value)
+    const names = intrinsicObjectGetOwnPropertyNames(value)
     if (names.length !== value.length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
       throw new AuditEventError()
     }
-    const descriptors = Object.getOwnPropertyDescriptors(value)
-    const nextAncestors = new Set(ancestors).add(value)
+    const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
     const snapshot: unknown[] = []
-    for (let index = 0; index < value.length; index += 1) {
-      const descriptor = descriptors[String(index)]
-      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new AuditEventError()
-      snapshot.push(sealedAuditJson(descriptor.value, depth + 1, nextAncestors))
+    intrinsicReflectApply(intrinsicSetAdd, ancestors, [value])
+    try {
+      for (let index = 0; index < value.length; index += 1) {
+        const descriptor = descriptors[`${index}`]
+        if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new AuditEventError()
+        snapshot.push(sealedAuditJson(descriptor.value, depth + 1, ancestors))
+      }
+    } finally {
+      intrinsicReflectApply(intrinsicSetDelete, ancestors, [value])
     }
-    return Object.freeze(snapshot)
+    return intrinsicObjectFreeze(snapshot)
   }
-  const prototype = Object.getPrototypeOf(value)
-  if (prototype !== Object.prototype && prototype !== null) throw new AuditEventError()
-  const names = Object.getOwnPropertyNames(value)
-  if (names.length > MAX_AUDIT_JSON_KEYS || Object.getOwnPropertySymbols(value).length > 0) throw new AuditEventError()
-  const descriptors = Object.getOwnPropertyDescriptors(value)
-  const nextAncestors = new Set(ancestors).add(value)
-  const snapshot = Object.create(null) as Record<string, unknown>
-  for (const name of names) {
-    const descriptor = descriptors[name]
-    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new AuditEventError()
-    snapshot[name] = sealedAuditJson(descriptor.value, depth + 1, nextAncestors)
+  const prototype = intrinsicObjectGetPrototypeOf(value)
+  if (prototype !== intrinsicObjectPrototype && prototype !== null) throw new AuditEventError()
+  const names = intrinsicObjectGetOwnPropertyNames(value)
+  if (names.length > MAX_AUDIT_JSON_KEYS || intrinsicObjectGetOwnPropertySymbols(value).length > 0) throw new AuditEventError()
+  const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
+  const snapshot = intrinsicObjectCreate(null) as Record<string, unknown>
+  intrinsicReflectApply(intrinsicSetAdd, ancestors, [value])
+  try {
+    for (const name of names) {
+      const descriptor = descriptors[name]
+      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new AuditEventError()
+      snapshot[name] = sealedAuditJson(descriptor.value, depth + 1, ancestors)
+    }
+  } finally {
+    intrinsicReflectApply(intrinsicSetDelete, ancestors, [value])
   }
-  return Object.freeze(snapshot)
+  return intrinsicObjectFreeze(snapshot)
 }
 
 function sealedAuditOccurredAt(value: unknown): string {
@@ -211,8 +226,8 @@ export function sealAuditAppendEvent(value: unknown): ConnectorAuditEvent {
     throw new AuditEventError()
   }
   const detail = sealedAuditJson(event.detail)
-  if (!detail || typeof detail !== 'object' || Array.isArray(detail)) throw new AuditEventError()
-  return Object.freeze({
+  if (!detail || typeof detail !== 'object' || intrinsicArrayIsArray(detail)) throw new AuditEventError()
+  return intrinsicObjectFreeze({
     type: type as ConnectorAuditEvent['type'], connectorId, product, workspaceId, requestedBy, checkedBy, correlationId,
     scopes: sealedAuditScopes(event.scopes), costCapCents: auditPositiveInteger(event.costCapCents), requestedItems: auditPositiveInteger(event.requestedItems),
     occurredAt: sealedAuditOccurredAt(event.occurredAt), detail: detail as Record<string, unknown>,
@@ -225,17 +240,17 @@ export function sealAuditAppendEvent(value: unknown): ConnectorAuditEvent {
  * not add a history scan, lookup route, signature, or authorization surface.
  */
 export function validateAuditChainHead(value: unknown): Readonly<AuditRecordValue> {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) {
+  if (!value || typeof value !== 'object' || intrinsicArrayIsArray(value) || intrinsicIsProxy(value)) {
     throw new AuditChainError()
   }
-  const prototype = Object.getPrototypeOf(value)
-  if (prototype !== Object.prototype && prototype !== null) throw new AuditChainError()
-  const names = Object.getOwnPropertyNames(value)
-  if (Object.getOwnPropertySymbols(value).length > 0 || names.length !== AUDIT_RECORD_FIELDS.length || names.some((name) => !AUDIT_RECORD_FIELDS.includes(name as typeof AUDIT_RECORD_FIELDS[number]))) {
+  const prototype = intrinsicObjectGetPrototypeOf(value)
+  if (prototype !== intrinsicObjectPrototype && prototype !== null) throw new AuditChainError()
+  const names = intrinsicObjectGetOwnPropertyNames(value)
+  if (intrinsicObjectGetOwnPropertySymbols(value).length > 0 || names.length !== AUDIT_RECORD_FIELDS.length || names.some((name) => !AUDIT_RECORD_FIELDS.includes(name as typeof AUDIT_RECORD_FIELDS[number]))) {
     throw new AuditChainError()
   }
-  const descriptors = Object.getOwnPropertyDescriptors(value)
-  const normalized = Object.create(null) as Record<string, unknown>
+  const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
+  const normalized = intrinsicObjectCreate(null) as Record<string, unknown>
   for (const field of AUDIT_RECORD_FIELDS) {
     const descriptor = descriptors[field]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new AuditChainError()
@@ -255,7 +270,7 @@ export function validateAuditChainHead(value: unknown): Readonly<AuditRecordValu
     throw new AuditChainError()
   }
   if (hash !== hashAuditEvent(event, previousHash)) throw new AuditChainError()
-  return Object.freeze({ event, previousHash, hash })
+  return intrinsicObjectFreeze({ event, previousHash, hash })
 }
 
 /**
