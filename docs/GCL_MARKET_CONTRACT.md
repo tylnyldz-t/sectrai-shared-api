@@ -490,6 +490,29 @@ remain host-owned; this package does not claim that a valid return proves
 durable storage. Every successful market result remains exactly `SYNTHETIC`,
 `LIVE_DISABLED`, and `NOT_AUTHORIZED`.
 
+## D16 — direct market-context snapshot
+
+`SyntheticMarketConnector.preflight()` and `.run()` now take their complete
+`ConnectorRunContext` through an exact own-data descriptor boundary before any
+semantic read. The only allowed fields are `product`, `workspaceId`, `actor`,
+`ownerApproved`, `scopes`, `costCapCents`, `requestedItems`, and `now`.
+Accessor-, Proxy-, inherited-, hidden-, symbol-, sparse-scope-, and extra
+fields (including credential/provider-shaped fields) fail closed as
+`INVALID_MARKET_CONTEXT` without evaluating a caller trap.
+
+For a direct `.run()`, the one allowed `now` callback is invoked only after
+the static context and request have been copied and validated. It must return
+a non-Proxy finite `Date`; its epoch is copied before binding or provenance is
+constructed. A throwing, invalid, or Proxy-shaped date fails closed as
+`INVALID_MARKET_RUN_TIME`. A clock cannot mutate the caller-owned context to
+change the product, maker, scope, limits, request, or any action flag.
+
+D16 hardens the public in-process direct-call seam only. It adds no route,
+storage, migration, provider configuration, credential, network call, queue,
+worker, quote, reservation, booking, publication, handoff, send, durable
+approval, signature, authorization, or execution capability. Successful plans
+remain exactly `SYNTHETIC`, `LIVE_DISABLED`, and `NOT_AUTHORIZED`.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -554,7 +577,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -573,7 +596,9 @@ D13 keeps market's accepted canonical input snapshot across the runner's
 asynchronous audit, quota, and run seams. D14 fixes market's exact
 construction-time configuration snapshot across those same seams. D15 fixes
 the governed audit/quota members at construction, verifies one copied runner
-clock before preflight, and accepts only an exact SHA-256 audit result.
+clock before preflight, and accepts only an exact SHA-256 audit result. D16
+snapshots direct market preflight/run context and copies its one verified clock
+value before plan construction.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -615,7 +640,11 @@ or create a post-quota failure. D15 additionally rejects getter- and
 Proxy-shaped audit/quota members without invocation, ignores a later mutation
 of fixed host members, rejects invalid clock values before preflight/audit/quota,
 and rejects getter- or malformed audit results before quota or a success result
-can be fabricated.
+can be fabricated. D16 additionally rejects credential-shaped, hidden,
+inherited, accessor-, Proxy-, symbol-, and sparse-array direct contexts without
+evaluating them; it rejects throwing, invalid, and Proxy-shaped direct clock
+results, and proves a clock-side mutation cannot change the copied binding or
+synthetic no-action plan.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -639,7 +668,9 @@ can be fabricated.
    or quota can consume it; D13 retains market's canonical preflight result
    across those later asynchronous seams; D14 fixes the connector configuration
    before those seams; D15 fixes audit/quota host members and copies one
-   verified runner clock before those seams.
+   verified runner clock before those seams; D16 snapshots direct market
+   preflight/run context and copies one direct clock result before plan
+   construction.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.
@@ -652,8 +683,9 @@ can be fabricated.
    review inputs/results; D12 snapshots the run envelope before those governed
    seams; D13 retains the accepted market request after preflight; D14 fixes
    the connector configuration before preflight; D15 fixes the governed host
-   members and clock before preflight.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15 evidence cannot quote, reserve, book,
+   members and clock before preflight; D16 snapshots direct market context and
+   time before its plan construction.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -663,4 +695,4 @@ can be fabricated.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16.

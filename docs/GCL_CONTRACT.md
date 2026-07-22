@@ -67,7 +67,10 @@ Every registered connector is governed by these rules:
   preflight. D15 fixes the runner's audit/quota data-function members at
   construction, validates each audit hash result, and copies one verified
   clock instant before preflight, audit, or quota. None reads audit storage,
-  writes, or approves execution.
+  writes, or approves execution. D16 snapshots direct market preflight/run
+  context as exact own data and copies its one clock value before plan
+  construction, so bypassing the runner cannot admit shaped context data or
+  alter a synthetic plan.
   All resulting evidence remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
@@ -172,7 +175,9 @@ and rejects accessor-, Proxy-, inherited-, hidden-, symbol-, and extra
 credential-shaped configuration before preflight, audit, or quota. D15 fixes
 the injected runner audit/quota data-function members at construction, rejects
 shaped or malformed audit results, and copies one verified clock value before
-preflight, audit, or quota. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15 are local mutation checks or
+preflight, audit, or quota. D16 also snapshots direct market preflight/run
+contexts as exact own data and copies their one clock result before plan
+construction; credential-shaped or malformed contexts fail closed. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 are local mutation checks or
 boundary hardening, never signatures, credentials, approval workflows, or
 execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).

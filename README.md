@@ -108,4 +108,7 @@ preflight; malformed configuration remains unavailable before audit or quota.
 D15 fixes the governed runner's audit/quota data-function members at
 construction, requires exact SHA-256 audit results, and copies one verified
 clock instant before market preflight, audit, or quota; malformed host seams
-fail closed and cannot create a successful market result.
+fail closed and cannot create a successful market result. D16 applies an
+exact own-data snapshot to direct `market.preflight`/`market.run` contexts and
+copies their sole clock result before plan construction; shaped contexts and
+invalid times fail closed and cannot alter a synthetic plan.
