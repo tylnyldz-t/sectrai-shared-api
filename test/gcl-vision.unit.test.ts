@@ -422,7 +422,7 @@ test('D7 rejects inherited, hidden, or accessor-backed data and validates its pl
   assert.equal(quota.requests.length, 1)
 })
 
-test('D8 canonical maker-checker identity remains enforced under D14 packets', async () => {
+test('D8 canonical maker-checker identity remains enforced under D15 packets', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
@@ -819,7 +819,7 @@ test('D14 rejects date-arithmetic overflow and malformed arithmetic bindings bef
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v14')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v15')
   assert.deepEqual(result.data.proposal.reviewPacket.dateArithmeticBoundaryBinding, { arithmetic: 'checked-utc-epoch-milliseconds', overflowAccepted: false, invalidDateAccepted: false })
 
   const missingBinding = clone()
