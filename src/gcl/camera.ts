@@ -28,12 +28,12 @@ export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every audit and review packet is bound to one product and workspace digest.' },
   { id: 'ADOS-02', control: 'MINIMIZED_SYNTHETIC_FIXTURE', enforcement: 'Only an allowlisted synthetic fixture ID and fixed finding are resolved.' },
   { id: 'ADOS-03', control: 'DEFAULT_DENY_LIVE_DISABLED', enforcement: 'Synthetic enablement and positive limits are required; a live flag is rejected.' },
-  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown, hidden, symbol, proxy, or accessor-shaped input, evidence, and D8 caller-context fields—including D9 clock values—plus media, device identifiers, identity resolution, and biometric inference are denied.' },
+  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown, hidden, symbol, proxy, or accessor-shaped input, evidence, D8 caller-context fields, and D10 execution-context/provenance-clock values—plus media, device identifiers, identity resolution, and biometric inference—are denied.' },
   { id: 'ADOS-05', control: 'PURPOSE_BOUND_CONSENT', enforcement: 'A granted synthetic KVKK consent assertion must match the selected fixture and purpose.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'The governed run requires owner approval and separate request/check actors; review rejects the original maker.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIAL_INTERFACE', enforcement: 'The adapter has no camera SDK, network client, stream URL, credential, or provider configuration surface.' },
-  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment, D6/D7 only render minimized evidence, and D8/D9 reject shaped context or an invalid local clock before review audit append.' },
-  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6/D7 witnesses record only an approved or rejected decision; D8/D9 validate caller context and the local clock only; action, notification, publication, and handoff remain not sent.' },
+  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment, D6/D7 only render minimized evidence, D8/D9 protect review context and its local clock, and D10 rejects shaped execution context or an invalid provenance clock before a fixture result.' },
+  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6/D7 witnesses record only an approved or rejected decision; D8/D9 validate review context and its local clock, while D10 validates only synthetic result provenance; action, notification, publication, and handoff remain not sent.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or camera connection is part of this connector.' },
 ])
 
@@ -389,25 +389,60 @@ function independentCameraReviewContext(context: ConnectorRunContext): { product
 }
 
 /**
- * D9 makes the only callable review-context value fail closed. A local clock
+ * D9/D10 make their only callable context value fail closed. A local clock
  * may supply a native, finite Date only; it cannot provide a forged
- * toISOString implementation or a Proxy-shaped value to the audit append.
+ * toISOString implementation or a Proxy-shaped value to an audit append or
+ * a synthetic provenance timestamp.
  */
-function localReviewOccurredAt(now: () => Date): string {
+function localCameraOccurredAt(now: () => Date, errorCode: string): string {
   let candidate: unknown
   try {
     candidate = now()
   } catch {
-    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CLOCK')
+    throw new ConnectorInputError(errorCode)
   }
-  if (!nodeTypes.isDate(candidate) || nodeTypes.isProxy(candidate)) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CLOCK')
+  if (!nodeTypes.isDate(candidate) || nodeTypes.isProxy(candidate)) throw new ConnectorInputError(errorCode)
   try {
-    if (!Number.isFinite(Date.prototype.getTime.call(candidate))) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CLOCK')
-    return canonicalIsoInstant(Date.prototype.toISOString.call(candidate), 'INVALID_CAMERA_REVIEW_CLOCK')
+    if (!Number.isFinite(Date.prototype.getTime.call(candidate))) throw new ConnectorInputError(errorCode)
+    return canonicalIsoInstant(Date.prototype.toISOString.call(candidate), errorCode)
   } catch (error) {
     if (error instanceof ConnectorInputError) throw error
-    throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CLOCK')
+    throw new ConnectorInputError(errorCode)
   }
+}
+
+function localReviewOccurredAt(now: () => Date): string {
+  return localCameraOccurredAt(now, 'INVALID_CAMERA_REVIEW_CLOCK')
+}
+
+type CameraExecutionContext = {
+  product: string
+  workspaceId: string
+  costCapCents: number
+  requestedItems: number
+  now: () => Date
+}
+
+/**
+ * D10 applies the strict data boundary to direct adapter execution too. The
+ * governed runner already creates this context, but a library caller must not
+ * be able to introduce media/device-shaped fields, an accessor, or a Proxy
+ * before the fixture or provenance timestamp is resolved.
+ */
+function cameraExecutionContext(value: unknown): CameraExecutionContext {
+  const candidate = exactObject(value, CAMERA_REVIEW_CONTEXT_FIELDS, 'UNEXPECTED_CAMERA_EXECUTION_CONTEXT_FIELD')
+  const scope = cameraReviewScopeFromRecord(candidate)
+  const requestedBy = normalizedActor(candidate.requestedBy)
+  const checkedBy = normalizedActor(candidate.checkedBy)
+  const correlationId = typeof candidate.correlationId === 'string' ? candidate.correlationId : ''
+  const scopes = exactStringArray(candidate.scopes, 'INVALID_CAMERA_EXECUTION_CONTEXT_SCOPES', 12, 80)
+  const costCapCents = positiveInteger(candidate.costCapCents)
+  const requestedItems = positiveInteger(candidate.requestedItems)
+  const now = candidate.now
+  if (!requestedBy || requestedBy !== candidate.requestedBy || !checkedBy || checkedBy !== candidate.checkedBy || requestedBy === checkedBy || candidate.ownerApproved !== true || !SCOPE_ID_PATTERN.test(correlationId) || scopes.length !== 1 || scopes[0] !== CAMERA_SCOPE || !costCapCents || !requestedItems || typeof now !== 'function' || nodeTypes.isProxy(now)) {
+    throw new ConnectorInputError('INVALID_CAMERA_EXECUTION_CONTEXT')
+  }
+  return { ...scope, costCapCents, requestedItems, now: now as () => Date }
 }
 
 function inputFrom(value: unknown): CameraObservationInput {
@@ -1123,7 +1158,7 @@ export class SyntheticCameraConnector implements Connector<unknown, CameraObserv
 
   constructor(private readonly config: SyntheticCameraConnectorConfig = {}) {}
 
-  private configured(ctx: ConnectorRunContext): void {
+  private configured(ctx: Pick<CameraExecutionContext, 'costCapCents' | 'requestedItems'>): void {
     if (this.config.liveEnabled) throw new ConnectorUnavailableError('CAMERA_LIVE_DISABLED')
     if (!this.config.syntheticEnabled) throw new ConnectorUnavailableError('SYNTHETIC_CAMERA_CONNECTOR_NOT_CONFIGURED')
     const maxCostCapCents = positiveInteger(this.config.maxCostCapCents)
@@ -1134,12 +1169,15 @@ export class SyntheticCameraConnector implements Connector<unknown, CameraObserv
   }
 
   preflight(input: unknown, ctx: ConnectorRunContext): void {
-    this.configured(ctx)
+    const executionContext = cameraExecutionContext(ctx)
+    this.configured(executionContext)
+    localCameraOccurredAt(executionContext.now, 'INVALID_CAMERA_PROVENANCE_CLOCK')
     fixtureFor(inputFrom(input))
   }
 
   async run(input: unknown, ctx: ConnectorRunContext): Promise<ConnectorResult<CameraObservationResult>> {
-    this.configured(ctx)
+    const executionContext = cameraExecutionContext(ctx)
+    this.configured(executionContext)
     const cameraInput = inputFrom(input)
     const fixture = fixtureFor(cameraInput)
     const resultWithoutReviewPacket: Omit<CameraObservationResult, 'reviewPacket'> = {
@@ -1151,13 +1189,13 @@ export class SyntheticCameraConnector implements Connector<unknown, CameraObserv
       },
       review: { state: 'OWNER_REVIEW_REQUIRED', action: 'NOT_EXECUTED', notification: 'NOT_SENT', publication: 'NOT_PUBLISHED' },
     }
-    const data: CameraObservationResult = { ...resultWithoutReviewPacket, reviewPacket: reviewPacketFor(resultWithoutReviewPacket, ctx.product, ctx.workspaceId) }
+    const data: CameraObservationResult = { ...resultWithoutReviewPacket, reviewPacket: reviewPacketFor(resultWithoutReviewPacket, executionContext.product, executionContext.workspaceId) }
     return {
       data,
       provenance: {
         connectorId: this.id,
         source: `synthetic-camera-fixture:${cameraInput.cameraFixtureId}`,
-        retrievedAt: ctx.now().toISOString(), liveStatus: CAMERA_LIVE_STATUS, synthetic: true,
+        retrievedAt: localCameraOccurredAt(executionContext.now, 'INVALID_CAMERA_PROVENANCE_CLOCK'), liveStatus: CAMERA_LIVE_STATUS, synthetic: true,
         untrustedContent: {
           source: 'synthetic-camera-observation', value: data.observation,
           handling: 'data-only', instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS',
