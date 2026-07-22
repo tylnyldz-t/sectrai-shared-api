@@ -20,7 +20,7 @@ const OWNER_ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 const FILTER_ID_PATTERN = /^[a-z0-9][a-z0-9._-]{0,63}$/
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
 const CANDIDATE_ID_PATTERN = /^synthetic-image-[a-f0-9]{20}$/
-const COMFY_SDXL_GRAPH_SHAPE = [
+const COMFY_SDXL_GRAPH_SHAPE = Object.freeze([
   'CheckpointLoaderSimple',
   'CLIPTextEncode:positive',
   'CLIPTextEncode:negative',
@@ -28,12 +28,13 @@ const COMFY_SDXL_GRAPH_SHAPE = [
   'KSampler',
   'VAEDecode',
   'SaveImage',
-] as const
+] as const)
 const IMAGE_RUN_CONTEXT_KEYS = ['product', 'workspaceId', 'actor', 'correlationId', 'ownerApproved', 'scopes', 'costCapCents', 'requestedItems', 'now'] as const
 const IMAGE_ISSUANCE_CONTEXT_KEYS = ['product', 'workspaceId', 'actor', 'correlationId', 'now'] as const
 const IMAGE_REVIEW_CONTEXT_KEYS = ['product', 'workspaceId', 'correlationId', 'now'] as const
 const IMAGE_TTI_CONFIG_KEYS = ['liveMode', 'maxCostCapCents', 'maxItems', 'ownerReviewTtlSeconds', 'familySafetyFilter'] as const
 const IMAGE_TTI_ENVIRONMENT_OVERRIDE_KEYS = ['familySafetyFilter'] as const
+const FAMILY_SAFETY_FILTER_KEYS = ['id', 'assess'] as const
 
 export type ImageSize = 512 | 1024
 
@@ -176,7 +177,6 @@ type ClosedSyntheticImageTtiConnectorConfig = {
 
 type ClosedFamilySafetyFilter = {
   id: string
-  target: object
   assess: (...args: unknown[]) => unknown
 }
 
@@ -286,16 +286,17 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): b
 
 /**
  * A custom policy remains a local, synchronous host seam, but its identity
- * and callable must both be own data properties. Inherited getters are never
- * consulted as policy configuration.
+ * and callable must be its entire own-data shape. A nested endpoint,
+ * credential, inherited getter, or mutable receiver is never retained as
+ * connector configuration.
  */
 function closedFamilySafetyFilter(value: unknown): ClosedFamilySafetyFilter | null {
   const candidate = ownDataRecord(value)
-  if (!candidate) return null
+  if (!candidate || !hasExactKeys(candidate, FAMILY_SAFETY_FILTER_KEYS)) return null
   const id = ownDataValue(candidate, 'id')
   const assess = ownDataValue(candidate, 'assess')
   if (!id.present || !assess.present || typeof id.value !== 'string' || typeof assess.value !== 'function') return null
-  return Object.freeze({ id: id.value, target: candidate, assess: assess.value as (...args: unknown[]) => unknown })
+  return Object.freeze({ id: id.value, assess: assess.value as (...args: unknown[]) => unknown })
 }
 
 /**
@@ -416,8 +417,18 @@ function policyRejectionReason(value: unknown): string {
 
 function safetyAssessment(filter: ClosedFamilySafetyFilter, input: Readonly<TextToImageInput>): void {
   if (!FILTER_ID_PATTERN.test(filter.id)) throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
+  // The policy receives a new immutable data snapshot. It cannot rewrite the
+  // normalized prompt or dimensions that will later form candidate digests.
+  const policyInput = Object.freeze({
+    prompt: input.prompt,
+    ...(input.negativePrompt === undefined ? {} : { negativePrompt: input.negativePrompt }),
+    ...(input.width === undefined ? {} : { width: input.width }),
+    ...(input.height === undefined ? {} : { height: input.height }),
+  })
   let assessment: FamilySafetyAssessment
-  try { assessment = filter.assess.call(filter.target, input) as FamilySafetyAssessment } catch { throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_UNAVAILABLE') }
+  // Do not retain or supply the caller's policy object as `this`; the copied
+  // callable is a synchronous data-only seam, not a capability receiver.
+  try { assessment = filter.assess(policyInput) as FamilySafetyAssessment } catch { throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_UNAVAILABLE') }
   const result = plainRecord(assessment)
   if (!result || !hasOnlyKeys(result, ['allowed', 'reason'])) throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
   const allowed = ownDataValue(result, 'allowed')
@@ -433,11 +444,13 @@ function safetyAssessment(filter: ClosedFamilySafetyFilter, input: Readonly<Text
  */
 export class BaselineFamilySafetyFilter implements FamilySafetyFilter {
   readonly id = 'baseline-family-safe-v1'
-  private readonly blockedTerms = new Set(['adult', 'explicit', 'nude', 'naked', 'porn', 'sexual', 'gore', 'dismember', 'blood', 'weapon', 'gun', 'silah', 'çıplak', 'cinsel', 'pornografi', 'şiddet', 'vahşet'])
+  // Private fields are not part of the public policy object shape, so the
+  // baseline policy is subject to the same exact `{ id, assess }` capsule.
+  readonly #blockedTerms = new Set(['adult', 'explicit', 'nude', 'naked', 'porn', 'sexual', 'gore', 'dismember', 'blood', 'weapon', 'gun', 'silah', 'çıplak', 'cinsel', 'pornografi', 'şiddet', 'vahşet'])
 
   readonly assess = (input: Readonly<TextToImageInput>): FamilySafetyAssessment => {
     const words = `${input.prompt} ${input.negativePrompt ?? ''}`.normalize('NFKC').toLocaleLowerCase('tr-TR').match(/[\p{L}\p{N}]+/gu) ?? []
-    return words.some((word) => this.blockedTerms.has(word))
+    return words.some((word) => this.#blockedTerms.has(word))
       ? { allowed: false, reason: 'FAMILY_SAFETY_FILTER_REJECTED' }
       : { allowed: true }
   }
@@ -451,17 +464,18 @@ const closedDefaultFamilySafetyFilter = (() => {
 })()
 
 function creativeWorkerPlan(input: Required<TextToImageInput>, promptDigest: string): SyntheticComfySdxlPlan {
-  return {
+  const plan: SyntheticComfySdxlPlan = {
     schema: 'creative-job-v1',
     provider: 'local-comfyui',
     type: 'image',
     modelFamily: 'sdxl',
     checkpoint: 'UNRESOLVED_SYNTHETIC_ONLY',
-    graphShape: COMFY_SDXL_GRAPH_SHAPE,
+    graphShape: Object.freeze([...COMFY_SDXL_GRAPH_SHAPE]),
     promptDigest,
     ...(input.negativePrompt ? { negativePromptDigest: digest(input.negativePrompt) } : {}),
-    dispatch: { performed: false, gate: LIVE_DISABLED, network: 'not-attempted' },
+    dispatch: Object.freeze({ performed: false, gate: LIVE_DISABLED, network: 'not-attempted' }),
   }
+  return Object.freeze(plan)
 }
 
 function candidateId(scope: ImageCandidateScope, actor: string, promptDigest: string, negativePromptDigest: string | undefined, width: ImageSize, height: ImageSize, reviewExpiresAtValue: string, index: number): string {
@@ -478,7 +492,7 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
   readonly id = IMAGE_TTI_CONNECTOR_ID
   readonly kind = 'media-generation' as const
   readonly authKind = 'owner-token' as const
-  readonly scopes = [IMAGE_SCOPE] as const
+  readonly scopes = Object.freeze([IMAGE_SCOPE] as const)
 
   readonly #config: Readonly<ClosedSyntheticImageTtiConnectorConfig> | null
 
@@ -518,10 +532,10 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
     const expiresAt = reviewExpiresAt(generatedDate, reviewTtl, 'INVALID_IMAGE_TTI_CONTEXT')
     const promptDigest = digest(normalized.prompt)
     const plan = creativeWorkerPlan(normalized, promptDigest)
-    const candidates = Array.from({ length: context.requestedItems }, (_, index): SyntheticImageCandidate => {
-      const scope = { product: context.product, workspaceId: context.workspaceId, correlationId: context.correlationId }
+    const candidates: SyntheticImageCandidate[] = Array.from({ length: context.requestedItems }, (_, index): SyntheticImageCandidate => {
+      const scope = Object.freeze({ product: context.product, workspaceId: context.workspaceId, correlationId: context.correlationId })
       const id = candidateId(scope, context.actor, promptDigest, plan.negativePromptDigest, normalized.width, normalized.height, expiresAt, index)
-      return {
+      return Object.freeze({
         candidateId: id,
         candidateIndex: index,
         promptDigest,
@@ -533,26 +547,29 @@ export class SyntheticImageTtiConnector implements Connector<TextToImageInput, T
         mediaType: 'image/svg+xml',
         previewDataUri: previewDataUri(id, normalized.width, normalized.height),
         syntheticUri: `synthetic://gcl/${this.id}/${id}`,
-        safety: { filterId: filter.id, classification: 'family-safe' },
+        safety: Object.freeze({ filterId: filter.id, classification: 'family-safe' }),
         creativeWorkerPlan: plan,
-        ownerReview: { status: 'pending', visibility: 'owner-only', publication: 'blocked', required: true, reviewExpiresAt: expiresAt },
-      }
+        ownerReview: Object.freeze({ status: 'pending', visibility: 'owner-only', publication: 'blocked', required: true, reviewExpiresAt: expiresAt }),
+      })
     })
-    return {
-      data: { mode: LIVE_DISABLED, candidates, nextAction: 'INDEPENDENT_OWNER_LIKE_REQUIRED', automaticPublication: false },
-      provenance: {
+    Object.freeze(candidates)
+    const data: TextToImageData = Object.freeze({ mode: LIVE_DISABLED, candidates, nextAction: 'INDEPENDENT_OWNER_LIKE_REQUIRED', automaticPublication: false })
+    const provenance = Object.freeze({
         connectorId: this.id,
         source: 'synthetic-image-tti',
         retrievedAt: generatedAt,
-        untrustedContent: {
+        untrustedContent: Object.freeze({
           source: 'owner-supplied-tti-prompt',
-          value: { promptDigest, ...(plan.negativePromptDigest ? { negativePromptDigest: plan.negativePromptDigest } : {}) },
+          value: Object.freeze({ promptDigest, ...(plan.negativePromptDigest ? { negativePromptDigest: plan.negativePromptDigest } : {}) }),
           handling: 'data-only',
           instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS',
-        },
-      },
+        }),
+      })
+    return Object.freeze({
+      data,
+      provenance,
       confidence: 0,
-    }
+    })
   }
 
   successAuditDetail(result: ConnectorResult<TextToImageData>): { [IMAGE_CANDIDATE_SET_AUDIT_FIELD]: string } {

@@ -166,6 +166,27 @@ construction does not spread caller overrides, so an accessor-bearing override
 is also closed without being read. This is structural hardening, not a new
 provider or moderation service.
 
+## D2 — immutable policy input and review output
+
+The policy object itself is an exact two-field capsule: only own data `id` and
+`assess` are accepted. A nested credential, endpoint, extra hidden field,
+symbol, accessor, inherited member, or receiver-backed policy object makes the
+connector configuration invalid before preflight, audit, quota, or candidate
+creation. The copied `assess` callable is invoked without the caller's policy
+object as `this` and receives a newly-created frozen prompt/dimension snapshot.
+It cannot rewrite the normalized input that will form digests and candidate IDs;
+an attempted mutation closes preflight as
+`IMAGE_FAMILY_SAFETY_FILTER_UNAVAILABLE`.
+
+Successful synthetic output is an immutable review snapshot: the result, data,
+candidate array, each candidate, scope, safety record, owner-review record,
+Creative Worker graph shape/dispatch plan, and provenance data are frozen before
+they leave the adapter. The connector's only scope array is frozen as well.
+This prevents accidental post-run mutation such as adding a raw prompt, changing
+a synthetic URI to a network URI, or changing a graph node into dispatch. A host
+may still copy an output, but issuance and terminal review revalidate that copy
+and bind its complete redacted fingerprint to the governed success audit event.
+
 This contract does not authorize a real provider, a local GPU worker, a model
 installation, a migration, or public publishing. Each remains a separate owner
 decision and must be implemented behind its own bounded approval path.
@@ -192,8 +213,14 @@ decision and must be implemented behind its own bounded approval path.
   reasons are rejected or replaced with `FAMILY_SAFETY_FILTER_REJECTED`.
 - Connector configuration is an exact, runtime-private snapshot. Hidden
   credential/endpoint fields, symbols, accessors, inherited policy methods,
-  malformed environment overrides, and post-construction mutation attempts
-  cannot reach preflight, audit, quota, candidate creation, or a provider path.
+  nested policy capability fields, malformed environment overrides, and
+  post-construction mutation attempts cannot reach preflight, audit, quota,
+  candidate creation, or a provider path.
+- A custom policy receives only a frozen normalized input snapshot and no policy
+  receiver. It cannot mutate the candidate's future prompt/dimensions or retain
+  a hidden endpoint/credential field in the accepted policy shape. The emitted
+  result is frozen through every review-relevant nested value; adding a raw
+  prompt, provider URI, or executable graph node to that instance fails.
 - The review audit records only candidate IDs, maker/checker identities,
   controlled decision fields, blocked publication state, and SHA-256 lineage
   hashes. It never records the prompt, negative prompt, preview bytes,
@@ -275,12 +302,14 @@ decision and must be implemented behind its own bounded approval path.
    cross-database query is introduced.
 2. `LIVE_DISABLED` remains the only accepted mode; there is no provider key,
    endpoint, SDK, HTTP client, Docker client, loopback client, or outbound call.
-3. Exact owner approval, bounded identity, a closed configuration snapshot,
-   and a canonical owner checker default to deny.
+3. Exact owner approval, bounded identity, a closed configuration/policy
+   capsule, immutable review output, and a canonical owner checker default to
+   deny.
 4. The exact `image:generate` scope, positive cost cap/item count, connector
    limits, and daily quota gate execution before the adapter runs.
-5. Prompt and policy input are untrusted data only, never instructions;
-   malformed/accessor/inherited shapes and family-unsafe content are rejected.
+5. Prompt and policy input are untrusted data only, never instructions; policy
+   input is frozen and receiverless, while malformed/accessor/inherited shapes
+   and family-unsafe content are rejected.
 6. Candidates, receipts, and audit events retain only blocked metadata,
    digests, and provenance—never prompt text, preview bytes, provider output,
    endpoint, or credentials.

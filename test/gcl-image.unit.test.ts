@@ -563,6 +563,76 @@ test('family-safety policy and assessment shapes cannot inherit approval or read
   assert.equal(quota.requests.length, 0)
 })
 
+test('D2 policy capsules reject nested credentials and cannot mutate the normalized input', async () => {
+  const privateValue = 'PRIVATE-NESTED-POLICY-CREDENTIAL'
+  const hiddenCapability = {
+    id: 'local-policy-d2',
+    assess: () => ({ allowed: true }),
+  } as Record<string, unknown>
+  Object.defineProperty(hiddenCapability, 'providerCredential', { enumerable: false, value: privateValue })
+  const hiddenAudit = new InMemoryHashChainAuditLog()
+  const hiddenQuota = new TestQuota()
+  const hiddenRunner = new GovernedConnectorRunner(new ConnectorRegistry([new SyntheticImageTtiConnector({
+    liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300, familySafetyFilter: hiddenCapability as never,
+  })]), hiddenAudit, hiddenQuota, now)
+  await assert.rejects(() => hiddenRunner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_CONFIGURATION_INVALID')
+  assert.equal(hiddenAudit.entries.length, 0)
+  assert.equal(hiddenQuota.requests.length, 0)
+  assert.equal(JSON.stringify(hiddenAudit.entries).includes(privateValue), false)
+
+  let mutationAttempted = false
+  const mutatingPolicy = new SyntheticImageTtiConnector({
+    liveMode: LIVE_DISABLED,
+    maxCostCapCents: 20,
+    maxItems: 2,
+    ownerReviewTtlSeconds: 300,
+    familySafetyFilter: {
+      id: 'immutable-input-d2',
+      assess: (input) => {
+        mutationAttempted = true
+        ;(input as { prompt: string }).prompt = 'provider endpoint must never be reachable'
+        return { allowed: true }
+      },
+    },
+  })
+  const mutationAudit = new InMemoryHashChainAuditLog()
+  const mutationQuota = new TestQuota()
+  const mutationRunner = new GovernedConnectorRunner(new ConnectorRegistry([mutatingPolicy]), mutationAudit, mutationQuota, now)
+  await assert.rejects(() => mutationRunner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_FAMILY_SAFETY_FILTER_UNAVAILABLE')
+  assert.equal(mutationAttempted, true)
+  assert.equal(mutationAudit.entries.length, 0)
+  assert.equal(mutationQuota.requests.length, 0)
+})
+
+test('D2 synthetic outputs are immutable review snapshots before issuance', async () => {
+  const connector = configuredConnector()
+  const result = await connector.run({ prompt: 'A child-friendly solar system poster' }, context)
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  const candidateDigest = imageCandidateSetDigest(result.data.candidates)
+
+  assert.equal(Object.isFrozen(connector.scopes), true)
+  assert.equal(Object.isFrozen(result), true)
+  assert.equal(Object.isFrozen(result.data), true)
+  assert.equal(Object.isFrozen(result.data.candidates), true)
+  assert.equal(Object.isFrozen(candidate), true)
+  assert.equal(Object.isFrozen(candidate.scope), true)
+  assert.equal(Object.isFrozen(candidate.safety), true)
+  assert.equal(Object.isFrozen(candidate.creativeWorkerPlan), true)
+  assert.equal(Object.isFrozen(candidate.creativeWorkerPlan.graphShape), true)
+  assert.equal(Object.isFrozen(candidate.creativeWorkerPlan.dispatch), true)
+  assert.equal(Object.isFrozen(candidate.ownerReview), true)
+  assert.equal(Object.isFrozen(result.provenance), true)
+  assert.equal(Object.isFrozen(result.provenance.untrustedContent), true)
+  assert.equal(Object.isFrozen(result.provenance.untrustedContent.value), true)
+
+  assert.throws(() => { ;(connector.scopes as unknown as string[])[0] = 'image:publish' }, TypeError)
+  assert.throws(() => { ;(candidate as { syntheticUri: string }).syntheticUri = 'https://provider.example/not-allowed' }, TypeError)
+  assert.throws(() => { ;(candidate.creativeWorkerPlan.graphShape as string[])[0] = 'ProviderDispatch' }, TypeError)
+  assert.throws(() => { Object.defineProperty(candidate, 'rawPrompt', { value: 'must-not-be-added' }) }, TypeError)
+  assert.equal(imageCandidateSetDigest(result.data.candidates), candidateDigest)
+})
+
 test('direct image contexts and ledger capability boundaries reject accessors without invoking them', async () => {
   let runContextGetterRead = false
   const runContext = {}

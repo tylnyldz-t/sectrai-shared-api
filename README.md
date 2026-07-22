@@ -26,6 +26,12 @@ post-construction caller-object changes fail closed before preflight, audit, or
 quota. The ledgers reuse existing Records and add no migration. See
 [the GM3 contract](docs/GM3_IMAGE_TTI_CONTRACT.md).
 
+D2 additionally limits a custom safety policy to a closed local `{ id, assess
+}` capsule, gives it a frozen data-only input snapshot without a policy-object
+receiver, and returns frozen synthetic review snapshots. Those snapshots still
+carry only local SVG/plan metadata and remain `LIVE_DISABLED` and publication
+blocked; copying one does not bypass issuance or review fingerprint checks.
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:
