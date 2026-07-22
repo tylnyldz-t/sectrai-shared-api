@@ -240,7 +240,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
       data,
       provenance: { connectorId: this.id, source: 'synthetic-game-engine-plan', retrievedAt: validatedContext.now().toISOString(), runId: id, untrustedContent: isolatedContent(input) },
       confidence: 0,
-    }, this.id, submittedInputSha256)
+    }, this.id, rawInput)
   }
 }
 

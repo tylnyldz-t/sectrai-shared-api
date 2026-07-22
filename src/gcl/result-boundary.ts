@@ -56,6 +56,98 @@ function sameCanonicalData(left: unknown, right: unknown): boolean {
   }
 }
 
+/**
+ * Rebuild the one permitted plan input from the frozen request snapshot. The
+ * review digest binds the raw request, while this normal form binds the plan's
+ * displayed input after the adapters' documented trim/default rules. Keeping
+ * this policy at the final boundary means a connector cannot retain a request
+ * digest while substituting another otherwise-valid, re-hashed plan.
+ */
+function boundedSubmissionString(value: unknown, maximumLength: number): string | null {
+  return typeof value === 'string' && Boolean(value.trim()) && value.trim().length <= maximumLength ? value.trim() : null
+}
+
+function allowedSubmissionKeys(value: DataRecord, allowed: readonly string[]): boolean {
+  return Object.keys(value).every((name) => allowed.includes(name))
+}
+
+function normalizedGpuSubmission(value: unknown): DataRecord | null {
+  const request = ownDataRecord(value)
+  if (!request || !exactKeys(request, ['computeTier', 'estimatedVramMiB', 'maximumRuntimeSeconds', 'budgetEnvelopeRef']) ||
+    (request.computeTier !== 'economy' && request.computeTier !== 'premium') ||
+    (request.estimatedVramMiB !== 'UNKNOWN' && (typeof request.estimatedVramMiB !== 'number' || !Number.isSafeInteger(request.estimatedVramMiB) || request.estimatedVramMiB <= 0)) ||
+    typeof request.maximumRuntimeSeconds !== 'number' || !Number.isSafeInteger(request.maximumRuntimeSeconds) ||
+    request.maximumRuntimeSeconds < 1 || request.maximumRuntimeSeconds > JNC_MAXIMUM_GPU_RUNTIME_SECONDS) return null
+  const budgetEnvelopeRef = boundedSubmissionString(request.budgetEnvelopeRef, 160)
+  return budgetEnvelopeRef === null ? null : {
+    computeTier: request.computeTier,
+    estimatedVramMiB: request.estimatedVramMiB,
+    maximumRuntimeSeconds: request.maximumRuntimeSeconds,
+    budgetEnvelopeRef,
+  }
+}
+
+function normalizedThreeDSubmission(connectorId: string, value: unknown): DataRecord | null {
+  const input = ownDataRecord(value)
+  const imageConnector = connectorId === 'image-text-to-3d'
+  const allowed = imageConnector
+    ? ['prompt', 'image', 'style', 'outputFormat', 'gpuResourceRequest']
+    : ['prompt', 'style', 'outputFormat', 'gpuResourceRequest']
+  if (!input || !allowedSubmissionKeys(input, allowed)) return null
+  const prompt = boundedSubmissionString(input.prompt, 4_000)
+  if (prompt === null || (input.outputFormat !== undefined && input.outputFormat !== 'glb' && input.outputFormat !== 'obj')) return null
+  const style = input.style === undefined ? undefined : boundedSubmissionString(input.style, 160)
+  const gpuResourceRequest = input.gpuResourceRequest === undefined ? undefined : normalizedGpuSubmission(input.gpuResourceRequest)
+  if (style === null || gpuResourceRequest === null) return null
+  const normalized: DataRecord = {
+    prompt,
+    outputFormat: input.outputFormat === undefined ? 'glb' : input.outputFormat,
+    ...(style === undefined ? {} : { style }),
+    ...(gpuResourceRequest === undefined ? {} : { gpuResourceRequest }),
+  }
+  if (!imageConnector) return normalized
+  const image = ownDataRecord(input.image)
+  if (!image || !exactKeys(image, ['assetId', 'sha256', 'mediaType']) ||
+    (image.mediaType !== 'image/jpeg' && image.mediaType !== 'image/png' && image.mediaType !== 'image/webp')) return null
+  const assetId = boundedSubmissionString(image.assetId, 160)
+  const sha256 = boundedSubmissionString(image.sha256, 64)
+  if (assetId === null || sha256 === null || !SHA256_PATTERN.test(sha256)) return null
+  return { ...normalized, image: { assetId, sha256: sha256.toLowerCase(), mediaType: image.mediaType } }
+}
+
+function normalizedGameSubmission(value: unknown): DataRecord | null {
+  const input = ownDataRecord(value)
+  if (!input || !allowedSubmissionKeys(input, ['tier', 'engine', 'projectId', 'brief', 'target', 'gpuMinutes']) ||
+    (input.tier !== 'economic' && input.tier !== 'premium') ||
+    (input.engine !== 'godot' && input.engine !== 'unreal' && input.engine !== 'blender') ||
+    typeof input.projectId !== 'string' || !/^[a-zA-Z0-9_-]{1,80}$/.test(input.projectId) ||
+    (input.target !== 'desktop' && input.target !== 'mobile' && input.target !== 'web')) return null
+  const brief = boundedSubmissionString(input.brief, 4_000)
+  if (brief === null) return null
+  if (input.tier === 'economic') {
+    return input.engine === 'godot' && input.gpuMinutes === undefined
+      ? { tier: input.tier, engine: input.engine, projectId: input.projectId, brief, target: input.target }
+      : null
+  }
+  if (input.engine === 'godot' || typeof input.gpuMinutes !== 'number' || !Number.isSafeInteger(input.gpuMinutes) || input.gpuMinutes < 1) return null
+  return { tier: input.tier, engine: input.engine, projectId: input.projectId, brief, target: input.target, gpuMinutes: input.gpuMinutes }
+}
+
+type SubmissionBinding = { sha256: string; normalizedInput: DataRecord }
+
+function submissionBinding(connectorId: string, submittedInput: unknown): SubmissionBinding | null {
+  try {
+    const normalizedInput = connectorId === 'text-to-3d' || connectorId === 'image-text-to-3d'
+      ? normalizedThreeDSubmission(connectorId, submittedInput)
+      : connectorId === 'game-engine'
+        ? normalizedGameSubmission(submittedInput)
+        : null
+    return normalizedInput ? { sha256: syntheticPlanSha256(submittedInput), normalizedInput } : null
+  } catch {
+    return null
+  }
+}
+
 function validIsoTimestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false
   try {
@@ -85,13 +177,14 @@ function deeplyFrozenCanonicalData(value: unknown, seen = new WeakSet<object>())
   }
 }
 
-function snapshotAndCoreData(data: DataRecord, connectorId: string, submittedInputSha256: string): DataRecord | null {
+function snapshotAndCoreData(data: DataRecord, connectorId: string, submission: SubmissionBinding): DataRecord | null {
   if (data.liveMode !== LIVE_DISABLED) return null
   if (!verifiesSyntheticReviewSnapshot(data.reviewSnapshot)) return null
   const snapshot = ownDataRecord(data.reviewSnapshot)
   if (!snapshot || !sameCanonicalData(data.integrity, snapshot.integrity) || !sameCanonicalData(data.reviewReceipt, snapshot.reviewReceipt)) return null
   const payload = ownDataRecord(snapshot.payload)
-  if (!payload || payload.connectorId !== connectorId || payload.submittedInputSha256 !== submittedInputSha256) return null
+  if (!payload || payload.connectorId !== connectorId || payload.submittedInputSha256 !== submission.sha256 ||
+    !sameCanonicalData(payload.input, submission.normalizedInput)) return null
   return payload
 }
 
@@ -160,9 +253,9 @@ function validThreeDArtifact(value: unknown, connectorId: string, payload: DataR
     artifact.reviewState === 'OWNER_REVIEW_REQUIRED' && artifact.publicationState === 'NOT_PUBLISHED')
 }
 
-function threeDResultMatchesSnapshot(data: DataRecord, connectorId: string, submittedInputSha256: string): boolean {
+function threeDResultMatchesSnapshot(data: DataRecord, connectorId: string, submission: SubmissionBinding): boolean {
   if (!exactKeys(data, THREE_D_DATA_KEYS) || data.connectorKind !== connectorId) return false
-  const payload = snapshotAndCoreData(data, connectorId, submittedInputSha256)
+  const payload = snapshotAndCoreData(data, connectorId, submission)
   return Boolean(payload &&
     sameCanonicalData(data.artifact, payload.artifact) &&
     sameCanonicalData(data.gpuResourceCard, payload.gpuResourceCard) &&
@@ -199,10 +292,10 @@ function validGamePipeline(value: unknown, input: GameInputPolicy): boolean {
   return sameCanonicalData(value, expected)
 }
 
-function gameResultMatchesSnapshot(data: DataRecord, connectorId: string, submittedInputSha256: string): boolean {
+function gameResultMatchesSnapshot(data: DataRecord, connectorId: string, submission: SubmissionBinding): boolean {
   if (!exactOptionalKeys(data, GAME_DATA_BASE_KEYS, GAME_DATA_PREMIUM_KEYS) ||
     data.adapter !== 'SYNTHETIC' || data.execution !== 'SYNTHETIC_PLAN_ONLY_NOT_EXECUTED') return false
-  const payload = snapshotAndCoreData(data, connectorId, submittedInputSha256)
+  const payload = snapshotAndCoreData(data, connectorId, submission)
   const input = payload ? gameInputPolicy(payload.input) : null
   if (!payload || !input || typeof data.buildId !== 'string' || !/^synthetic-game-[a-f0-9]{20}$/.test(data.buildId) ||
     !sameCanonicalData(data.buildId, payload.buildId) ||
@@ -226,12 +319,14 @@ function gameResultMatchesSnapshot(data: DataRecord, connectorId: string, submit
     (input.engine === 'unreal' ? validUnrealPilotHandoff(data.jncPilotHandoff) : validBlenderPilotHandoff(data.jncPilotHandoff))
 }
 
-function syntheticDataMatchesSnapshot(data: unknown, connectorId: string, submittedInputSha256: string): data is DataRecord {
+function syntheticDataMatchesSnapshot(data: unknown, connectorId: string, submittedInput: unknown): data is DataRecord {
+  const submission = submissionBinding(connectorId, submittedInput)
+  if (!submission) return false
   if (!deeplyFrozenCanonicalData(data)) return false
   const record = ownDataRecord(data)
   if (!record) return false
-  if (connectorId === 'text-to-3d' || connectorId === 'image-text-to-3d') return threeDResultMatchesSnapshot(record, connectorId, submittedInputSha256)
-  if (connectorId === 'game-engine') return gameResultMatchesSnapshot(record, connectorId, submittedInputSha256)
+  if (connectorId === 'text-to-3d' || connectorId === 'image-text-to-3d') return threeDResultMatchesSnapshot(record, connectorId, submission)
+  if (connectorId === 'game-engine') return gameResultMatchesSnapshot(record, connectorId, submission)
   return false
 }
 
@@ -292,9 +387,9 @@ function provenanceMatchesSnapshot(data: unknown, provenance: ConnectorResult['p
  * a fresh frozen envelope.
  * This has no I/O and cannot turn a plan into an execution path.
  */
-export function validatedSyntheticConnectorResult<TData = unknown>(value: unknown, connectorId: string, submittedInputSha256: string): ConnectorResult<TData> {
+export function validatedSyntheticConnectorResult<TData = unknown>(value: unknown, connectorId: string, submittedInput: unknown): ConnectorResult<TData> {
   const result = ownDataRecord(value)
-  if (!SHA256_PATTERN.test(submittedInputSha256) || !result || !exactKeys(result, RESULT_KEYS) || result.confidence !== 0 || !syntheticDataMatchesSnapshot(result.data, connectorId, submittedInputSha256)) {
+  if (!result || !exactKeys(result, RESULT_KEYS) || result.confidence !== 0 || !syntheticDataMatchesSnapshot(result.data, connectorId, submittedInput)) {
     throw new SyntheticResultIntegrityError()
   }
   const provenance = safeProvenance(result.provenance, connectorId)

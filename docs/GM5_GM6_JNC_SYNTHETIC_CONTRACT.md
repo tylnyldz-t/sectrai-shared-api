@@ -248,9 +248,12 @@ for by the existing audit/quota rule.
 The copied submission has a SHA-256 correlation value embedded in the
 integrity-bound review snapshot. At the final egress boundary the runner
 recomputes the same value from the frozen submission and requires an exact
-match. A connector
-cannot return a different, otherwise valid and re-hashed synthetic plan for a
-requested run. This digest identifies only data submitted to this synthetic
+match. The final boundary independently rebuilds the one permitted normalized
+GM5/GM6 plan input from that frozen submission (including documented trim,
+default, image-reference, GPU-card, and game-plan rules) and compares it to
+`reviewSnapshot.payload.input`. A connector therefore cannot retain the
+original submission digest while substituting a different, otherwise valid and
+re-hashed plan. This digest identifies only data submitted to this synthetic
 connector; it is not a secret, an approval, a credential, or an execution
 authorization. Normalized prompt/default fields remain separately bound in the
 review snapshot and provenance checks described above.

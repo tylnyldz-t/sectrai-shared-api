@@ -567,6 +567,66 @@ test('runner isolates submitted input and context across preflight/run, then bin
   assert.equal(mismatchedGameRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
 })
 
+test('final egress binds normalized GM5/GM6 plan input to the original submission, not only its claimed digest', async () => {
+  const requestedThreeDInput = { prompt: '  The owner requested this 3D proposal.  ', style: '  educational  ' }
+  const acceptedThreeD = await runner(new SyntheticTextToThreeDConnector(threeDConfig())).run.run(request({ input: requestedThreeDInput })) as ConnectorResult<SyntheticThreeDResult>
+  const normalizedThreeDInput = acceptedThreeD.data.reviewSnapshot.payload.input as { prompt: unknown; style: unknown }
+  assert.equal(normalizedThreeDInput.prompt, 'The owner requested this 3D proposal.')
+  assert.equal(normalizedThreeDInput.style, 'educational')
+
+  const alternateThreeD = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
+    { prompt: 'A different but valid 3D proposal.', style: 'educational' }, directContext(),
+  )
+  const forgedThreeDPayload = {
+    ...alternateThreeD.data.reviewSnapshot.payload,
+    submittedInputSha256: syntheticPlanSha256(requestedThreeDInput),
+  }
+  const forgedThreeDSnapshot = createSyntheticReviewSnapshot({
+    connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, payload: forgedThreeDPayload,
+  })
+  const forgedThreeDData = deepFreeze({
+    ...alternateThreeD.data,
+    integrity: forgedThreeDSnapshot.integrity,
+    reviewReceipt: forgedThreeDSnapshot.reviewReceipt,
+    reviewSnapshot: forgedThreeDSnapshot,
+  }) as unknown as SyntheticThreeDResult
+  const forgedThreeDConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return { data: forgedThreeDData, provenance: alternateThreeD.provenance, confidence: 0 } },
+  }
+  const forgedThreeDRun = runner(forgedThreeDConnector)
+  await assert.rejects(forgedThreeDRun.run.run(request({ input: requestedThreeDInput })), SyntheticResultIntegrityError)
+  assert.equal(forgedThreeDRun.quota.reservations.length, 1)
+  assert.equal(forgedThreeDRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+
+  const requestedGameInput = { ...premiumUnreal, brief: '  The owner requested this premium game plan.  ' }
+  const alternateGame = await new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 30 }).run(
+    { ...premiumUnreal, brief: 'A different but valid premium game plan.' },
+    directContext({ scopes: ['game:project:build'], costCapCents: 100, requestedItems: 12 }),
+  )
+  const forgedGamePayload = {
+    ...alternateGame.data.reviewSnapshot.payload,
+    submittedInputSha256: syntheticPlanSha256(requestedGameInput),
+  }
+  const forgedGameSnapshot = createSyntheticReviewSnapshot({
+    connectorId: 'game-engine', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, payload: forgedGamePayload,
+  })
+  const forgedGameData = deepFreeze({
+    ...alternateGame.data,
+    integrity: forgedGameSnapshot.integrity,
+    reviewReceipt: forgedGameSnapshot.reviewReceipt,
+    reviewSnapshot: forgedGameSnapshot,
+  }) as unknown as GameEngineBuildPlan
+  const forgedGameConnector: Connector = {
+    id: 'game-engine', kind: 'game-engine', authKind: 'owner-approval', scopes: ['game:project:build'],
+    async run() { return { data: forgedGameData, provenance: alternateGame.provenance, confidence: 0 } },
+  }
+  const forgedGameRun = runner(forgedGameConnector)
+  await assert.rejects(forgedGameRun.run.run(gameRequest(requestedGameInput)), SyntheticResultIntegrityError)
+  assert.equal(forgedGameRun.quota.reservations.length, 1)
+  assert.equal(forgedGameRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+})
+
 test('registry admission seals connector metadata and rejects accessor-backed runner methods', () => {
   const connector: Connector = {
     id: 'registry-seal-proposal', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],

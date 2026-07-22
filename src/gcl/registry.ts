@@ -1,5 +1,5 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, GclError, OwnerGateError, ScopeError } from './errors.js'
-import { deepFreeze, frozenCanonicalJsonCopy, syntheticPlanSha256 } from './plan-integrity.js'
+import { deepFreeze, frozenCanonicalJsonCopy } from './plan-integrity.js'
 import { validatedSyntheticConnectorResult } from './result-boundary.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
@@ -189,7 +189,6 @@ export class GovernedConnectorRunner {
     } catch {
       throw new ConnectorInputError('CONNECTOR_INVALID_INPUT')
     }
-    const submittedInputSha256 = syntheticPlanSha256(input)
     const occurredAt = this.now()
     const context = Object.freeze({
       product: safeRequest.product,
@@ -209,7 +208,7 @@ export class GovernedConnectorRunner {
     })
     await this.quota.consume({ ...context, connectorId: connector.id, occurredAt })
     try {
-      const result = validatedSyntheticConnectorResult(await connector.run(input, context), connector.id, submittedInputSha256)
+      const result = validatedSyntheticConnectorResult(await connector.run(input, context), connector.id, input)
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId,
         actor: context.actor, scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,
