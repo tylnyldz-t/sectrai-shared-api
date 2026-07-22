@@ -43,6 +43,12 @@ reservation, adapter execution, or artifact creation. This is a local
 metadata-integrity boundary only; it makes no provider call and grants no live
 execution capability.
 
+The audit transition replay treats that instant as a binding, not merely an
+ordering hint: the terminal `succeeded` or `failed` record must exactly echo
+its linked `requested` record's timestamp. A hash-valid record that is later
+than its request—even by one millisecond—invalidates the audit chain and
+cannot authorize an artifact or another audit append.
+
 ## Connector routes
 
 ```text

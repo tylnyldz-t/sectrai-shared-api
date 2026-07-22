@@ -222,6 +222,36 @@ test('durable audit rejects a hash-valid prior row that adds raw fixture fields 
   assert.equal(createCalls, 0)
 })
 
+test('durable audit rejects a hash-valid run whose terminal timestamp diverges from its canonical request clock', async () => {
+  const requested: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+  const requestedHash = hashAuditEvent(requested, null)
+  const succeeded: ConnectorAuditEvent = {
+    type: 'connector.run.succeeded', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: '2026-07-22T12:00:00.001Z', detail: { requestedAuditHash: requestedHash },
+  }
+  const succeededHash = hashAuditEvent(succeeded, requestedHash)
+  let createCalls = 0
+  const prisma = {
+    $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({
+      $executeRaw: async () => 1,
+      record: {
+        findMany: async () => [
+          { values: { event: requested, previousHash: null, hash: requestedHash } },
+          { values: { event: succeeded, previousHash: requestedHash, hash: succeededHash } },
+        ],
+        create: async () => { createCalls += 1; return {} },
+      },
+    }),
+  }
+  const audit = new PrismaHashChainAuditLog(prisma as never)
+
+  await assert.rejects(() => audit.append(requested), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(createCalls, 0)
+})
+
 test('audit binds every run and artifact creation to its connector scope and exactly one artifact', async () => {
   const requested: ConnectorAuditEvent = {
     type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',

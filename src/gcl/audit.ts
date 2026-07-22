@@ -274,7 +274,11 @@ function sameRunContext(left: ConnectorAuditEvent, right: ConnectorAuditEvent): 
     && left.requestedItems === right.requestedItems
 }
 
-/** A terminal run outcome is meaningful only for its exact earlier request. */
+/**
+ * A terminal run outcome is meaningful only for its exact earlier request and
+ * the same canonical run-clock instant. The append order may differ, but a
+ * later wall-clock value would describe a different synthetic run.
+ */
 function validRunOutcomeTransition(entries: readonly AuditRecordValue[], event: ConnectorAuditEvent): boolean {
   const requestedAuditHash = auditDetailRequestedHash(event)
   if (!requestedAuditHash || entries.some((entry) => {
@@ -285,7 +289,7 @@ function validRunOutcomeTransition(entries: readonly AuditRecordValue[], event: 
   return Boolean(requested
     && requested.type === 'connector.run.requested'
     && sameRunContext(requested, event)
-    && atOrBefore(requested.occurredAt, event.occurredAt))
+    && requested.occurredAt === event.occurredAt)
 }
 
 function sameArtifactMetadata(left: Record<string, unknown>, right: Record<string, unknown>): boolean {

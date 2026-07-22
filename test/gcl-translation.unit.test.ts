@@ -153,6 +153,35 @@ test('an invalid run clock fails closed before preflight, audit, or quota reserv
   assert.equal(quota.requests.length, 0)
 })
 
+test('audit rejects terminal outcomes that do not echo their requested run-clock instant', async () => {
+  const terminalAt = '2026-07-22T12:00:00.001Z'
+
+  for (const [type, detail] of [
+    ['connector.run.succeeded', {}],
+    ['connector.run.failed', { error: 'connector_run_failed' }],
+  ] as const) {
+    const audit = new InMemoryHashChainAuditLog()
+    const requested = await audit.append({
+      type: 'connector.run.requested', connectorId: TEXT_TRANSLATION_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
+      scopes: ['translation:text'], costCapCents: context.costCapCents, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+    })
+
+    await assert.rejects(() => audit.append({
+      type,
+      connectorId: TEXT_TRANSLATION_CONNECTOR_ID,
+      product: context.product,
+      workspaceId: context.workspaceId,
+      actor: context.actor,
+      scopes: ['translation:text'],
+      costCapCents: context.costCapCents,
+      requestedItems: 1,
+      occurredAt: terminalAt,
+      detail: { requestedAuditHash: requested.hash, ...detail },
+    }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_EVENT_INVALID')
+    assert.equal(audit.entries.length, 1)
+  }
+})
+
 test('owner, cost, item, personal-data, locale, and synthetic-descriptor failures stop translation before quota or artifact creation', async () => {
   const connector = new SyntheticSpeechTranslationConnector(config)
   const audit = new InMemoryHashChainAuditLog()
