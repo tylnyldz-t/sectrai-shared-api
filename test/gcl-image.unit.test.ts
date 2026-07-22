@@ -1016,6 +1016,74 @@ test('D9 rejects declared asynchronous or generator family policies before prefl
   assert.equal(asyncGeneratorCalls, 0)
 })
 
+test('D10 rejects proxy-backed family-safety boundaries before a trap, policy call, audit, or quota reservation', async () => {
+  let configTraps = 0
+  const proxiedConfig = new Proxy({
+    liveMode: LIVE_DISABLED,
+    maxCostCapCents: 20,
+    maxItems: 2,
+    ownerReviewTtlSeconds: 300,
+  }, {
+    getPrototypeOf: (target) => { configTraps += 1; return Reflect.getPrototypeOf(target) },
+    ownKeys: (target) => { configTraps += 1; return Reflect.ownKeys(target) },
+    getOwnPropertyDescriptor: (target, property) => { configTraps += 1; return Reflect.getOwnPropertyDescriptor(target, property) },
+  })
+  const configAudit = new InMemoryHashChainAuditLog()
+  const configQuota = new TestQuota()
+  const configRunner = new GovernedConnectorRunner(new ConnectorRegistry([new SyntheticImageTtiConnector(proxiedConfig)]), configAudit, configQuota, now)
+  await assert.rejects(() => configRunner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_CONFIGURATION_INVALID')
+  assert.equal(configTraps, 0)
+  assert.equal(configAudit.entries.length, 0)
+  assert.equal(configQuota.requests.length, 0)
+
+  let policyTraps = 0
+  const proxiedPolicy = new Proxy({ id: 'proxy-policy-d10', assess: () => ({ allowed: true }) }, {
+    getPrototypeOf: (target) => { policyTraps += 1; return Reflect.getPrototypeOf(target) },
+    ownKeys: (target) => { policyTraps += 1; return Reflect.ownKeys(target) },
+    getOwnPropertyDescriptor: (target, property) => { policyTraps += 1; return Reflect.getOwnPropertyDescriptor(target, property) },
+  })
+  const policyAudit = new InMemoryHashChainAuditLog()
+  const policyQuota = new TestQuota()
+  const policyRunner = new GovernedConnectorRunner(new ConnectorRegistry([new SyntheticImageTtiConnector({
+    liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300, familySafetyFilter: proxiedPolicy,
+  })]), policyAudit, policyQuota, now)
+  await assert.rejects(() => policyRunner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_CONFIGURATION_INVALID')
+  assert.equal(policyTraps, 0)
+  assert.equal(policyAudit.entries.length, 0)
+  assert.equal(policyQuota.requests.length, 0)
+
+  let callableTraps = 0
+  const proxiedCallable = new Proxy(() => ({ allowed: true }), {
+    getPrototypeOf: (target) => { callableTraps += 1; return Reflect.getPrototypeOf(target) },
+    apply: (target, receiver, argumentsList) => { callableTraps += 1; return Reflect.apply(target, receiver, argumentsList) },
+  })
+  const callableAudit = new InMemoryHashChainAuditLog()
+  const callableQuota = new TestQuota()
+  const callableRunner = new GovernedConnectorRunner(new ConnectorRegistry([new SyntheticImageTtiConnector({
+    liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300, familySafetyFilter: { id: 'proxy-callable-d10', assess: proxiedCallable },
+  })]), callableAudit, callableQuota, now)
+  await assert.rejects(() => callableRunner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_TTI_CONFIGURATION_INVALID')
+  assert.equal(callableTraps, 0)
+  assert.equal(callableAudit.entries.length, 0)
+  assert.equal(callableQuota.requests.length, 0)
+
+  let assessmentTraps = 0
+  const proxiedAssessment = new Proxy({ allowed: true }, {
+    getPrototypeOf: (target) => { assessmentTraps += 1; return Reflect.getPrototypeOf(target) },
+    ownKeys: (target) => { assessmentTraps += 1; return Reflect.ownKeys(target) },
+    getOwnPropertyDescriptor: (target, property) => { assessmentTraps += 1; return Reflect.getOwnPropertyDescriptor(target, property) },
+  })
+  const assessmentAudit = new InMemoryHashChainAuditLog()
+  const assessmentQuota = new TestQuota()
+  const assessmentRunner = new GovernedConnectorRunner(new ConnectorRegistry([new SyntheticImageTtiConnector({
+    liveMode: LIVE_DISABLED, maxCostCapCents: 20, maxItems: 2, ownerReviewTtlSeconds: 300, familySafetyFilter: { id: 'proxy-assessment-d10', assess: () => proxiedAssessment },
+  })]), assessmentAudit, assessmentQuota, now)
+  await assert.rejects(() => assessmentRunner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_FAMILY_SAFETY_FILTER_INVALID')
+  assert.equal(assessmentTraps, 0)
+  assert.equal(assessmentAudit.entries.length, 0)
+  assert.equal(assessmentQuota.requests.length, 0)
+})
+
 test('D2 synthetic outputs are immutable review snapshots before issuance', async () => {
   const connector = configuredConnector()
   const result = await connector.run({ prompt: 'A child-friendly solar system poster' }, context)

@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto'
+import { types as nodeUtilTypes } from 'node:util'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, FamilySafetyError, OwnerGateError } from './errors.js'
 import type { ImageCandidateIssuanceEvent, ImageCandidateIssuanceProof, ImageCandidateLedger } from './image-candidate-ledger.js'
 import type { ImageOwnerReviewDecisionEvent, ImageOwnerReviewDecisionProof, ImageOwnerReviewLedger } from './image-review-ledger.js'
@@ -35,6 +36,16 @@ const IMAGE_REVIEW_CONTEXT_KEYS = ['product', 'workspaceId', 'correlationId', 'n
 const IMAGE_TTI_CONFIG_KEYS = ['liveMode', 'maxCostCapCents', 'maxItems', 'ownerReviewTtlSeconds', 'familySafetyFilter'] as const
 const IMAGE_TTI_ENVIRONMENT_OVERRIDE_KEYS = ['familySafetyFilter'] as const
 const FAMILY_SAFETY_FILTER_KEYS = ['id', 'assess'] as const
+
+/**
+ * A proxy can make an otherwise ordinary data shape execute traps while it is
+ * being inspected. The optional policy boundary is intentionally data-only,
+ * so reject proxy-backed config, policy, callable, and assessment values
+ * before any reflective inspection or policy invocation.
+ */
+function proxyBacked(value: object): boolean {
+  try { return nodeUtilTypes.isProxy(value) } catch { return true }
+}
 
 export type ImageSize = 512 | 1024
 
@@ -231,6 +242,7 @@ function hasControlCharacter(value: string): boolean {
 function plainRecord(value: unknown): Record<string, unknown> | null {
   try {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    if (proxyBacked(value)) return null
     const prototype = Object.getPrototypeOf(value)
     if ((prototype !== Object.prototype && prototype !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
     const descriptors = Object.getOwnPropertyDescriptors(value)
@@ -246,7 +258,8 @@ function plainRecord(value: unknown): Record<string, unknown> | null {
  */
 function plainArray(value: unknown): unknown[] | null {
   try {
-    if (!Array.isArray(value) || (Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
+    if (!Array.isArray(value) || proxyBacked(value)) return null
+    if ((Object.getPrototypeOf(value) !== Array.prototype && Object.getPrototypeOf(value) !== null) || Object.getOwnPropertySymbols(value).length > 0) return null
     const descriptors = Object.getOwnPropertyDescriptors(value)
     const length = Object.getOwnPropertyDescriptor(value, 'length')?.value
     if (!Number.isSafeInteger(length) || length < 0 || Object.keys(descriptors).length !== length + 1) return null
@@ -263,7 +276,8 @@ function plainArray(value: unknown): unknown[] | null {
 /** Like plainRecord, but permits a sealed policy instance with own data fields. */
 function ownDataRecord(value: unknown): Record<string, unknown> | null {
   try {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getOwnPropertySymbols(value).length > 0) return null
+    if (!value || typeof value !== 'object' || Array.isArray(value) || proxyBacked(value)) return null
+    if (Object.getOwnPropertySymbols(value).length > 0) return null
     const descriptors = Object.getOwnPropertyDescriptors(value)
     if (Object.values(descriptors).some((descriptor) => descriptor.get || descriptor.set)) return null
     return value as Record<string, unknown>
@@ -292,7 +306,7 @@ function hasOnlyKeys(value: Record<string, unknown>, keys: readonly string[]): b
  */
 function synchronousPolicyAssess(value: unknown): ((...args: unknown[]) => unknown) | null {
   try {
-    return typeof value === 'function' && Object.getPrototypeOf(value) === Function.prototype
+    return typeof value === 'function' && !proxyBacked(value) && Object.getPrototypeOf(value) === Function.prototype
       ? value as (...args: unknown[]) => unknown
       : null
   } catch { return null }

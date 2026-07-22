@@ -316,6 +316,23 @@ existing closed `{ allowed, reason? }` data shape. This package adds no
 provider, network, credential, dispatch, GPU, migration, send, publication,
 or live-mode capability.
 
+## D10 — proxy-free family-policy boundary
+
+The image connector rejects Node-detectable `Proxy` wrappers around its public
+configuration, optional policy object, policy callable, policy assessment, and
+other image-owned plain data envelopes before it uses reflection to inspect
+them. This means a `getPrototypeOf`, `ownKeys`, property-descriptor, or
+function-application trap is not run while deciding whether a family-safety
+policy is acceptable.
+
+A proxied configuration, policy object, or callable closes as
+`IMAGE_TTI_CONFIGURATION_INVALID`; a proxied assessment returned by an
+otherwise accepted local policy closes as
+`IMAGE_FAMILY_SAFETY_FILTER_INVALID`. In both cases the governed runner has
+not appended an audit record or consumed quota. This is a local data-boundary
+hardening measure only: it adds no provider, network, credential, dispatch,
+GPU, migration, send, publication, or live-mode capability.
+
 ## Negative and edge-case guarantees
 
 - Prompt fields accept only the documented four keys. Empty text, a value over
@@ -336,8 +353,8 @@ or live-mode capability.
   policy is never able to override a baseline rejection and is not called for
   that rejected input. An injected filter must have own data `id`/`assess`
   properties, a bounded identifier, and may return only an own boolean
-  `allowed` plus a bounded uppercase reason code; inherited approval and
-  untrusted free-form reasons are rejected or replaced with
+  `allowed` plus a bounded uppercase reason code; inherited approval, proxy
+  wrappers, and untrusted free-form reasons are rejected or replaced with
   `FAMILY_SAFETY_FILTER_REJECTED`.
 - Connector configuration is an exact, runtime-private snapshot. Hidden
   credential/endpoint fields, symbols, accessors, inherited policy methods,

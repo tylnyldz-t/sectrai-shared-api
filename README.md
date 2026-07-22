@@ -80,6 +80,12 @@ is never invoked during preflight and cannot be accepted as an asynchronous
 policy adapter; all output remains synthetic,
 `LIVE_DISABLED`, owner-only, and publication-blocked.
 
+D10 rejects proxy-backed configuration, policy objects, policy callables, and
+policy assessments before reflection can execute a proxy trap. This prevents a
+policy seam from disguising behavior as ordinary data; rejection still occurs
+before audit or quota reservation, and output remains local SVG-only,
+`LIVE_DISABLED`, owner-only, and publication-blocked.
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:
