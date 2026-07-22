@@ -858,6 +858,13 @@ function reviewedHashBoundaryBinding(value: unknown): SyntheticDocumentReviewPac
   return { ...SYNTHETIC_DOCUMENT_HASH_BOUNDARY }
 }
 
+function reviewedPatternBoundaryBinding(value: unknown): SyntheticDocumentReviewPacket['patternBoundaryBinding'] {
+  if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PATTERN_BOUNDARY_BINDING')
+  exactKeys(value, ['validation', 'latePatchedRegExpMethodsAccepted', 'patternMatcherHooksAccepted'], 'UNEXPECTED_DOCUMENT_REVIEW_PATTERN_BOUNDARY_BINDING_FIELD')
+  if (value.validation !== SYNTHETIC_DOCUMENT_PATTERN_BOUNDARY.validation || value.latePatchedRegExpMethodsAccepted !== false || value.patternMatcherHooksAccepted !== false) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PATTERN_BOUNDARY_BINDING')
+  return { ...SYNTHETIC_DOCUMENT_PATTERN_BOUNDARY }
+}
+
 function reviewedEvidenceBinding(
   value: unknown,
   evidence: SyntheticDocumentProposal['evidence'],
@@ -941,7 +948,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const mesaEvidenceHandoff: SyntheticDocumentProposal['mesaEvidenceHandoff'] = { state: 'BLOCKED_PENDING_INDEPENDENT_OWNER_REVIEW', referenceOnly: true, rawContentIncluded: false, sent: false }
 
   if (!isRecord(proposal.reviewPacket)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET')
-  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'makerCheckerBinding', 'collectionBoundaryBinding', 'stringBoundaryBinding', 'timeBoundaryBinding', 'fieldRecordBoundaryBinding', 'proxyBoundaryBinding', 'dateArithmeticBoundaryBinding', 'integrityEncodingBoundaryBinding', 'intrinsicBoundaryBinding', 'hashBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
+  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'makerCheckerBinding', 'collectionBoundaryBinding', 'stringBoundaryBinding', 'timeBoundaryBinding', 'fieldRecordBoundaryBinding', 'proxyBoundaryBinding', 'dateArithmeticBoundaryBinding', 'integrityEncodingBoundaryBinding', 'intrinsicBoundaryBinding', 'hashBoundaryBinding', 'patternBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
   if (proposal.reviewPacket.version !== SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
   if (!isRecord(proposal.reviewPacket.scopeBinding)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_SCOPE')
   exactKeys(proposal.reviewPacket.scopeBinding, ['productDigest', 'workspaceDigest'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_SCOPE_FIELD')
@@ -962,6 +969,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const integrityEncodingBoundaryBinding = reviewedIntegrityEncodingBoundaryBinding(proposal.reviewPacket.integrityEncodingBoundaryBinding)
   const intrinsicBoundaryBinding = reviewedIntrinsicBoundaryBinding(proposal.reviewPacket.intrinsicBoundaryBinding)
   const hashBoundaryBinding = reviewedHashBoundaryBinding(proposal.reviewPacket.hashBoundaryBinding)
+  const patternBoundaryBinding = reviewedPatternBoundaryBinding(proposal.reviewPacket.patternBoundaryBinding)
   const evidenceBinding = reviewedEvidenceBinding(proposal.reviewPacket.evidenceBinding, evidence, governanceBinding, reviewedAt)
   const reviewWindow = reviewedReviewWindow(proposal.reviewPacket.reviewWindow, reviewedAt)
   validateReviewPacketTimeline(consentBinding, governanceBinding, evidenceBinding, reviewWindow)
@@ -982,6 +990,7 @@ function validateSyntheticDocumentProposalForReviewAt(
     integrityEncodingBoundaryBinding,
     intrinsicBoundaryBinding,
     hashBoundaryBinding,
+    patternBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -991,7 +1000,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   }
   if (proposal.reviewPacket.state !== reviewPacket.state || proposal.reviewPacket.rawDocumentContentIncluded !== false || proposal.reviewPacket.automaticApply !== false || proposal.reviewPacket.automaticPublication !== false || productDigest !== digest(scoped.product) || workspaceDigest !== digest(scoped.workspaceId)) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_SCOPE_MISMATCH')
   const normalized: SyntheticDocumentProposal = { proposalId, syntheticUri: proposal.syntheticUri, preparedBy, mode: LIVE_DISABLED, extraction: 'SYNTHETIC_PROPOSAL_ONLY_NOT_OCR', evidence, fields, fieldsDigest, ownerReview, reviewPacket, mesaEvidenceHandoff }
-  if (integrityDigest !== digest(canonicalJson(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.makerCheckerBinding, reviewPacket.collectionBoundaryBinding, reviewPacket.stringBoundaryBinding, reviewPacket.timeBoundaryBinding, reviewPacket.fieldRecordBoundaryBinding, reviewPacket.proxyBoundaryBinding, reviewPacket.dateArithmeticBoundaryBinding, reviewPacket.integrityEncodingBoundaryBinding, reviewPacket.intrinsicBoundaryBinding, reviewPacket.hashBoundaryBinding, reviewPacket.evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+  if (integrityDigest !== digest(canonicalJson(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, integrityEncodingBoundaryBinding, intrinsicBoundaryBinding, hashBoundaryBinding, patternBoundaryBinding, evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
   return normalized
 }
 
