@@ -1,6 +1,6 @@
 /** Connector input is always treated as data, never as executable instructions. */
-export type ConnectorKind = 'text-translation' | 'speech-translation' | 'document-analysis' | 'synthetic-camera' | 'external-data' | 'market' | 'media-generation'
-export type ConnectorAuthKind = 'owner-token' | 'oauth'
+export type ConnectorKind = 'text-translation' | 'speech-translation' | 'document-analysis' | 'synthetic-camera' | 'external-data' | 'market' | 'media-generation' | 'media-3d' | 'game-engine'
+export type ConnectorAuthKind = 'owner-token' | 'oauth' | 'owner-approval'
 
 export type IsolatedContent = {
   source: string

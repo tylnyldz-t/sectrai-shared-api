@@ -85,3 +85,13 @@ export class AuditEventError extends GclError {
 export class AuditChainError extends GclError {
   constructor(message = 'INVALID_AUDIT_CHAIN_HEAD') { super(message, 503, 'audit_chain_invalid') }
 }
+
+/** A review snapshot that cannot be verified is unavailable, never executable. */
+export class SyntheticReviewIntegrityError extends GclError {
+  constructor(message = 'SYNTHETIC_REVIEW_INTEGRITY_INVALID') { super(message, 503, 'synthetic_review_integrity_invalid') }
+}
+
+/** A connector result that cannot prove its synthetic review boundary is unavailable. */
+export class SyntheticResultIntegrityError extends GclError {
+  constructor(message = 'SYNTHETIC_RESULT_INTEGRITY_INVALID') { super(message, 503, 'synthetic_result_integrity_invalid') }
+}

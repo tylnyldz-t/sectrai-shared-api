@@ -1,6 +1,19 @@
 import type { PrismaClient } from '@prisma/client'
 import { ConnectorUnavailableError, QuotaError } from './errors.js'
+import {
+  GAME_ENGINE_DAILY_QUOTA_ENV,
+  JncInMemoryDailyConnectorQuota,
+  JncPrismaDailyConnectorQuota,
+  THREE_D_DAILY_QUOTA_ENV,
+  dailyQuotaFromEnvironment as jncDailyQuotaFromEnvironment,
+} from './jnc-quota.js'
 import type { ConnectorQuota } from './types.js'
+
+export {
+  GAME_ENGINE_DAILY_QUOTA_ENV,
+  JncInMemoryDailyConnectorQuota as InMemoryDailyConnectorQuota,
+  THREE_D_DAILY_QUOTA_ENV,
+}
 
 export const GCL_USAGE_MODULE_ID = 'gcl-usage'
 export const GCL_VISION_USAGE_MODULE_ID = 'gcl-vision-usage'
@@ -67,6 +80,11 @@ export class EnvironmentPrismaDailyConnectorQuota implements ConnectorQuota {
   constructor(private readonly prisma: PrismaClient, private readonly environment: NodeJS.ProcessEnv = process.env) {}
 
   async consume(request: Parameters<ConnectorQuota['consume']>[0]): Promise<void> {
+    const jnc = request.connectorId === 'text-to-3d' || request.connectorId === 'image-text-to-3d' || request.connectorId === 'game-engine'
+    if (jnc) {
+      const names = request.connectorId === 'game-engine' ? GAME_ENGINE_DAILY_QUOTA_ENV : THREE_D_DAILY_QUOTA_ENV
+      return new JncPrismaDailyConnectorQuota(this.prisma, jncDailyQuotaFromEnvironment(this.environment, names)).consume(request)
+    }
     const vision = request.connectorId === 'vision-document-field-extraction'
     const camera = request.connectorId === 'camera-observation'
     const image = request.connectorId === 'image-tti'

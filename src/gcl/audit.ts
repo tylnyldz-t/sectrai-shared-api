@@ -14,6 +14,11 @@ import {
   hashAuditEvent as imageHashAuditEvent,
   verifyAuditChain as verifyImageAuditChain,
 } from './image-audit.js'
+import {
+  JncPrismaHashChainAuditLog,
+  hashAuditEvent as jncHashAuditEvent,
+  verifiedAuditChainHead as verifiedJncAuditChainHead,
+} from './jnc-audit.js'
 import { validGclTenantContext } from './context.js'
 import { ConnectorUnavailableError } from './errors.js'
 import type { GclPersistence, GclRecordTransaction } from './persistence.js'
@@ -22,6 +27,7 @@ import type { TranslationArtifactRecord } from './translation-artifacts.js'
 import type { AuditAppendReceipt, AuditLog, ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
 
 export { appendVerifiedAuditEvent, sealAuditAppendEvent, validateAuditAppendReceipt, validateAuditChainHead }
+export { verifiedAuditChainHead } from './jnc-audit.js'
 
 export const GCL_AUDIT_MODULE_ID = 'gcl-audit'
 
@@ -691,23 +697,31 @@ function isImageAuditEvent(event: ConnectorAuditEvent): boolean {
     && typeof event.correlationId === 'string'
 }
 
+function isJncAuditEvent(event: ConnectorAuditEvent): boolean {
+  return (event.connectorId === 'text-to-3d' || event.connectorId === 'image-text-to-3d' || event.connectorId === 'game-engine')
+    && typeof event.actor === 'string'
+}
+
 /** Per product/workspace append-only SHA-256 chain. Translation text and audio
  * bytes are represented by hashes only; they never enter audit records. */
 export class PrismaHashChainAuditLog implements AuditLog {
   private readonly camera: CameraPrismaHashChainAuditLog
   private readonly market: MarketPrismaHashChainAuditLog
   private readonly image: ImagePrismaHashChainAuditLog
+  private readonly jnc: JncPrismaHashChainAuditLog
 
   constructor(private readonly prisma: PrismaClient) {
     this.camera = new CameraPrismaHashChainAuditLog(prisma)
     this.market = new MarketPrismaHashChainAuditLog(prisma)
     this.image = new ImagePrismaHashChainAuditLog(prisma as unknown as GclPersistence)
+    this.jnc = new JncPrismaHashChainAuditLog(prisma)
   }
 
   async append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
     if (isCameraAuditEvent(event)) return this.camera.append(event)
     if (isMarketAuditEvent(event)) return this.market.append(event)
     if (isImageAuditEvent(event)) return this.image.append(event)
+    if (isJncAuditEvent(event)) return this.jnc.append(event)
     return this.prisma.$transaction((transaction) => appendAuditEvent(transaction, event))
   }
 }
@@ -716,6 +730,7 @@ export class PrismaHashChainAuditLog implements AuditLog {
 export class InMemoryHashChainAuditLog implements AuditLog {
   readonly entries: AuditRecordValue[] = []
   readonly imageEntries: AuditRecordValue[] = []
+  readonly jncEntries: AuditRecordValue[] = []
 
   async append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
     if (isCameraAuditEvent(event)) {
@@ -739,6 +754,15 @@ export class InMemoryHashChainAuditLog implements AuditLog {
       this.imageEntries.push(entry)
       this.entries.push(entry)
       return { hash }
+    }
+    if (isJncAuditEvent(event)) {
+      const previousHash = verifiedJncAuditChainHead(this.jncEntries)
+      const hash = jncHashAuditEvent(event, previousHash)
+      const entry = { event, previousHash, hash }
+      verifiedJncAuditChainHead([...this.jncEntries, entry])
+      this.jncEntries.push(entry)
+      this.entries.push(entry)
+      return { hash, previousHash }
     }
     // The durable implementation replays every stored row inside its
     // transaction. Preserve that fail-closed property in the test seam too:

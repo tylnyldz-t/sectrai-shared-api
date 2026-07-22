@@ -4,6 +4,7 @@ import { productAuth, validProduct } from './auth.js'
 import { PrismaHashChainAuditLog } from './gcl/audit.js'
 import { ConnectorUnavailableError, GclError } from './gcl/errors.js'
 import { cameraConnectorFromEnvironment } from './gcl/camera.js'
+import { gameEngineConnectorFromEnvironment } from './gcl/game-engine.js'
 import { syntheticImageTtiConnectorFromEnvironment } from './gcl/image.js'
 import type { ImageRunConnectorRequest } from './gcl/image-registry.js'
 import { suggestExtensions, type Extension, type ExtensionInput } from './gcl/extensions.js'
@@ -12,6 +13,7 @@ import { EnvironmentPrismaDailyConnectorQuota } from './gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner, type LegacyRunConnectorRequest, type RunConnectorRequest } from './gcl/registry.js'
 import type { CameraRunConnectorRequest } from './gcl/camera-registry.js'
 import { translationConnectorsFromEnvironment } from './gcl/translation.js'
+import { syntheticThreeDConnectorsFromEnvironment } from './gcl/three-d.js'
 import { PrismaTranslationArtifactStore, type TranslationArtifactRecord } from './gcl/translation-artifacts.js'
 import type { AuditLog, ConnectorAuditEvent, ConnectorResult } from './gcl/types.js'
 import { serializeRecord } from './types.js'
@@ -107,7 +109,14 @@ export function createApp({ prisma = new PrismaClient(), now = () => new Date(),
   const app = express()
   const auditLog = gclAuditLog ?? new PrismaHashChainAuditLog(prisma)
   const governedRunner = gclRunner ?? new GovernedConnectorRunner(
-    new ConnectorRegistry([...translationConnectorsFromEnvironment(), cameraConnectorFromEnvironment(), syntheticMarketConnectorFromEnvironment(), syntheticImageTtiConnectorFromEnvironment()]),
+    new ConnectorRegistry([
+      ...translationConnectorsFromEnvironment(),
+      cameraConnectorFromEnvironment(),
+      syntheticMarketConnectorFromEnvironment(),
+      syntheticImageTtiConnectorFromEnvironment(),
+      ...syntheticThreeDConnectorsFromEnvironment(),
+      gameEngineConnectorFromEnvironment(),
+    ]),
     auditLog,
     new EnvironmentPrismaDailyConnectorQuota(prisma),
     now,

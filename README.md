@@ -93,6 +93,14 @@ is being checked; it is rejected before a new audit event or receipt is
 written. The module remains synthetic-only, `LIVE_DISABLED`, and publication
 blocked.
 
+## GM5/GM6 synthetic connectors
+
+The optional GCL routes return only frozen, LIVE_DISABLED GM5 3D proposals
+and GM6 game plans. JNC cards and Blender/Unreal handoffs are contract data
+with no transport or dispatch capability. Owner approval, scope/cap checks,
+daily quota, and isolated fail-closed audit chains remain runner-owned. See
+[the GM5/GM6 contract](docs/GM5_GM6_JNC_SYNTHETIC_CONTRACT.md).
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:
