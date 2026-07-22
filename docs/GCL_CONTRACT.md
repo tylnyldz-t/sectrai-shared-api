@@ -76,7 +76,10 @@ Every registered connector is governed by these rules:
   emitted synthetic market-plan branch before it crosses the caller boundary;
   a changed copy still requires canonical no-action review. D19 freezes the
   canonical review result and D3–D7 evidence branches before they cross their
-  caller boundary; any changed copy remains fail-closed and no-action.
+  caller boundary; any changed copy remains fail-closed and no-action. D20
+  freezes direct preflight plus direct/governed result and provenance egress,
+  including the final audit-enriched result wrapper; any changed copy remains
+  fail-closed and no-action.
   All resulting evidence remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
@@ -188,7 +191,8 @@ the selected synthetic connector binding and its scope tuple before the
 runner's asynchronous seams. D18 freezes the emitted synthetic plan's known
 data branches before it reaches a caller. D19 freezes the canonical review
 result and every D3–D7 emitted evidence branch before they reach a caller.
-D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19 are local mutation checks or
+D20 freezes direct preflight and direct/governed result/provenance branches
+after audit enrichment. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20 are local mutation checks or
 boundary hardening, never signatures, credentials, approval workflows, or
 execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).

@@ -252,6 +252,10 @@ export class GovernedConnectorRunner {
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
         scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(), detail: { requestedAuditHash: requestedAudit.hash },
     }))
-    return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
+    // D20: a connector can seal its own known branches, but the governed path
+    // appends the synthetic audit summary afterward. Preserve an immutable
+    // outer result/provenance boundary so this enrichment cannot reopen a
+    // market result to in-place action or provider-shaped mutation.
+    return Object.freeze({ ...result, provenance: Object.freeze({ ...result.provenance, auditHash: succeededAudit.hash }) })
   }
 }

@@ -574,6 +574,29 @@ D19 adds no provider code, credential handling, network call, route, storage,
 migration, queue, worker, quote, reservation, booking, publication, handoff,
 send, durable approval, signature, authorization, or execution capability.
 
+## D20 — immutable connector-result and preflight egress
+
+D20 seals the last public connector outputs. A direct `preflight()` caller
+receives a frozen canonical scalar request. A direct `run()` caller receives a
+frozen result, frozen plan, frozen provenance, and frozen
+`provenance.untrustedContent`; the governed runner keeps its final result and
+provenance frozen after it adds the local SHA-256 audit summary. The known
+market request is still the same frozen data-only value exposed through
+provenance.
+
+Consequently a caller cannot add a provider/credential-shaped field, replace
+the returned plan, relabel untrusted content as instructions, alter confidence,
+or attach an action-shaped provenance value in place. A caller may make a
+separate copy to represent transport or a new synthetic request. A
+provider-shaped request copy fails the existing exact parser, and an
+action-shaped plan copy fails canonical review; neither copy has authority.
+D20 is an object-integrity boundary, not a signature, durable store, approval,
+authorization, or execution permission.
+
+D20 adds no provider code, credential handling, network call, route, storage,
+migration, queue, worker, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution capability.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -638,7 +661,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -664,7 +687,10 @@ preflight/run functions, private configuration reference, and scope tuple
 before any runner audit or quota await. D18 freezes every emitted plan branch
 and the request value exposed as data-only provenance before a caller receives
 it. D19 freezes the canonical review result and its D3–D7 receipt, audit,
-trail, and manifest evidence branches before any caller can retain them.
+trail, and manifest evidence branches before any caller can retain them. D20
+freezes direct preflight output and direct/governed result and provenance
+egress, including data-only untrusted-content metadata after the governed
+audit summary is attached.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -724,7 +750,11 @@ results, D3 receipts, D4 audit events, D5 witnesses, D6 receipts, and D7
 manifests freeze their complete known branches. In-place action, provider,
 credential, or prototype mutation fails; a separately mutated manifest
 fails closed without adding a review event, quota item, or local terminal
-entry.
+entry. D20 additionally proves that direct preflight output and every known
+direct/governed result and provenance branch are frozen. In-place provider,
+instruction-handling, confidence, root-result, or action mutation fails; a
+provider-shaped request copy is rejected before a direct plan and an
+action-shaped plan copy fails canonical review without adding audit or quota.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -754,7 +784,8 @@ entry.
    market scope tuple before the runner's asynchronous seams; D18 freezes every
    emitted synthetic plan branch before it reaches a caller; D19 freezes every
    canonical review result and D3–D7 evidence branch before it reaches a
-   caller.
+   caller; D20 freezes direct preflight output and direct/governed
+   result/provenance output after audit enrichment.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.
@@ -771,8 +802,9 @@ entry.
    time before its plan construction; D17 fixes the selected synthetic
    connector binding before the runner's asynchronous seams; D18 freezes the
    emitted no-action plan before it reaches a caller; D19 freezes the review
-   result and its derived no-action evidence before they reach a caller.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19 evidence cannot quote, reserve, book,
+   result and its derived no-action evidence before they reach a caller; D20
+   freezes the direct/governed no-action preflight/result/provenance boundary.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -782,4 +814,4 @@ entry.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20.

@@ -1251,6 +1251,43 @@ test('D19 freezes canonical review outputs and D3-D7 evidence, requiring a separ
   assert.equal(setup.quota.requests.length, 1)
 })
 
+test('D20 freezes direct preflight and result/provenance egress, while changed copies remain synthetic and fail closed', async () => {
+  const setup = marketRunner()
+  const preflight = setup.connector.preflight(capacityQuote, context)
+  const direct = await setup.connector.run(capacityQuote, context)
+  const governed = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
+  const governedPlan = governed.data as SyntheticMarketPlan
+
+  for (const value of [
+    preflight,
+    direct, direct.data, direct.provenance, direct.provenance.untrustedContent, direct.provenance.untrustedContent.value,
+    governed, governedPlan, governed.provenance, governed.provenance.untrustedContent, governed.provenance.untrustedContent.value,
+  ]) assert.equal(Object.isFrozen(value), true)
+
+  assert.throws(() => { preflight.originCountry = 'FR' })
+  assert.throws(() => Object.defineProperty(preflight, 'providerCredential', { value: 'synthetic-not-accepted' }))
+  assert.throws(() => { direct.confidence = 1 })
+  assert.throws(() => { direct.provenance.untrustedContent.handling = 'instructions' as never })
+  assert.throws(() => { direct.data = structuredClone(direct.data) })
+  assert.throws(() => Object.defineProperty(governed.provenance, 'providerCredential', { value: 'synthetic-not-accepted' }))
+
+  const providerShapedCopy = { ...structuredClone(preflight), providerCredential: 'synthetic-not-accepted' }
+  await assert.rejects(
+    () => setup.connector.run(providerShapedCopy as never, context),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REQUEST',
+  )
+  const actionShapedPlanCopy = structuredClone(direct.data)
+  actionShapedPlanCopy.reviewPacket.execution.booking = true as never
+  assert.throws(
+    () => validateSyntheticMarketPlanForReview(actionShapedPlanCopy, { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_REVIEW_PLAN_INTEGRITY_INVALID',
+  )
+  assert.equal(direct.provenance.untrustedContent.handling, 'data-only')
+  assert.equal(governedPlan.sideEffects.booking, false)
+  assert.equal(setup.audit.entries.length, 2)
+  assert.equal(setup.quota.requests.length, 1)
+})
+
 test('D1 review packet reconstruction rejects injection, source/quote/action drift, scope drift, and whitespace identity bypasses before audit append', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
@@ -1673,6 +1710,7 @@ test('ADOS 10 controls are complete and explicitly prohibit egress and productio
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D17 fixes the selected synthetic connector binding/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D18 freezes the emitted synthetic plan/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D19 freezes review and derived evidence/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D20 freezes outward preflight\/result data/i)
   assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
   assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })

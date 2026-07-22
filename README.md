@@ -124,3 +124,8 @@ immutable egress boundary to canonical review results and all D3–D7 evidence:
 the review receipt, audit witness/event, audit-trail witness/receipt, and
 evidence manifest can neither acquire action/provider fields in place nor
 authorize an action. Any simulated change needs a separate fail-closed copy.
+D20 seals the direct preflight output and direct/governed connector result and
+provenance branches after audit enrichment, so in-place provider, instruction,
+confidence, or result replacement cannot change their data-only, no-action
+meaning. A changed copy still must pass the bounded parser and canonical
+review, and cannot authorize an action.
