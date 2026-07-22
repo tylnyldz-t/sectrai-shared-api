@@ -85,7 +85,7 @@ function snapshotAuditData(value: unknown, state: AuditSnapshotState, depth = 0)
     if (typeof key !== 'string' || !descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
       throw new TypeError('audit snapshot object field')
     }
-    Object.defineProperty(snapshot, key, { value: snapshotAuditData(descriptor.value, state, depth + 1), enumerable: true })
+    Object.defineProperty(snapshot, key, { value: snapshotAuditData(descriptor.value, state, depth + 1), enumerable: true, writable: true, configurable: true })
   }
   return snapshot
 }
@@ -294,10 +294,15 @@ export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string 
 }
 
 function auditValue(value: unknown): AuditRecordValue | null {
-  if (!isObject(value)) return null
-  const candidate = value as Partial<AuditRecordValue>
-  if (!hasExactlyKeys(candidate, ['event', 'previousHash', 'hash']) || !validAuditEvent(candidate.event) || typeof candidate.hash !== 'string' || !SHA256.test(candidate.hash) || (candidate.previousHash !== null && (typeof candidate.previousHash !== 'string' || !SHA256.test(candidate.previousHash)))) return null
-  return candidate as AuditRecordValue
+  try {
+    const snapshot = snapshotAuditData(value, { nodes: 0 })
+    if (!isObject(snapshot)) return null
+    const candidate = snapshot as Partial<AuditRecordValue>
+    if (!hasExactlyKeys(candidate, ['event', 'previousHash', 'hash']) || !validAuditEvent(candidate.event) || typeof candidate.hash !== 'string' || !SHA256.test(candidate.hash) || (candidate.previousHash !== null && (typeof candidate.previousHash !== 'string' || !SHA256.test(candidate.previousHash)))) return null
+    return candidate as AuditRecordValue
+  } catch {
+    return null
+  }
 }
 
 async function validatedAuditEntries(transaction: Prisma.TransactionClient, product: string, workspaceId: string): Promise<AuditRecordValue[]> {
@@ -580,17 +585,18 @@ export async function requireSuccessfulRunAudit(transaction: Prisma.TransactionC
  * unaudited translation decision when the audit write fails.
  */
 export async function appendAuditEvent(transaction: Prisma.TransactionClient, event: ConnectorAuditEvent): Promise<{ hash: string }> {
-  if (!validAuditEvent(event)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
-  const entries = await validatedAuditEntries(transaction, event.product, event.workspaceId)
-  if (!validAuditTransition(entries, event)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
+  const snapshot = snapshotAuditEvent(event)
+  if (!snapshot || !validAuditEvent(snapshot)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
+  const entries = await validatedAuditEntries(transaction, snapshot.product, snapshot.workspaceId)
+  if (!validAuditTransition(entries, snapshot)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
   const previousHash = entries.at(-1)?.hash ?? null
-  const hash = hashAuditEvent(event, previousHash)
+  const hash = hashAuditEvent(snapshot, previousHash)
   await transaction.record.create({
     data: {
-      product: event.product,
-      workspaceId: event.workspaceId,
+      product: snapshot.product,
+      workspaceId: snapshot.workspaceId,
       moduleId: GCL_AUDIT_MODULE_ID,
-      values: { event, previousHash, hash } as Prisma.InputJsonValue,
+      values: { event: snapshot, previousHash, hash } as Prisma.InputJsonValue,
       status: 'append-only',
       createdBy: 'gcl-audit',
     },
@@ -628,13 +634,13 @@ export class InMemoryHashChainAuditLog implements AuditLog {
       }
       previousHash = entry.hash
     }
-    if (!validAuditEvent(event)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
-    if (!validAuditTransition(this.entries, event)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
-    const hash = hashAuditEvent(event, previousHash)
-    // Event objects are caller-owned. A clone prevents a post-append mutation
-    // of the caller's object from retroactively changing the in-memory chain.
-    const storedEvent = JSON.parse(JSON.stringify(event)) as ConnectorAuditEvent
-    this.entries.push({ event: storedEvent, previousHash, hash })
+    const snapshot = snapshotAuditEvent(event)
+    if (!snapshot || !validAuditEvent(snapshot)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
+    if (!validAuditTransition(this.entries, snapshot)) throw new ConnectorUnavailableError('GCL_AUDIT_EVENT_INVALID')
+    const hash = hashAuditEvent(snapshot, previousHash)
+    // The private data snapshot—not a JSON stringify pass over caller-owned
+    // values—is the exact event both hashed and stored by this test seam.
+    this.entries.push({ event: snapshot, previousHash, hash })
     return { hash }
   }
 }

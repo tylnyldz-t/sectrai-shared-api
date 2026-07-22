@@ -74,6 +74,7 @@ or `*_LIVE_ENABLED` setting.
 - Hash-valid durable lifecycles must also be temporally consistent and within the review TTL; backdated or post-expiry audit decisions fail closed.
 - Audit records bind each connector to its one canonical scope and exactly one requested artifact; a hash-valid scope or item-count forgery invalidates the chain.
 - Audit history is transition-verified: each request has one exact terminal outcome, creation binds to that success, and only one linked, distinct-checker decision can follow.
+- Audit events are copied once from a bounded ordinary data envelope before validation, hashing, or persistence. Accessors, hidden/symbol fields, custom prototypes, non-finite values, and throwing proxies fail closed; a stateful proxy cannot alter the captured event or inject raw fixture content after validation.
 - Only explicit request-validation and GCL errors are exposed by HTTP. Unexpected adapter, storage, or runtime exceptions return stable `INTERNAL_ERROR`, never raw synthetic fixture content, credentials, or provider detail.
 - Connector governance configuration is captured once from a canonical, allowlisted data-only envelope. Later caller mutation, getters/Proxies, hidden or inherited fields, and undeclared provider-like settings fail closed or cannot alter a governed run.
 

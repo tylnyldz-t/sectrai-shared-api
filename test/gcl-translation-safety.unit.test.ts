@@ -317,6 +317,31 @@ test('durable audit append fails closed when an existing tenant/workspace chain 
   assert.equal(createCalls, 0)
 })
 
+test('durable audit treats a hostile stored envelope as an invalid chain without writing another row', async () => {
+  const rawFixture = 'stored proxy detail must not escape or be persisted'
+  const event: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',
+    scopes: ['translation:text'], costCapCents: 25, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+  let createCalls = 0
+  const hostileStoredValue = new Proxy({}, {
+    ownKeys(): never { throw new Error(rawFixture) },
+  })
+  const prisma = {
+    $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({
+      $executeRaw: async () => 1,
+      record: {
+        findMany: async () => [{ values: hostileStoredValue }],
+        create: async () => { createCalls += 1; return {} },
+      },
+    }),
+  }
+  const audit = new PrismaHashChainAuditLog(prisma as never)
+  await assert.rejects(() => audit.append(event), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
+  assert.equal(createCalls, 0)
+  assert.equal(JSON.stringify(hostileStoredValue).includes(rawFixture), false)
+})
+
 test('durable audit rejects a hash-valid prior row that adds raw fixture fields outside the metadata schema', async () => {
   const event: ConnectorAuditEvent = {
     type: 'connector.run.requested', connectorId: 'translation-text-synthetic', product, workspaceId, actor: 'maker@example.test',

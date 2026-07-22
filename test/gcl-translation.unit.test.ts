@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { hashAuditEvent, InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
+import { hashAuditEvent, InMemoryHashChainAuditLog, PrismaHashChainAuditLog } from '../src/gcl/audit.js'
 import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorContextError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, QuotaError, ScopeError } from '../src/gcl/errors.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import { InMemoryTranslationArtifactStore, PrismaTranslationArtifactStore, translationArtifactReviewDigest } from '../src/gcl/translation-artifacts.js'
@@ -166,6 +166,66 @@ test('in-memory audit snapshots caller events and rejects a manually corrupted p
     scopes: ['translation:text'], costCapCents: context.costCapCents, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
   }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
   assert.equal(audit.entries.length, 1)
+})
+
+test('audit boundaries reject hostile envelopes and persist one safe snapshot of a stateful proxy', async () => {
+  const rawFixture = 'raw synthetic fixture must not enter audit storage'
+  const requested: ConnectorAuditEvent = {
+    type: 'connector.run.requested', connectorId: TEXT_TRANSLATION_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
+    scopes: ['translation:text'], costCapCents: context.costCapCents, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  }
+
+  let accessorReads = 0
+  const accessorBacked = { ...requested } as Record<string, unknown>
+  Object.defineProperty(accessorBacked, 'detail', {
+    enumerable: true,
+    get(): never {
+      accessorReads += 1
+      throw new Error(rawFixture)
+    },
+  })
+  const rejected = new InMemoryHashChainAuditLog()
+  await assert.rejects(() => rejected.append(accessorBacked as ConnectorAuditEvent), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_EVENT_INVALID')
+  assert.equal(accessorReads, 0)
+  assert.equal(rejected.entries.length, 0)
+  assert.equal(JSON.stringify(rejected.entries).includes(rawFixture), false)
+
+  const statefulDetail = (counter: { calls: number }): Record<string, unknown> => new Proxy({}, {
+    ownKeys(): ArrayLike<string | symbol> {
+      counter.calls += 1
+      // A later view would expose raw content, but the audit boundary may read
+      // this untrusted envelope only once and must persist its first snapshot.
+      return counter.calls === 1 ? [] : ['sourceText']
+    },
+    getOwnPropertyDescriptor(_target, key): PropertyDescriptor | undefined {
+      return key === 'sourceText' ? { value: rawFixture, enumerable: true, configurable: true } : undefined
+    },
+  })
+  const inMemoryProxyCalls = { calls: 0 }
+  const inMemory = new InMemoryHashChainAuditLog()
+  await inMemory.append({ ...requested, detail: statefulDetail(inMemoryProxyCalls) })
+  assert.equal(inMemoryProxyCalls.calls, 1)
+  assert.deepEqual(inMemory.entries[0]?.event.detail, {})
+  assert.equal(JSON.stringify(inMemory.entries).includes(rawFixture), false)
+
+  let persistedValues: unknown
+  const durable = new PrismaHashChainAuditLog({
+    $transaction: async (operation: (transaction: unknown) => Promise<unknown>) => operation({
+      $executeRaw: async () => 1,
+      record: {
+        findMany: async () => [],
+        create: async (argument: { data: { values: unknown } }) => {
+          persistedValues = argument.data.values
+          return {}
+        },
+      },
+    }),
+  } as never)
+  const durableProxyCalls = { calls: 0 }
+  await durable.append({ ...requested, detail: statefulDetail(durableProxyCalls) })
+  assert.equal(durableProxyCalls.calls, 1)
+  assert.deepEqual((persistedValues as { event: ConnectorAuditEvent }).event.detail, {})
+  assert.equal(JSON.stringify(persistedValues).includes(rawFixture), false)
 })
 
 test('governed text translation returns only the owner-supplied fixture, reserves quota, and chains audit hashes without raw text', async () => {

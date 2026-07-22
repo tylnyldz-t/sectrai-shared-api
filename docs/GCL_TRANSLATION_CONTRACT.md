@@ -294,12 +294,18 @@ fixture text or audio and does not add an execution or publication path.
 The connector derives `reviewExpiresAt` from its synthetic run clock; it is not
 caller-controlled. A checker has to resubmit a newly generated synthetic
 fixture after expiry. Before adding an audit entry, the durable audit writer
-revalidates the whole product/workspace SHA-256 chain and the exact,
-metadata-only audit-event schema. A hash-valid row with unknown fields (for
-example source text, translated text, transcript, audio, provider output, or a
-raw exception) is still invalid: it returns `GCL_AUDIT_CHAIN_INVALID` and no
-new entry is appended. Run failures retain only a stable error code, never an
-exception message.
+captures the caller event once as a bounded, ordinary JSON-data snapshot, then
+uses that same snapshot for schema validation, hashing, and persistence. An
+accessor, hidden or symbol field, custom prototype, non-finite value, oversized
+envelope, or throwing proxy is rejected as `GCL_AUDIT_EVENT_INVALID` before a
+hash or row is written. A proxy that can later present different data cannot
+alter the captured event or introduce raw fixture data after validation. The
+writer also revalidates the whole product/workspace SHA-256 chain and the
+exact, metadata-only audit-event schema. A hash-valid row with unknown fields
+(for example source text, translated text, transcript, audio, provider output,
+or a raw exception) is still invalid: it returns `GCL_AUDIT_CHAIN_INVALID` and
+no new entry is appended. Run failures retain only a stable error code, never
+an exception message.
 
 The HTTP error boundary follows the same data-minimization rule. It exposes
 only deliberate request-validation identifiers and `GclError` codes. Any
