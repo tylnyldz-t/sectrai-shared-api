@@ -5,7 +5,7 @@ import { AuditChainError, AuditEventError, AuditReceiptError, CameraConsentError
 import { ownerTokenMatches } from '../src/gcl/owner.js'
 import { cameraDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
-import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
+import type { AuditAppendReceipt, AuditLog, Connector, ConnectorAuditEvent, ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
 import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION, CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, CAMERA_REVIEW_AUDIT_WITNESS_VERSION, CAMERA_REVIEW_EVIDENCE_MANIFEST_VERSION, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, createCameraReviewAuditTrailReceipt, createCameraReviewEvidenceManifest, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewAuditTrailReceipt, validateCameraReviewAuditTrailWitness, validateCameraReviewAuditWitness, validateCameraReviewEvidenceManifest, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
@@ -35,9 +35,10 @@ class ReceiptAuditLog implements AuditLog {
 
   constructor(private readonly receipts: readonly unknown[]) {}
 
-  append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
+  append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
     this.events.push(event)
-    return Promise.resolve(this.receipts[this.events.length - 1] as { hash: string })
+    const candidate = this.receipts[this.events.length - 1]
+    return Promise.resolve((typeof candidate === 'function' ? candidate(event) : candidate) as AuditAppendReceipt)
   }
 }
 
@@ -45,7 +46,7 @@ class MutationAttemptAuditLog implements AuditLog {
   readonly entries: Array<{ event: ConnectorAuditEvent; previousHash: string | null; hash: string }> = []
   mutationRejections = 0
 
-  async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
+  async append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
     try { (event.scopes as string[])[0] = 'camera:mutate' } catch { this.mutationRejections += 1 }
     try { event.detail.snapshot = 'data:image/png;base64,not-accepted' } catch { this.mutationRejections += 1 }
     try { Object.defineProperty(event, 'connectorId', { value: 'another-connector' }) } catch { this.mutationRejections += 1 }
@@ -53,7 +54,7 @@ class MutationAttemptAuditLog implements AuditLog {
     const entry = this.entries.at(-1)
     assert.ok(entry)
     entry.hash = hashAuditEvent(event, entry.previousHash)
-    return { hash: entry.hash }
+    return { hash: entry.hash, previousHash: entry.previousHash }
   }
 }
 
@@ -1041,7 +1042,7 @@ test('D15 seals audit events before append: shaped or cyclic events never reach 
   const audit: AuditLog = {
     async append(event) {
       received.push(event)
-      return { hash: 'd'.repeat(64) }
+      return { hash: 'd'.repeat(64), previousHash: null }
     },
   }
 
@@ -1149,11 +1150,11 @@ test('D16 verifies only an exact immediate audit head and prevents a malformed d
   assert.equal(writes, 0)
 })
 
-test('D14 rejects malformed requested audit receipts before quota or adapter execution without reading shaped fields', async () => {
+test('D14/D17 reject malformed requested audit receipts before quota or adapter execution without reading shaped fields', async () => {
   const validHash = 'a'.repeat(64)
   let proxyTrapRead = false
-  const proxyReceipt = new Proxy({ hash: validHash }, {
-    // Promise resolution probes `then`; D14 must reject all later access.
+  const proxyReceipt = new Proxy({ hash: validHash, previousHash: null }, {
+    // Promise resolution probes `then`; D14/D17 must reject all later access.
     get(_target, property) {
       if (property === 'then') return undefined
       proxyTrapRead = true
@@ -1166,18 +1167,31 @@ test('D14 rejects malformed requested audit receipts before quota or adapter exe
     enumerable: true,
     get() { accessorRead = true; throw new Error('AUDIT_RECEIPT_ACCESSOR_MUST_NOT_RUN') },
   })
+  Object.defineProperty(accessorReceipt, 'previousHash', { value: null, enumerable: true })
+  let previousAccessorRead = false
+  const accessorPreviousReceipt = { hash: validHash }
+  Object.defineProperty(accessorPreviousReceipt, 'previousHash', {
+    enumerable: true,
+    get() { previousAccessorRead = true; throw new Error('AUDIT_PREDECESSOR_ACCESSOR_MUST_NOT_RUN') },
+  })
   const hiddenReceipt = {}
   Object.defineProperty(hiddenReceipt, 'hash', { value: validHash, enumerable: false })
-  const symbolReceipt = { hash: validHash }
+  Object.defineProperty(hiddenReceipt, 'previousHash', { value: null, enumerable: true })
+  const hiddenPreviousReceipt = { hash: validHash }
+  Object.defineProperty(hiddenPreviousReceipt, 'previousHash', { value: null, enumerable: false })
+  const symbolReceipt = { hash: validHash, previousHash: null }
   Object.defineProperty(symbolReceipt, Symbol('raw-media'), { value: 'data:image/png;base64,not-accepted', enumerable: true })
 
   for (const receipt of [
     undefined,
-    { hash: validHash, extra: 'not-accepted' },
-    { hash: validHash.toUpperCase() },
+    { hash: validHash, previousHash: null, extra: 'not-accepted' },
+    { hash: validHash.toUpperCase(), previousHash: null },
+    { hash: validHash, previousHash: 'B'.repeat(64) },
     hiddenReceipt,
+    hiddenPreviousReceipt,
     symbolReceipt,
     accessorReceipt,
+    accessorPreviousReceipt,
     proxyReceipt,
   ]) {
     const quota = new TestQuota()
@@ -1201,11 +1215,11 @@ test('D14 rejects malformed requested audit receipts before quota or adapter exe
     assert.equal(adapterRuns, 0)
   }
   assert.equal(accessorRead, false)
+  assert.equal(previousAccessorRead, false)
   assert.equal(proxyTrapRead, false)
 })
 
 test('D14 returns no result or review decision after an invalid succeeding audit receipt and emits no follow-up transition', async () => {
-  const validHash = 'b'.repeat(64)
   const quota = new TestQuota()
   let adapterRuns = 0
   const valid = await enabledConnector().run(loadingDockInput, context)
@@ -1216,7 +1230,10 @@ test('D14 returns no result or review decision after an invalid succeeding audit
     scopes: ['camera:observe'],
     async run() { adapterRuns += 1; return valid },
   }
-  const runAudit = new ReceiptAuditLog([{ hash: validHash }, { hash: 'not-a-sha256-receipt' }])
+  const runAudit = new ReceiptAuditLog([
+    (event: ConnectorAuditEvent) => ({ hash: hashAuditEvent(event, null), previousHash: null }),
+    { hash: 'not-a-sha256-receipt', previousHash: null },
+  ])
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), runAudit, quota, now)
   await assert.rejects(
     () => runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
@@ -1236,6 +1253,60 @@ test('D14 returns no result or review decision after an invalid succeeding audit
   assert.deepEqual(reviewAudit.events.map((event) => event.type), ['connector.camera.owner_reviewed'])
   assert.equal(setup.audit.entries.length, 2)
   assert.equal((setup.quota as TestQuota).requests.length, 1)
+})
+
+test('D17 binds an audit receipt to its sealed event and pins the governed requested predecessor', async () => {
+  const valid = await enabledConnector().run(loadingDockInput, context)
+  const connector: Connector = {
+    id: CAMERA_CONNECTOR_ID,
+    kind: 'synthetic-camera',
+    authKind: 'owner-token',
+    scopes: ['camera:observe'],
+    async run() { return valid },
+  }
+
+  for (const receipt of [
+    { hash: 'a'.repeat(64), previousHash: null },
+    (event: ConnectorAuditEvent) => ({ hash: hashAuditEvent(event, null), previousHash: 'b'.repeat(64) }),
+  ]) {
+    const quota = new TestQuota()
+    const audit = new ReceiptAuditLog([receipt])
+    const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+    await assert.rejects(
+      () => runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
+      (error: unknown) => error instanceof AuditReceiptError && error.message === 'INVALID_AUDIT_APPEND_RECEIPT',
+    )
+    assert.deepEqual(audit.events.map((event) => event.type), ['connector.run.requested'])
+    assert.equal(quota.requests.length, 0)
+  }
+
+  const quota = new TestQuota()
+  const audit = new ReceiptAuditLog([
+    (event: ConnectorAuditEvent) => ({ hash: hashAuditEvent(event, null), previousHash: null }),
+    (event: ConnectorAuditEvent) => ({ hash: hashAuditEvent(event, null), previousHash: null }),
+  ])
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+  await assert.rejects(
+    () => runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
+    (error: unknown) => error instanceof AuditReceiptError && error.message === 'INVALID_AUDIT_APPEND_RECEIPT',
+  )
+  assert.deepEqual(audit.events.map((event) => event.type), ['connector.run.requested', 'connector.run.succeeded'])
+  assert.equal(quota.requests.length, 1)
+
+  const reviewSetup = runnerFor()
+  const sourceResult = await reviewSetup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
+  const reviewAudit = new ReceiptAuditLog([
+    (event: ConnectorAuditEvent) => ({
+      hash: hashAuditEvent({ ...event, correlationId: 'another-synthetic-correlation' }, null),
+      previousHash: null,
+    }),
+  ])
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(sourceResult.data, 'approved', true, 'reviewer@example.test', reviewAudit, context),
+    (error: unknown) => error instanceof AuditReceiptError && error.message === 'INVALID_AUDIT_APPEND_RECEIPT',
+  )
+  assert.deepEqual(reviewAudit.events.map((event) => event.type), ['connector.camera.owner_reviewed'])
+  assert.equal(reviewSetup.audit.entries.length, 2)
 })
 
 test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
@@ -1300,8 +1371,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14 audit append receipts, D15 audit events, and D16 durable audit heads/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14.*D15.*D16/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14\/D17 audit append receipts and link witnesses, D15 audit events, and D16 durable audit heads/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14\/D17.*D15.*D16/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 

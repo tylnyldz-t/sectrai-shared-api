@@ -311,9 +311,10 @@ delivery instruction.
 ## D14 — audit-append receipt boundary
 
 Every governed-run and independent-review audit append must return exactly one
-ordinary own-data receipt: `{ hash }`, where `hash` is a lower-case 64-character
-SHA-256 hex value. The receipt is copied before its value can become the next
-event's predecessor link, `requestedAuditHash`, review evidence, or returned
+ordinary own-data receipt. Its fixed D14/D17 shape is `{ hash, previousHash }`:
+`hash` is a lower-case 64-character SHA-256 hex value and `previousHash` is the
+same form or `null`. The receipt is copied before either value can become an
+event predecessor link, `requestedAuditHash`, review evidence, or returned
 result provenance. Missing, extra, hidden, symbol, inherited, accessor, Proxy,
 non-string, upper-case, or malformed hash values fail closed without evaluating
 an accessor or Proxy trap.
@@ -379,21 +380,46 @@ credential, authorization, handoff, notification, publication, or action
 capability. It adds no schema, migration, route, provider/time-service call,
 camera/device/media connection, credential interface, or production write.
 
+## D17 — audit-append link witness
+
+After D14 has parsed the exact receipt and D15 has sealed the event, D17
+requires `hash` to equal the canonical SHA-256 hash of that sealed event plus
+the receipt's `previousHash`. It returns a frozen local copy only after that
+comparison. A receipt with a valid-looking hash from another event, a changed
+predecessor, or a self-inconsistent link fails with
+`INVALID_AUDIT_APPEND_RECEIPT`.
+
+The governed runner already knows the accepted `requested` receipt when it
+appends its `succeeded` or `failed` event. D17 pins each of those later receipt
+predecessors to that exact requested hash, so a collaborator cannot bind the
+completion to another chain segment while leaving a matching
+`requestedAuditHash` in event detail. A bad initial receipt stops before quota
+reservation and adapter execution; a bad later receipt returns no result and
+creates no synthetic follow-up transition.
+
+D17 does not read storage, prove an append was durable, prove an unknown
+predecessor exists, scan history, authenticate an actor, or turn an unkeyed
+digest into a signature, credential, authorization, handoff, notification,
+publication, or action capability. D16 remains the separate check for the one
+durable Prisma head that the existing append already reads. D17 adds no schema,
+migration, route, provider/time-service call, camera/media/device connection,
+credential interface, or production write.
+
 ## Audit and storage boundary
 
-The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1–D16 add no migration and no new persistence model.
+The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1–D17 add no migration and no new persistence model.
 
 ## ADOS 10-rule conformance
 
 1. Product/workspace digest binding keeps each run and review packet scoped to one data plane.
 2. Only minimized built-in synthetic fixture metadata is accepted.
 3. The front door default-denies absent configuration; `LIVE_DISABLED` is permanent.
-4. Unknown, hidden, symbol, Proxy, and accessor-shaped input, evidence, D8 review context, D10 execution context/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result/provenance control plane, D14 audit append receipts, D15 audit events, and D16 durable audit heads—plus media, device identifiers, personal identity, and biometric inference—are excluded.
+4. Unknown, hidden, symbol, Proxy, and accessor-shaped input, evidence, D8 review context, D10 execution context/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result/provenance control plane, D14/D17 audit append receipts and link witnesses, D15 audit events, and D16 durable audit heads—plus media, device identifiers, personal identity, and biometric inference—are excluded.
 5. Purpose-bound synthetic KVKK consent must match the fixture.
 6. Owner approval plus maker–checker separation are required; D1 rejects the original maker as reviewer and D2 minimizes that review evidence.
 7. The code has no device SDK, transport, network client, credential, or provider interface.
-8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, D6/D7 only minimize and recheck evidence derived from it, D8/D9 protect review context and its local clock, D10 rejects shaped execution context or an invalid provenance clock before a fixture result, D11 freezes one safe runner timestamp, D12 seals direct run envelopes before any collaborator is used, D13 seals the adapter result/provenance control plane before a success audit, D14 seals every audit append receipt before its hash can bind another event or result, D15 seals every event before the audit collaborator can mutate it, and D16 verifies the existing durable head before a successor can bind to it.
-9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate evidence, D8/D9 validate review context and its local clock, D10 validates only synthetic provenance, D11 validates only the local runner timestamp, D12 validates only the request envelope, D13 validates only the fixed synthetic/no-egress result control plane, D14 validates the audit receipt, D15 freezes the review event without evaluating accessors or Proxy traps, and D16 rejects a malformed durable head without creating a follow-up transition.
+8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, D6/D7 only minimize and recheck evidence derived from it, D8/D9 protect review context and its local clock, D10 rejects shaped execution context or an invalid provenance clock before a fixture result, D11 freezes one safe runner timestamp, D12 seals direct run envelopes before any collaborator is used, D13 seals the adapter result/provenance control plane before a success audit, D14 seals the exact append receipt shape, D15 seals every event before the audit collaborator can mutate it, D16 verifies the existing durable head before a successor can bind to it, and D17 re-hashes each sealed append event while pinning the runner-known requested predecessor.
+9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate evidence, D8/D9 validate review context and its local clock, D10 validates only synthetic provenance, D11 validates only the local runner timestamp, D12 validates only the request envelope, D13 validates only the fixed synthetic/no-egress result control plane, D14/D17 validate and bind the audit receipt, D15 freezes the review event without evaluating accessors or Proxy traps, and D16 rejects a malformed durable head without creating a follow-up transition.
 10. This branch contains no live launch, production migration, main/prod write, or camera hardware path.
 
 ## Explicit non-goals
