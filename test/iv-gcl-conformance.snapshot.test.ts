@@ -5,7 +5,7 @@ import { posix as path } from 'node:path'
 import test from 'node:test'
 import ts from 'typescript'
 
-type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16' | 'D17' | 'D18' | 'D19' | 'D20' | 'D21'
+type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16' | 'D17' | 'D18' | 'D19' | 'D20' | 'D21' | 'D22'
 
 type PinnedClosureBlob = {
   path: string
@@ -225,6 +225,14 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D21', name: 'Translation', revision: '702b63f', parentRevision: '2443f1d', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: 'c0bf86902ed32af1b65352ad4fc6f891916db859', registryBlob: '28201ca26a3885b16b7658145d85be09e2dae60b', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: false, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: 'cf58248599246a754c9af6049b45b1534a363447' }, { path: 'src/gcl/context.ts', blob: '5a8e210cffd41158685d8598ca96f138f0b036ac' }, { path: 'src/gcl/errors.ts', blob: '3ab9868a21d80e7eecb2607a0aef7e9c9d554dd1' }, { path: 'src/gcl/translation-artifacts.ts', blob: '94f335e26920b64e979b069df71f98e49b3314ea' }] },
   { batch: 'D21', name: 'Language education', revision: '13b8963', parentRevision: 'a48bd08', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: 'ced2bb38ddc6e02f11d104eb93a1d69d5088ce49', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: '3a5b036186c03ac36d6b74ebaf8b2237ed9fc9db' }] },
   { batch: 'D21', name: 'Camera', revision: 'd896224', parentRevision: '79f758c', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '026b562153205103028e0eb36ca12350869f9995', registryBlob: 'd2987b1c4dc1bd17114834f7c4bcb49c6474ccc9', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/audit.ts', blob: '988edeffb4f2895df9ffe4c114f36e99892003a3' }, { path: 'src/gcl/errors.ts', blob: 'd91f8939d3d63d76aa016b1957e717a740fce5f4' }, { path: 'src/gcl/types.ts', blob: 'ece0b7cecbc4815b812f0d91aaca4d4debe605b5' }] },
+  { batch: 'D22', name: 'RA OCR', revision: '81ab8a1', parentRevision: '361c978', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: '5a3292e8ba8fd2756957bbca543c430cd6e08cc7', registryBlob: '2407ff38734546832bd9a8e2e97fae488198e7f9', hardDeniesLiveOptIn: false, quotaFailureAudited: false, strictOwnerApproval: false, proxyArrayIngressSafe: true },
+  { batch: 'D22', name: 'RA image', revision: 'd2d1407', parentRevision: 'a68c433', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: '515684b930b7493d92dad1b1e5afb2243c3e7925', registryBlob: 'adebd1bde90230779827b9ee05d1d5f5507eda83', hardDeniesLiveOptIn: false, quotaFailureAudited: true, strictOwnerApproval: true },
+  { batch: 'D22', name: 'RA 3D/game', revision: '41108f3', parentRevision: 'd739681', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: 'eccfc749f420702b6c7f206f72d54241a71ce05d', registryBlob: '0dcac2afddd3e6f133481f8b3735aa7ef8d2ffbc', hardDeniesLiveOptIn: false, quotaFailureAudited: false, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/result-boundary.ts', blob: 'cf6127caa4fb7549a73f92acdff69e6d7d7cf172' }], pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: '2d105e0df207f695a6dc230a3cf59a58e8aab296' }] },
+  { batch: 'D22', name: 'RA market', revision: '1b79236', parentRevision: '112b3d8', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: '5bc04d70328e1c4e519839b7b35ae3077b263c83', registryBlob: '43c6e166fb53af3607b811414a420ab1a4230cb2', hardDeniesLiveOptIn: true, quotaFailureAudited: false, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: 'af015f263316247e31302ae615ae02cef03d06f0' }] },
+  { batch: 'D22', name: 'RFID', revision: '0b707c7', parentRevision: 'f77a7f6', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: '2420ab9384d05f09425e61ef7de1e407c8609819', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true, strictOwnerApproval: false },
+  { batch: 'D22', name: 'Translation', revision: '9b1a446', parentRevision: '702b63f', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: 'c0bf86902ed32af1b65352ad4fc6f891916db859', registryBlob: '28201ca26a3885b16b7658145d85be09e2dae60b', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: false, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: '56bf15abe179f9e30b2f7ea769f498acbd8baffe' }, { path: 'src/gcl/context.ts', blob: '5a8e210cffd41158685d8598ca96f138f0b036ac' }, { path: 'src/gcl/errors.ts', blob: '3ab9868a21d80e7eecb2607a0aef7e9c9d554dd1' }, { path: 'src/gcl/translation-artifacts.ts', blob: '94f335e26920b64e979b069df71f98e49b3314ea' }] },
+  { batch: 'D22', name: 'Language education', revision: 'f6e3e43', parentRevision: '13b8963', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: 'ced2bb38ddc6e02f11d104eb93a1d69d5088ce49', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: '5a1b584fc0de39b98166e7a4c871dc003e62b622' }] },
+  { batch: 'D22', name: 'Camera', revision: '8f724ee', parentRevision: 'd896224', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: 'bee7e7559412722a28b317ad1ae1e3e2af5594b4', registryBlob: 'd2987b1c4dc1bd17114834f7c4bcb49c6474ccc9', hardDeniesLiveOptIn: true, quotaFailureAudited: true, strictOwnerApproval: true, pinnedClosureBlobs: [{ path: 'src/gcl/audit.ts', blob: '988edeffb4f2895df9ffe4c114f36e99892003a3' }, { path: 'src/gcl/errors.ts', blob: 'd91f8939d3d63d76aa016b1957e717a740fce5f4' }, { path: 'src/gcl/types.ts', blob: 'ece0b7cecbc4815b812f0d91aaca4d4debe605b5' }] },
 ]
 
 function repositoryFor(snapshot: Snapshot): string {
@@ -580,7 +588,7 @@ function proxyArrayIngressRejectedBeforeInspection(source: string): boolean {
   return /isProxyObject\(value\.syntheticFields\)\s*\|\|\s*!Array\.isArray\(value\.syntheticFields\)/.test(source)
 }
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21 source fixture pins every audited connector and its governance runner to local Git objects', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
     assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
@@ -601,7 +609,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
     const closure = [...sourceClosure(snapshot).values()].join('\n')
@@ -620,7 +628,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
@@ -1105,4 +1113,91 @@ test('D21 immutable boundaries reject omitted integrity bindings, shaped host se
   assert.match(cameraRegistry, /requestedAudit\.hash\)\s+return \{ \.\.\.result/, 'D21 camera success must pin its append witness to the requested event')
   assert.match(cameraRegistry, /requestedAudit\.hash\)\s+throw error/, 'D21 camera failure must pin its append witness to the requested event')
   assert.match(cameraRegistry, /error instanceof AuditReceiptError \|\| error instanceof AuditEventError \|\| error instanceof AuditChainError/, 'D21 camera must stop after an invalid append witness instead of inventing a follow-up transition')
+})
+
+test('D22 direct-successor package preserves immutable lineage, classifications, and documentation-only boundaries', () => {
+  const d22 = snapshots.filter((snapshot) => snapshot.batch === 'D22')
+  assert.equal(d22.length, 8, 'D22 must cover the eight direct successor packages')
+
+  for (const snapshot of d22) {
+    const parent = snapshots.find((candidate) => candidate.batch === 'D21' && candidate.name === snapshot.name)
+    assert.ok(parent, `D22 ${snapshot.name} must have a D21 package counterpart`)
+    assert.equal(snapshot.parentRevision, parent.revision, `D22 ${snapshot.name} must name the exact D21 parent`)
+    assert.equal(snapshot.hardDeniesLiveOptIn, parent.hardDeniesLiveOptIn, `D22 ${snapshot.name} must not reclassify its live-disable boundary`)
+    assert.equal(snapshot.quotaFailureAudited, parent.quotaFailureAudited, `D22 ${snapshot.name} must not reclassify its quota-failure audit boundary`)
+    assert.equal(snapshot.strictOwnerApproval, parent.strictOwnerApproval, `D22 ${snapshot.name} must not reclassify its owner-gate boundary`)
+    assert.equal(strictOwnerApprovalGate(sourceAt(snapshot, 'src/gcl/registry.ts')), snapshot.strictOwnerApproval, `${snapshot.name} strict owner-approval classification changed`)
+  }
+
+  const d21 = (name: string): Snapshot => {
+    const found = snapshots.find((snapshot) => snapshot.batch === 'D21' && snapshot.name === name)
+    assert.ok(found, `D21 ${name} snapshot must be present`)
+    return found
+  }
+  const d22Snapshot = (name: string): Snapshot => {
+    const found = d22.find((snapshot) => snapshot.name === name)
+    assert.ok(found, `D22 ${name} snapshot must be present`)
+    return found
+  }
+
+  for (const name of ['RFID', 'Language education']) {
+    const parent = d21(name)
+    const successor = d22Snapshot(name)
+    assert.equal(sourceAt(successor, successor.connectorPath), sourceAt(parent, parent.connectorPath), `D22 ${name} must not represent a documentation or type-only package as connector behaviour`)
+    assert.equal(sourceAt(successor, 'src/gcl/registry.ts'), sourceAt(parent, 'src/gcl/registry.ts'), `D22 ${name} must not represent a documentation or type-only package as runner behaviour`)
+  }
+
+  for (const name of ['RA market', 'Camera']) {
+    const parent = d21(name)
+    const successor = d22Snapshot(name)
+    assert.equal(sourceAt(successor, 'src/gcl/registry.ts'), sourceAt(parent, 'src/gcl/registry.ts'), `D22 ${name} must not overstate a contract-documentation change as new runner behaviour`)
+  }
+})
+
+test('D22 immutable boundaries reject serializer hooks, partial direct contexts, shaped audit data, and tenant-envelope drift', () => {
+  const snapshot = (name: string): Snapshot => {
+    const found = snapshots.find((candidate) => candidate.batch === 'D22' && candidate.name === name)
+    assert.ok(found, `D22 ${name} snapshot must be present`)
+    return found
+  }
+
+  const ocr = sourceAt(snapshot('RA OCR'), 'src/gcl/vision.ts')
+  assert.match(ocr, /const intrinsicJsonStringify = JSON\.stringify/, 'D22 OCR must capture its scalar JSON encoder before reviewing packet material')
+  assert.match(ocr, /function canonicalJson\(value: unknown\): string/, 'D22 OCR must use a dedicated canonical integrity encoder')
+  assert.match(ocr, /Object\.getOwnPropertyDescriptor\(value, key\)/, 'D22 OCR must read canonical object values through own descriptors')
+  assert.match(ocr, /descriptors\.sort\(\(left, right\)/, 'D22 OCR must deterministically sort canonical object keys')
+  assert.match(ocr, /toJsonHooksAccepted: false,\s*inheritedSerializationAccepted: false/, 'D22 OCR must bind the no-toJSON integrity rule')
+  assert.match(ocr, /reviewedIntegrityEncodingBoundaryBinding\(proposal\.reviewPacket\.integrityEncodingBoundaryBinding\)/, 'D22 OCR must independently validate the canonical-encoding binding')
+  assert.doesNotMatch(ocr, /digest\(JSON\.stringify\(reviewPacketIntegrityMaterial/, 'D22 OCR must not serialize review integrity through a caller-controlled object graph')
+
+  const image = sourceAt(snapshot('RA image'), 'src/gcl/image.ts')
+  assert.match(image, /function completeImageRunContext\(value: unknown, error: string\): ConnectorRunContext/, 'D22 image must validate a complete direct run context')
+  assert.match(image, /context\.ownerApproved !== true/, 'D22 image must reject a false or truthy-but-non-boolean direct owner gate')
+  assert.match(image, /scopes\.length !== 1 \|\| scopes\[0\] !== IMAGE_SCOPE/, 'D22 image must reject partial, extra, or wrong direct scopes')
+  assert.match(image, /completeImageRunContext\(context, 'INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT'\)/, 'D22 image issuance must not downgrade a full context into a permissive subset')
+  assert.match(image, /completeImageRunContext\(context, 'INVALID_IMAGE_OWNER_REVIEW_CONTEXT'\)/, 'D22 image review must not downgrade a full context into a permissive subset')
+
+  const threeDAudit = sourceAt(snapshot('RA 3D/game'), 'src/gcl/audit.ts')
+  assert.match(threeDAudit, /function ownDataRecord\(value: unknown\): Record<string, unknown> \| null/, 'D22 3D audit must reject shaped record wrappers before reading their values')
+  assert.match(threeDAudit, /Object\.getOwnPropertyNames\(value\)/, 'D22 3D audit must inspect hidden fields before durable hashing')
+  assert.match(threeDAudit, /function strictScopeArray\(value: unknown\): string\[\] \| null/, 'D22 3D audit must reject sparse or accessor-shaped scope arrays')
+  assert.match(threeDAudit, /frozenCanonicalJsonCopy<ConnectorAuditEvent>\(candidate\)/, 'D22 3D audit must copy an accepted event before it becomes chain evidence')
+  assert.match(threeDAudit, /const safeEvent = auditEvent\(event\)\s+if \(!safeEvent\) throw new AuditChainError\(\)/, 'D22 3D durable append must fail before lock or storage when direct audit input is malformed')
+
+  const translationAudit = sourceAt(snapshot('Translation'), 'src/gcl/audit.ts')
+  assert.match(translationAudit, /validGclTenantContext\(\{ product: value\.product, workspaceId: value\.workspaceId \}\)/, 'D22 translation must validate only the tenant envelope rather than reject its own exact audit event fields')
+  assert.doesNotMatch(translationAudit, /validGclTenantContext\(value\)/, 'D22 translation must not pass a whole audit event to the bounded tenant helper')
+
+  const languageTypes = sourceAt(snapshot('Language education'), 'src/gcl/types.ts')
+  assert.match(languageTypes, /'learning-data-rights-review'/, 'D22 language education must keep the data-rights review as a declared connector kind only')
+  assert.match(languageTypes, /'learning-data-rights-review-proposal'/, 'D22 language education must keep the data-rights result as a metadata-only proposal type')
+  assert.match(languageTypes, /'synthetic-learning-data-rights'/, 'D22 language education must label the proposed source synthetic')
+
+  const market = sourceAt(snapshot('RA market'), 'src/gcl/market.ts')
+  assert.match(market, /D15 fixes governed host seams and time/, 'D22 market must document the existing fixed-host/clock boundary without adding a run path')
+
+  const camera = sourceAt(snapshot('Camera'), 'src/gcl/camera.ts')
+  assert.match(camera, /D14\/D17 audit append receipts and link witnesses/, 'D22 camera must document the receipt link as an input boundary')
+  assert.match(camera, /D17 re-hashes the sealed event against its receipt predecessor while pinning the runner-known requested predecessor/, 'D22 camera must retain the no-follow-up receipt-link boundary')
+  assert.match(camera, /action, notification, publication, and handoff remain not sent/, 'D22 camera documentation must not convert audit evidence into an action')
 })

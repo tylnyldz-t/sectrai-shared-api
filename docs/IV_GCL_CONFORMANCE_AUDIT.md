@@ -1756,3 +1756,91 @@ introduced; outputs are proposal-only/no-action; no JARVIS/JNC job launches;
 and synthetic evidence is never deployment or live-enable authority. D21
 loaded no credential, contacted no provider/network, used no device or
 production database, sent nothing, and made no `main`/production write.
+
+## D22 — next immutable direct-successor package
+
+D22 pins the immediate child of every D21 package: RA OCR `81ab8a1`, RA image
+`d2d1407`, RA 3D/game `41108f3`, RA market `1b79236`, RFID `0b707c7`,
+translation `9b1a446`, language education `f6e3e43`, and camera `8f724ee`.
+Each commit names its D21 revision as its exact parent. RA voice still has no
+successor beyond D1. The fixture reads local Git objects only with
+`git show <revision>:src/gcl/...`; dirty sibling worktrees are not evidence.
+Alongside the connector and runner pins, D22 pins 3D audit, translation
+audit/context/errors/artifact companions, language-education types, and camera
+audit/errors/types.
+
+D22 remains source-only and fail closed. It does not import or execute target
+runtime code, load an environment file or credential, contact a provider or
+network, use a device, capture media, run RFID/camera hardware, create a
+database connection, migrate, start JARVIS/JNC, publish, send, or write
+`main`/production.
+
+| Connector | D22 source-only evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D22 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Review-packet integrity uses descriptor-read canonical JSON with a captured scalar encoder; the no-`toJSON` rule is bound and independently rechecked | `requested` only | Pass | Nonconformant; truthy-owner and quota-audit gaps remain |
+| RA image | Direct issuance/review paths treat a complete run context as complete: exactly `true` owner approval, one image scope, and positive safe-integer limits are required | `requested`, `failed` | Pass | Conformant |
+| RA 3D/game | Direct/internal audit records, details, scope arrays, and wrappers are strict own-data canonical copies before chain hashing or durable append | `requested` only | Pass | Nonconformant; quota gap remains |
+| RA market | D15 host-seam/clock boundary is documented; the D22 runner blob is byte-identical to D21 and no new run path is claimed | `requested` only | Pass | Nonconformant; quota gap remains |
+| RFID | D21 owner-decision boundary is documented as accepting no decision, signature, budget, procurement, pilot, or live authority; connector and runner blobs are byte-identical | `requested`, `failed` | Pass | Nonconformant; truthy-owner gap remains |
+| Translation | Audit tenant validation passes only the `{ product, workspaceId }` authority envelope, rather than an entire audit event with unrelated exact fields | `requested`, `failed` | Pass | Nonconformant; truthy-owner gap remains |
+| Language education | Adds only synthetic data-rights review/proposal/source type members; no connector or runner implementation is introduced | `requested`, `failed` | Pass | Conformant |
+| Camera | D14/D17 receipt-link controls are documented as no-action evidence; audit and runner blobs are byte-identical to D21 | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` is limited to this IV synthetic governance envelope. It is not
+authority to configure credentials, enable a provider, make egress, use a
+device, capture audio/video/RFID data, launch JARVIS/JNC, migrate, persist
+production data, reserve/book/publish, hand off, send output, or enable a live
+operation.
+
+### D22 negative and edge evidence
+
+- The direct-parent assertion covers all eight D22 commits. A missing,
+  rebased, skipped, or later descendant fails before source classification.
+- OCR no longer uses object-graph `JSON.stringify` for review integrity. Its
+  canonical encoder rejects Proxy, accessor, inherited, symbol, sparse, cyclic,
+  or non-finite material; own data descriptors are copied in deterministic key
+  order and an own/inherited `toJSON` hook cannot change digest bytes.
+- Image direct helpers reject a partial full-context downgrade, truthy owner
+  surrogate, extra/wrong scope, or zero/non-safe cost or item count before a
+  candidate ledger or review ledger can be called. Narrow issuance/review
+  context forms remain separately bounded.
+- 3D rejects hidden, inherited, symbol, getter/setter, class-instance, cycle,
+  sparse-array, malformed timestamp, uppercase hash, and non-finite audit
+  material before durable lock/transaction or in-memory entry mutation. It
+  copies accepted data before hash-chain participation; this is an audit-data
+  boundary, not a durable-write or engine capability.
+- Translation keeps exact event validation but narrows the shared tenant check
+  to its product/workspace envelope. Thus unrelated event fields cannot make a
+  valid bounded tenant fail or broaden that tenant authority.
+- Language education's data-rights symbols are types only. No data-rights
+  fixture parser, registry entry, storage path, identity/disclosure payload,
+  review decision, escalation, or action is added.
+- Market, RFID, and camera D22 changes are documentary/control descriptions
+  where stated. Their unchanged runner or connector blobs are asserted so that
+  documentation cannot be represented as a new governance runtime. Camera
+  continues to describe receipt-link validation as no handoff, notification,
+  publication, or action.
+- The inherited closure scan continues to reject egress/endpoints,
+  credential-like environment access, subprocess/worker launch,
+  dynamic/runtime escape, and automatic publication. Market, translation,
+  language education, and camera hard-deny any live-opt-in surface; the other
+  connectors expose no live-enable path.
+
+### D22 test evidence and ADOS boundary
+
+`npm run test:conformance` passes with the D1–D22 immutable fixture. The suite
+checks exact direct-parent lineage, connector/runner and selected companion
+blob hashes, local source closures, disabled mode/no-egress rules, owner and
+quota classifications, documentation/type-only no-runtime assertions, and the
+D22 canonical-serialization, full-direct-context, shaped-audit-data, and
+tenant-envelope negative edges. It parses local TypeScript source in process;
+it does not execute a target connector, integration suite, migration, or
+external call.
+
+All ten ADOS rules remain active: product/workspace boundaries stay isolated;
+data stays minimal and synthetic; absent/malformed gates deny; maker–checker
+requirements remain; gaps are reported rather than waived; no migration is
+introduced; outputs are proposal-only/no-action; no JARVIS/JNC job launches;
+and synthetic evidence is never deployment or live-enable authority. D22
+loaded no credential, contacted no provider/network, used no device or
+production database, sent nothing, and made no `main`/production write.
