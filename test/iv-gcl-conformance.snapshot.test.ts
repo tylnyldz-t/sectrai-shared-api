@@ -5,7 +5,7 @@ import { posix as path } from 'node:path'
 import test from 'node:test'
 import ts from 'typescript'
 
-type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12'
+type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13'
 
 type PinnedClosureBlob = {
   path: string
@@ -46,7 +46,7 @@ const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
 const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
 
 /*
- * These are immutable local Git snapshots from the D1 through D12 audit batches.
+ * These are immutable local Git snapshots from the D1 through D13 audit batches.
  * Every source read below is `git show <revision>:<path>`, never the mutable
  * worktree file. This fixture does not import target runtime code, load an
  * env file, open a socket, or make a network request. A missing worktree,
@@ -147,6 +147,14 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D12', name: 'Translation', revision: 'af3be75', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '542a39d3ac9849469d5a39aca21dd60a58ec374a', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: '362e0dd89efe2ebfc735b9f88693736f3a8ee8d3' }, { path: 'src/gcl/translation-artifacts.ts', blob: 'b3a30c025ce226fb80dfb5ef4c37a163d3454487' }, { path: 'src/gcl/translation-artifact-review.ts', blob: 'b0f485a6542ffeb245f0811ebf858d8dd8d584b2' }] },
   { batch: 'D12', name: 'Language education', revision: '5d10f3f', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '77f7d4544eba690ea7ae2b61b5b83c81cd474a8b', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: 'cffd9481bcc2e4ddb02bec7f87c57d4a6e5dd6f5' }] },
   { batch: 'D12', name: 'Camera', revision: '9660feb', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '0f8779b81972e76c15389b25fa52b8b011da4f41', registryBlob: '01d5bbfb071b806d4c6ba77fa5974fc838c0febc', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D13', name: 'RA OCR', revision: 'e87610c', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: 'ef24e6ff8e83cfbcac6d43b2f5405825f3e44049', registryBlob: '7fb5b5e5ece8b9442423bd49eb38db978b6371ab', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D13', name: 'RA image', revision: '1c08de7', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: 'c9b576bbd2051fa0c22f69fb1e8f16bd69b63ed3', registryBlob: '76221dc13d588bd7a042735badf6bc825b573ca3', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D13', name: 'RA 3D/game', revision: '48117da', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: 'ab9ef5e2b668ff176c6f2aff708479b8b367fcbb', registryBlob: 'e2c97f4be56ae7db01c18c5fa33ed0d3f51a8297', hardDeniesLiveOptIn: false, quotaFailureAudited: false, pinnedClosureBlobs: [{ path: 'src/gcl/result-boundary.ts', blob: 'd9614e917857e448ad868089084c73261d1dbd4a' }], pinnedSupplementalBlobs: [{ path: 'src/gcl/game-engine.ts', blob: 'bdd208d9870aeb460fb50ba8e817eba62b4c4195' }] },
+  { batch: 'D13', name: 'RA market', revision: 'f2caeb2', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: '11636d2d9a96d8e1662e66324430120c77428308', registryBlob: '66f1a5872dd8ccad258fceb833476f46e9a373c8', hardDeniesLiveOptIn: true, quotaFailureAudited: false },
+  { batch: 'D13', name: 'RFID', revision: 'a6f5939', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: 'be65336fc3e07219c960db748112ac29ad68738e', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D13', name: 'Translation', revision: '8bf4882', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '542a39d3ac9849469d5a39aca21dd60a58ec374a', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D13', name: 'Language education', revision: '60b6797', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: '77f7d4544eba690ea7ae2b61b5b83c81cd474a8b', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D13', name: 'Camera', revision: '91ad591', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: 'e6383011823344a3bd28b001da1bcf8e0f0c8901', registryBlob: '4a07eadfc9a9d42418547387bd8d7bc6575290b9', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
 ]
 
 function repositoryFor(snapshot: Snapshot): string {
