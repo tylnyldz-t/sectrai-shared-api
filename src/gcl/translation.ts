@@ -89,6 +89,9 @@ const EMAIL_SHAPED_PERSONAL_DATA = /\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/i
 const COMPACT_TCKN_SHAPED_DATA = /(?:^|[^0-9])\d{11}(?!\d)/
 const COMPACT_TURKISH_MOBILE_SHAPED_DATA = /(?:^|[^0-9])(?:\+?90|0)?5\d{9}(?!\d)/
 const COMPACT_TURKISH_IBAN_SHAPED_DATA = /TR\d{24}(?!\d)/i
+const DECIMAL_DIGIT = /^\p{Decimal_Number}$/u
+const FORMAT_OR_SPACE = /[\p{Z}\p{Cf}]/gu
+const NUMERIC_IDENTIFIER_SEPARATORS = /[\p{Z}\p{Cf}\p{P}]/gu
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError()
@@ -103,18 +106,34 @@ function exact(value: unknown, fields: readonly string[]): Record<string, unknow
 
 /**
  * Fixtures are data, but this connector is not a personal-data transport.
- * Normalize only for detection so a zero-width character or a conventional
- * display separator cannot smuggle a phone, TCKN-shaped value, or Turkish
- * IBAN-shaped value into a synthetic text or identifier. The original value
- * is never rewritten or persisted by this check.
+ * Normalize only for detection so a zero-width character, conventional
+ * display separator, or Unicode decimal-digit form cannot smuggle a phone,
+ * TCKN-shaped value, Turkish IBAN-shaped value, or email into a synthetic
+ * text or identifier. The original value is never rewritten or persisted by
+ * this check.
  */
+function canonicalDecimalDigits(value: string): string {
+  return Array.from(value, (character) => {
+    if (!DECIMAL_DIGIT.test(character)) return character
+    const point = character.codePointAt(0)!
+    let zeroPoint = point
+    // Decimal-number code points are consecutive inside one digit set. NFKC
+    // has already reduced compatibility-digit sets (for example full-width
+    // digits) to ASCII before this local calculation.
+    while (zeroPoint > 0 && DECIMAL_DIGIT.test(String.fromCodePoint(zeroPoint - 1))) zeroPoint -= 1
+    const digit = point - zeroPoint
+    return digit >= 0 && digit <= 9 ? String(digit) : character
+  }).join('')
+}
+
 function containsBlockedPersonalData(value: string): boolean {
-  const normalized = value.normalize('NFKC')
-  const compact = normalized.replace(/[\p{Z}\p{Cf}().-]/gu, '')
-  return EMAIL_SHAPED_PERSONAL_DATA.test(normalized)
-    || COMPACT_TCKN_SHAPED_DATA.test(compact)
-    || COMPACT_TURKISH_MOBILE_SHAPED_DATA.test(compact)
-    || COMPACT_TURKISH_IBAN_SHAPED_DATA.test(compact)
+  const normalized = canonicalDecimalDigits(value.normalize('NFKC'))
+  const compactEmail = normalized.replace(FORMAT_OR_SPACE, '')
+  const compactNumericIdentifier = normalized.replace(NUMERIC_IDENTIFIER_SEPARATORS, '')
+  return EMAIL_SHAPED_PERSONAL_DATA.test(compactEmail)
+    || COMPACT_TCKN_SHAPED_DATA.test(compactNumericIdentifier)
+    || COMPACT_TURKISH_MOBILE_SHAPED_DATA.test(compactNumericIdentifier)
+    || COMPACT_TURKISH_IBAN_SHAPED_DATA.test(compactNumericIdentifier)
 }
 
 function rejectPersonalData(value: string): void {
@@ -202,13 +221,13 @@ function configured(config: TranslationConnectorConfig, ctx: ConnectorRunContext
 
 function audioDescriptor(value: unknown, maxAudioDurationMs: number): SyntheticAudioDescriptor {
   const audio = exact(value, ['synthetic', 'sourceRef', 'contentHash', 'mimeType', 'durationMs'])
+  if (typeof audio.sourceRef === 'string') rejectPersonalData(audio.sourceRef)
   if (audio.synthetic !== true || typeof audio.sourceRef !== 'string' || !SYNTHETIC_AUDIO_REF.test(audio.sourceRef) || typeof audio.contentHash !== 'string' || !SHA256.test(audio.contentHash)) {
     throw new ConnectorInputError('INVALID_SYNTHETIC_TRANSLATION_AUDIO_DESCRIPTOR')
   }
   if (audio.mimeType !== 'audio/wav' && audio.mimeType !== 'audio/mpeg' && audio.mimeType !== 'audio/ogg') throw new ConnectorInputError('INVALID_SYNTHETIC_TRANSLATION_AUDIO_MIME_TYPE')
   const durationMs = positiveInteger(audio.durationMs, 'INVALID_SYNTHETIC_TRANSLATION_AUDIO_DURATION')
   if (durationMs > maxAudioDurationMs) throw new ConnectorInputError('TRANSLATION_AUDIO_DURATION_LIMIT_EXCEEDED')
-  rejectPersonalData(audio.sourceRef)
   return { synthetic: true, sourceRef: audio.sourceRef, contentHash: audio.contentHash, mimeType: audio.mimeType, durationMs }
 }
 
@@ -226,8 +245,9 @@ function textInput(value: unknown, maxInputCharacters: number): TextTranslationI
 function speechInput(value: unknown, maxInputCharacters: number, maxAudioDurationMs: number): SpeechTranslationInput {
   const input = exact(value, ['synthetic', 'sourceAudio', 'sourceTranscript', 'translatedText', 'sourceLocale', 'targetLocale', 'targetVoice'])
   if (input.synthetic !== true) throw new ConnectorInputError('TRANSLATION_SYNTHETIC_MARKER_REQUIRED')
-  if (typeof input.targetVoice !== 'string' || !SYNTHETIC_VOICE.test(input.targetVoice)) throw new ConnectorInputError('INVALID_SYNTHETIC_TRANSLATION_VOICE')
+  if (typeof input.targetVoice !== 'string') throw new ConnectorInputError('INVALID_SYNTHETIC_TRANSLATION_VOICE')
   rejectPersonalData(input.targetVoice)
+  if (!SYNTHETIC_VOICE.test(input.targetVoice)) throw new ConnectorInputError('INVALID_SYNTHETIC_TRANSLATION_VOICE')
   return {
     synthetic: true,
     sourceAudio: audioDescriptor(input.sourceAudio, maxAudioDurationMs),

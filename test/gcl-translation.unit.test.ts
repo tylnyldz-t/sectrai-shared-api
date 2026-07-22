@@ -299,7 +299,7 @@ test('owner, cost, item, personal-data, locale, and synthetic-descriptor failure
   assert.equal(quota.requests.length, 0)
 })
 
-test('privacy preflight rejects separator- or Unicode-obfuscated identifiers in text and synthetic speech metadata', async () => {
+test('privacy preflight rejects separator-, format-, and Unicode-decimal-obfuscated identifiers before audit or quota', async () => {
   const connector = new SyntheticSpeechTranslationConnector(config)
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
@@ -308,9 +308,14 @@ test('privacy preflight rejects separator- or Unicode-obfuscated identifiers in 
 
   const blockedInputs = [
     { ...speechInput(), sourceTranscript: 'fixture TCKN 111\u200b222\u200b333\u200b44' },
+    { ...speechInput(), sourceTranscript: 'fixture TCKN ١١١/٢٢٢,٣٣٣;٤٤' },
     { ...speechInput(), translatedText: 'fixture IBAN TR00 0000 0000 0000 0000 0000 00' },
+    { ...speechInput(), translatedText: 'fixture IBAN ＴＲ۰۰ ۰۰۰۰ ۰۰۰۰ ۰۰۰۰ ۰۰۰۰ ۰۰۰۰ ۰۰' },
+    { ...speechInput(), sourceTranscript: 'fixture owner\u200b@\u2060example\u00a0.\u200btest' },
     { ...speechInput(), sourceAudio: { ...speechInput().sourceAudio, sourceRef: 'synthetic://translation/audio/5550000000' } },
     { ...speechInput(), targetVoice: 'synthetic-5550000000' },
+    { ...speechInput(), sourceAudio: { ...speechInput().sourceAudio, sourceRef: 'synthetic://translation/audio/٥٥٥٠٠٠٠٠٠٠' } },
+    { ...speechInput(), targetVoice: 'synthetic-۵۵۵۰۰۰۰۰۰۰' },
   ]
 
   for (const input of blockedInputs) {
@@ -319,6 +324,7 @@ test('privacy preflight rejects separator- or Unicode-obfuscated identifiers in 
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
   assert.equal(JSON.stringify(audit.entries).includes('5550000000'), false)
+  assert.equal(JSON.stringify(audit.entries).includes('owner@example.test'), false)
 })
 
 test('a connector failure records only a stable error code, never raw fixture content, in the audit chain', async () => {

@@ -160,12 +160,14 @@ returns sound bytes:
 Both inputs reject personal-data-shaped fixtures before any audit or quota
 reservation. The guard covers TCKN-shaped values, Turkish mobile-phone values,
 Turkish IBAN-shaped values, and email-shaped data. Detection uses NFKC plus a
-separator/zero-width-character-insensitive comparison, so formatting an
-identifier with spaces, punctuation, or Unicode format characters does not
-turn it into an acceptable fixture. The same check applies to the synthetic
-audio `sourceRef` and `targetVoice` identifiers: they are metadata, not a path
-for personal data. Rejections do not redact, rewrite, persist, audit, or send
-the supplied value. Their content is `data-only` under
+Unicode-decimal-digit, separator, and zero-width-character-insensitive
+comparison. Therefore formatting an identifier with Arabic-Indic, extended
+Arabic-Indic, full-width, or other Unicode decimal digits; spaces; punctuation;
+or Unicode format characters does not turn it into an acceptable fixture. The
+same check applies to the synthetic audio `sourceRef` and `targetVoice`
+identifiers before their descriptor grammar is accepted: they are metadata,
+not a path for personal data. Rejections do not redact, rewrite, persist,
+audit, or send the supplied value. Their content is `data-only` under
 `UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`; it is never a command, action,
 message, notification, or publication.
 
