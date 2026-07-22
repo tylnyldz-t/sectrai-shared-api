@@ -178,6 +178,14 @@ surrogates, which could make the reviewed value visually ambiguous. Newline,
 carriage return, and tab remain the only permitted control whitespace. The
 contract keeps ZWNJ and ZWJ so ordinary Arabic-script text is not rewritten or
 needlessly rejected; they remain part of the personal-data normalization check.
+Fixture text is also canonical review data: leading or trailing whitespace is
+rejected rather than trimmed, so the adapter never silently changes a value
+whose hash and checker review must agree. The input envelope must be an
+ordinary JSON object with only own, enumerable data properties. Prototype
+fields, accessors, symbols, and hidden properties are rejected before any
+field read, audit, quota reservation, or adapter result; this prevents a
+programmatic caller from changing a checked fixture through inheritance or a
+getter after preflight.
 
 ## Metadata-only checker workflow
 

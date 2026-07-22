@@ -373,6 +373,48 @@ test('synthetic text rejects invisible or directional formatting before audit or
   assert.equal(quota.requests.length, 1)
 })
 
+test('fixture envelopes and review-bound text reject noncanonical object or whitespace forms before audit or quota', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([
+    new SyntheticTextTranslationConnector(config),
+    new SyntheticSpeechTranslationConnector(config),
+  ]), audit, quota, now)
+  let accessorReads = 0
+  const accessorBacked = textInput()
+  Object.defineProperty(accessorBacked, 'sourceText', {
+    enumerable: true,
+    get(): string {
+      accessorReads += 1
+      throw new Error('owner fixture must never reach an accessor')
+    },
+  })
+  const hiddenField = textInput()
+  Object.defineProperty(hiddenField, 'rawFixture', { value: 'must never become fixture data', enumerable: false })
+  const inheritedAudio = Object.create(speechInput().sourceAudio) as SpeechTranslationInput['sourceAudio']
+
+  const malformedRequests = [
+    { connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: Object.create(textInput()), scopes: ['translation:text'] },
+    { connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: accessorBacked, scopes: ['translation:text'] },
+    { connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: hiddenField, scopes: ['translation:text'] },
+    { connectorId: SPEECH_TRANSLATION_CONNECTOR_ID, input: { ...speechInput(), sourceAudio: inheritedAudio }, scopes: ['translation:speech'] },
+  ]
+  for (const request of malformedRequests) {
+    await assert.rejects(() => runner.run({ ...context, ...request }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'TRANSLATION_NONCANONICAL_INPUT_OBJECT')
+  }
+  assert.equal(accessorReads, 0)
+
+  for (const sourceText of [' leading review text', 'trailing review text ', '\ufeffedge formatting']) {
+    await assert.rejects(() => runner.run({
+      connectorId: TEXT_TRANSLATION_CONNECTOR_ID,
+      input: { ...textInput(), sourceText },
+      ...context,
+    }), (error: unknown) => error instanceof ConnectorInputError && error.message === (sourceText.includes('\ufeff') ? 'TRANSLATION_UNSAFE_TEXT_FORMATTING' : 'TRANSLATION_NONCANONICAL_TEXT'))
+  }
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+})
+
 test('a connector failure records only a stable error code, never raw fixture content, in the audit chain', async () => {
   const failing: Connector = {
     id: TEXT_TRANSLATION_CONNECTOR_ID,

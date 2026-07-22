@@ -99,8 +99,30 @@ const NUMERIC_IDENTIFIER_SEPARATORS = /[\p{Z}\p{Cf}\p{P}]/gu
 // are outside this deliberately small synthetic-fixture contract.
 
 function object(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError()
-  return value as Record<string, unknown>
+  try {
+    // Only an ordinary JSON object is a valid fixture envelope. In particular,
+    // inherited properties, accessors, non-enumerable fields, and symbols must
+    // not alter the value that preflight validates or later hashes. Snapshot
+    // own data descriptors so a Proxy/getter cannot change a checked field on a
+    // later property read.
+    if (!value || typeof value !== 'object' || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+      throw new ConnectorInputError('TRANSLATION_NONCANONICAL_INPUT_OBJECT')
+    }
+    const snapshot = Object.create(null) as Record<string, unknown>
+    for (const key of Reflect.ownKeys(value)) {
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (typeof key !== 'string' || !descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+        throw new ConnectorInputError('TRANSLATION_NONCANONICAL_INPUT_OBJECT')
+      }
+      Object.defineProperty(snapshot, key, { value: descriptor.value, enumerable: true })
+    }
+    return snapshot
+  } catch (error) {
+    if (error instanceof ConnectorInputError) throw error
+    // Proxies can throw while their object envelope is inspected. Do not let a
+    // caller-controlled runtime message cross the adapter boundary.
+    throw new ConnectorInputError('TRANSLATION_NONCANONICAL_INPUT_OBJECT')
+  }
 }
 
 function exact(value: unknown, fields: readonly string[]): Record<string, unknown> {
@@ -159,13 +181,20 @@ function containsUnsafeSyntheticTextFormatting(value: string): boolean {
 }
 
 function boundedText(value: unknown, code: string, limit: number): string {
-  if (typeof value !== 'string' || !value.trim() || value.trim().length > limit) throw new ConnectorInputError(code)
-  const output = value.trim()
-  rejectPersonalData(output)
-  if (containsUnsafeSyntheticTextFormatting(output)) {
+  if (typeof value !== 'string' || value.length > limit) throw new ConnectorInputError(code)
+  // Keep the privacy rejection ahead of display-formatting diagnostics. A
+  // disguised identifier must remain a personal-data rejection even if it
+  // also uses a disallowed formatting character.
+  rejectPersonalData(value)
+  if (containsUnsafeSyntheticTextFormatting(value)) {
     throw new ConnectorInputError('TRANSLATION_UNSAFE_TEXT_FORMATTING')
   }
-  return output
+  // Fixture contents are a review binding, so never silently rewrite their
+  // edges. This also prevents trim() from hiding a byte-order mark or other
+  // formatting character before the reviewer receives the value.
+  if (!value.trim()) throw new ConnectorInputError(code)
+  if (value.trim() !== value) throw new ConnectorInputError('TRANSLATION_NONCANONICAL_TEXT')
+  return value
 }
 
 function locale(value: unknown, code: string): string {
