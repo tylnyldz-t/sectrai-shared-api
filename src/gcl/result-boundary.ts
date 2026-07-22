@@ -1,4 +1,5 @@
 import { SyntheticResultIntegrityError } from './errors.js'
+import { MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
 import { JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from './jnc-pilot.js'
 import { deepFreeze, frozenCanonicalJsonCopy, isCanonicalJsonData, isProxyValue, syntheticPlanSha256 } from './plan-integrity.js'
 import { verifiesSyntheticReviewSnapshot } from './review-snapshot.js'
@@ -63,10 +64,11 @@ function exactOptionalKeys(value: DataRecord, required: readonly string[], allow
 function strictStringArray(value: unknown): string[] | null {
   try {
     if (isProxyValue(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
-    const names = Object.getOwnPropertyNames(value)
     const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
     if (!lengthDescriptor || !('value' in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 1 ||
-      names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return null
+      lengthDescriptor.value > MAX_GOVERNANCE_SCOPE_COUNT) return null
+    const names = Object.getOwnPropertyNames(value)
+    if (names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return null
     const output: string[] = []
     for (let index = 0; index < lengthDescriptor.value; index += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(value, String(index))

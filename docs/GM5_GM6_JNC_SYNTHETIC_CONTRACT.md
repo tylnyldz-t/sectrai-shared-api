@@ -217,6 +217,24 @@ same synthetic-only input semantics. It does not add a credential, live mode,
 provider endpoint, executable path, filesystem write, JNC dispatch, or
 publication route.
 
+### D3 scope-cardinality lock
+
+One GM5/GM6 governed request may carry at most 12 unique approved scopes. The
+same ceiling is enforced at the HTTP parser, direct runner, direct GM5/GM6
+adapter context, connector registration, audit append/verification, and the
+final review-binding helper. A direct/internal caller therefore cannot make an
+audit row or frozen review snapshot that the public route would have rejected.
+The collection length is checked before the implementation enumerates scope
+keys; sparse, accessor-backed, Proxy-backed, duplicate, or oversized scope
+arrays fail closed at their relevant boundary.
+
+HTTP input reports `INVALID_CONNECTOR_SCOPES`; direct runner/adapter requests
+report the existing scope-denied result before preflight, audit, or quota; an
+oversized registration is unavailable; and invalid audit or final-egress data
+remain corrupt/unavailable. This is a bounded local data-shape rule only. It
+does not widen scope authority, reserve capacity, contact JNC or a provider,
+read a credential, execute a process, write an artifact, or publish anything.
+
 ## Synthetic result egress boundary
 
 After an adapter returns, the governed runner performs one final, local-only

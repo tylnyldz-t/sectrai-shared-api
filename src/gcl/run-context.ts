@@ -1,4 +1,5 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError } from './errors.js'
+import { MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
 import { isProxyValue } from './plan-integrity.js'
 import type { ConnectorRunContext } from './types.js'
 
@@ -6,7 +7,6 @@ const PRODUCT_PATTERN = /^sectrai-[a-z0-9-]{1,80}$/
 const WORKSPACE_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 const CONTEXT_KEYS = ['product', 'workspaceId', 'actor', 'ownerApproved', 'scopes', 'costCapCents', 'requestedItems', 'now'] as const
-const MAX_CONTEXT_SCOPES = 12
 
 type DataRecord = Record<string, unknown>
 
@@ -39,10 +39,10 @@ function exactDataRecord(value: unknown, keys: readonly string[]): DataRecord | 
 function strictStringArray(value: unknown): string[] | null {
   try {
     if (isProxyValue(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    if (!lengthDescriptor || !('value' in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 1 || lengthDescriptor.value > MAX_GOVERNANCE_SCOPE_COUNT) return null
     const names = Object.getOwnPropertyNames(value)
     if (names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return null
-    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
-    if (!lengthDescriptor || !('value' in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 1 || lengthDescriptor.value > MAX_CONTEXT_SCOPES) return null
     const values: string[] = []
     for (let index = 0; index < lengthDescriptor.value; index += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(value, String(index))

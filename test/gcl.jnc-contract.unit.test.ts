@@ -3,6 +3,7 @@ import test from 'node:test'
 import { hashAuditEvent, InMemoryHashChainAuditLog, verifiedAuditChainHead } from '../src/gcl/audit.js'
 import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError, SyntheticResultIntegrityError, SyntheticReviewIntegrityError } from '../src/gcl/errors.js'
 import { gameEngineConnectorFromEnvironment, SyntheticGameEngineConnector, type GameEngineBuildInput, type GameEngineBuildPlan } from '../src/gcl/game-engine.js'
+import { MAX_GOVERNANCE_SCOPE_COUNT } from '../src/gcl/governance-limits.js'
 import { ContractOnlyJncPilotMapper, JNC_MAXIMUM_GPU_RUNTIME_MINUTES, JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from '../src/gcl/jnc-pilot.js'
 import { ownerGateError } from '../src/gcl/owner-gate.js'
 import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, isCanonicalJsonData, isSyntheticPlanIntegrity, syntheticPlanSha256, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
@@ -14,6 +15,7 @@ import { assertSyntheticReviewSnapshot, createSyntheticReviewSnapshot, verifiesS
 import { LIVE_DISABLED } from '../src/gcl/safety.js'
 import { syntheticThreeDConnectorsFromEnvironment, SyntheticImageTextToThreeDConnector, SyntheticTextToThreeDConnector, type SyntheticThreeDConnectorConfig, type SyntheticThreeDResult } from '../src/gcl/three-d.js'
 import type { Connector, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
+import { connectorRunFrom } from '../src/validation.js'
 
 const fixedNow = () => new Date('2026-07-22T10:00:00.000Z')
 
@@ -1226,6 +1228,48 @@ test('registry admission seals connector metadata and rejects accessor-backed ru
     (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_INVALID_REGISTRATION',
   )
   assert.equal(runGetterReads, 0)
+})
+
+test('governance scope cardinality is bounded consistently before registration, audit, or egress', async () => {
+  const permittedScopes = Array.from({ length: MAX_GOVERNANCE_SCOPE_COUNT }, (_, index) => `synthetic:scope:${index}`)
+  const tooManyScopes = [...permittedScopes, 'synthetic:scope:overflow']
+  const httpRequest = { input: { prompt: 'Synthetic scope-bound request' }, scopes: permittedScopes, costCapCents: 50, requestedItems: 1 }
+  assert.deepEqual(connectorRunFrom(httpRequest).scopes, permittedScopes)
+  assert.throws(
+    () => connectorRunFrom({ ...httpRequest, scopes: tooManyScopes }),
+    (error: unknown) => error instanceof Error && error.message === 'INVALID_CONNECTOR_SCOPES',
+  )
+
+  const oversizedConnector: Connector = {
+    id: 'oversized-scope-contract', kind: 'media-3d', authKind: 'owner-approval', scopes: tooManyScopes,
+    async run() { throw new Error('MUST_NOT_RUN') },
+  }
+  assert.throws(
+    () => new ConnectorRegistry([oversizedConnector]),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_INVALID_REGISTRATION',
+  )
+
+  const adapter = new SyntheticTextToThreeDConnector(threeDConfig())
+  await assert.rejects(adapter.run({ prompt: 'Direct scope overflow' }, directContext({ scopes: tooManyScopes })), ScopeError)
+  assert.throws(
+    () => syntheticResultReviewBinding(directContext({ scopes: tooManyScopes }), fixedNow().toISOString()),
+    SyntheticResultIntegrityError,
+  )
+
+  const overflowingEvent = {
+    type: 'connector.run.requested' as const, connectorId: 'text-to-3d', product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace',
+    actor: 'synthetic-owner', scopes: tooManyScopes, costCapCents: 50, requestedItems: 1,
+    occurredAt: fixedNow().toISOString(), detail: {},
+  }
+  const audit = new InMemoryHashChainAuditLog()
+  assert.throws(() => hashAuditEvent(overflowingEvent, null), AuditChainError)
+  await assert.rejects(audit.append(overflowingEvent), AuditChainError)
+  assert.equal(audit.entries.length, 0)
+
+  const governed = runner(new SyntheticTextToThreeDConnector(threeDConfig()))
+  await assert.rejects(governed.run.run(request({ scopes: tooManyScopes })), ScopeError)
+  assert.equal(governed.audit.entries.length, 0)
+  assert.equal(governed.quota.reservations.length, 0)
 })
 
 test('failed adapter messages are never copied into the durable audit chain', async () => {

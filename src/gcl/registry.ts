@@ -1,4 +1,5 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, GclError, OwnerGateError, ScopeError } from './errors.js'
+import { MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
 import { deepFreeze, frozenCanonicalJsonCopy, isProxyValue } from './plan-integrity.js'
 import { syntheticResultReviewBinding, validatedSyntheticConnectorResult } from './result-boundary.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
@@ -61,11 +62,12 @@ function runRequestRecord(value: unknown): DataRecord | null {
 function strictScopeArray(value: unknown): string[] | null {
   try {
     if (isProxyValue(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
-    const names = Object.getOwnPropertyNames(value)
     const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
     if (!lengthDescriptor || !('value' in lengthDescriptor)) return null
     const length = lengthDescriptor.value
-    if (!Number.isSafeInteger(length) || length < 1 || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return null
+    if (!Number.isSafeInteger(length) || length < 1 || length > MAX_GOVERNANCE_SCOPE_COUNT) return null
+    const names = Object.getOwnPropertyNames(value)
+    if (names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return null
     const output: string[] = []
     for (let index = 0; index < length; index += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(value, String(index))

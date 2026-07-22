@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import { AuditChainError } from './errors.js'
+import { MAX_GOVERNANCE_SCOPE_COUNT } from './governance-limits.js'
 import { frozenCanonicalJsonCopy, isCanonicalJsonData, isProxyValue } from './plan-integrity.js'
 import type { AuditLog, ConnectorAuditEvent } from './types.js'
 
@@ -56,10 +57,11 @@ function ownDataRecord(value: unknown): Record<string, unknown> | null {
 function strictScopeArray(value: unknown): string[] | null {
   try {
     if (isProxyValue(value) || !Array.isArray(value) || Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) return null
-    const names = Object.getOwnPropertyNames(value)
     const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
     if (!lengthDescriptor || !('value' in lengthDescriptor) || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 1 ||
-      names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return null
+      lengthDescriptor.value > MAX_GOVERNANCE_SCOPE_COUNT) return null
+    const names = Object.getOwnPropertyNames(value)
+    if (names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) return null
     const scopes: string[] = []
     for (let index = 0; index < lengthDescriptor.value; index += 1) {
       const descriptor = Object.getOwnPropertyDescriptor(value, String(index))
