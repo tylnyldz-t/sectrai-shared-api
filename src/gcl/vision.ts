@@ -17,7 +17,7 @@ const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v22' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v23' as const
 const SYNTHETIC_DOCUMENT_DATA_BOUNDARY = {
   evidenceSource: 'synthetic-fixture',
   inputShape: 'plain-own-data-only',
@@ -99,6 +99,11 @@ const SYNTHETIC_DOCUMENT_AUDIT_METHOD_BOUNDARY = {
   appendMethod: 'own-or-direct-prototype-data-method-only',
   inheritedFromObjectPrototypeAccepted: false,
   inheritedBeyondDirectPrototypeAccepted: false,
+} as const
+const SYNTHETIC_DOCUMENT_AUDIT_EVENT_BOUNDARY = {
+  auditEvent: 'adapter-created-frozen-own-data-only',
+  auditEventScope: 'single-read-validated-review-context-only',
+  auditEventMutationAccepted: false,
 } as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
@@ -276,6 +281,12 @@ export type SyntheticDocumentReviewPacket = {
     inheritedFromObjectPrototypeAccepted: typeof SYNTHETIC_DOCUMENT_AUDIT_METHOD_BOUNDARY.inheritedFromObjectPrototypeAccepted
     inheritedBeyondDirectPrototypeAccepted: typeof SYNTHETIC_DOCUMENT_AUDIT_METHOD_BOUNDARY.inheritedBeyondDirectPrototypeAccepted
   }
+  /** Audit receives a frozen event built only from a single-read review scope. */
+  auditEventBoundaryBinding: {
+    auditEvent: typeof SYNTHETIC_DOCUMENT_AUDIT_EVENT_BOUNDARY.auditEvent
+    auditEventScope: typeof SYNTHETIC_DOCUMENT_AUDIT_EVENT_BOUNDARY.auditEventScope
+    auditEventMutationAccepted: typeof SYNTHETIC_DOCUMENT_AUDIT_EVENT_BOUNDARY.auditEventMutationAccepted
+  }
   /** Metadata-only freshness limit for the synthetic evidence reference. */
   evidenceBinding: {
     capturedAt: string
@@ -352,6 +363,7 @@ const intrinsicRegExpExec = RegExp.prototype.exec
 const intrinsicNodeUtilTypesIsProxy = nodeUtilTypes.isProxy
 const intrinsicObjectGetPrototypeOf = Object.getPrototypeOf
 const intrinsicObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor
+const intrinsicObjectFreeze = Object.freeze
 const intrinsicReflectOwnKeys = Reflect.ownKeys
 const intrinsicObjectPrototype = Object.prototype
 const intrinsicArrayIsArray = Array.isArray
@@ -587,6 +599,7 @@ function reviewPacketIntegrityMaterial(
   auditReceiptBoundaryBinding: SyntheticDocumentReviewPacket['auditReceiptBoundaryBinding'],
   auditAppendBoundaryBinding: SyntheticDocumentReviewPacket['auditAppendBoundaryBinding'],
   auditMethodBoundaryBinding: SyntheticDocumentReviewPacket['auditMethodBoundaryBinding'],
+  auditEventBoundaryBinding: SyntheticDocumentReviewPacket['auditEventBoundaryBinding'],
   evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
   reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): Record<string, unknown> {
@@ -627,6 +640,7 @@ function reviewPacketIntegrityMaterial(
     auditReceiptBoundaryBinding,
     auditAppendBoundaryBinding,
     auditMethodBoundaryBinding,
+    auditEventBoundaryBinding,
     evidenceBinding,
     reviewWindow,
   }
@@ -684,11 +698,12 @@ function reviewPacketFor(
   const auditReceiptBoundaryBinding = { ...SYNTHETIC_DOCUMENT_AUDIT_RECEIPT_BOUNDARY }
   const auditAppendBoundaryBinding = { ...SYNTHETIC_DOCUMENT_AUDIT_APPEND_BOUNDARY }
   const auditMethodBoundaryBinding = { ...SYNTHETIC_DOCUMENT_AUDIT_METHOD_BOUNDARY }
+  const auditEventBoundaryBinding = { ...SYNTHETIC_DOCUMENT_AUDIT_EVENT_BOUNDARY }
   const evidenceBinding = evidenceBindingFor(proposal.evidence, issuedAt, maxEvidenceAgeSeconds)
   const reviewWindow = { issuedAt: intrinsicDateToISOString.call(issuedAt), reviewBy: intrinsicDateToISOString.call(reviewByFor(issuedAt, consent.expiresAt, evidenceBinding.expiresAt, maxReviewAgeSeconds)) }
   return {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
-    integrityDigest: digest(canonicalJson(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, integrityEncodingBoundaryBinding, intrinsicBoundaryBinding, hashBoundaryBinding, patternBoundaryBinding, proxyInspectionBoundaryBinding, auditReceiptBoundaryBinding, auditAppendBoundaryBinding, auditMethodBoundaryBinding, evidenceBinding, reviewWindow))),
+    integrityDigest: digest(canonicalJson(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, integrityEncodingBoundaryBinding, intrinsicBoundaryBinding, hashBoundaryBinding, patternBoundaryBinding, proxyInspectionBoundaryBinding, auditReceiptBoundaryBinding, auditAppendBoundaryBinding, auditMethodBoundaryBinding, auditEventBoundaryBinding, evidenceBinding, reviewWindow))),
     scopeBinding,
     consentBinding,
     governanceBinding,
@@ -708,6 +723,7 @@ function reviewPacketFor(
     auditReceiptBoundaryBinding,
     auditAppendBoundaryBinding,
     auditMethodBoundaryBinding,
+    auditEventBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
