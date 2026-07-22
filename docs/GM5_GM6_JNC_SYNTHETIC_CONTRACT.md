@@ -311,11 +311,29 @@ and the terminal audit keeps only that stable code. A Proxy request is rejected
 before preflight, requested-audit append, and quota reservation.
 
 The supplied clock is still a test/internal timestamp seam, not a scheduler or
-transport. Its result must serialize as an exact ISO timestamp; an invalid
-clock value fails closed with `503 synthetic_result_integrity_invalid` before
-a direct caller receives a plan. This parity check performs no network call,
-process launch, artifact write, provider lookup, JNC dispatch, credential
-read, or publication action.
+transport. Its result must yield an exact native ISO instant; an invalid clock
+value fails closed with `503 connector_unavailable` /
+`CONNECTOR_CLOCK_UNAVAILABLE` before a direct caller receives a plan. This
+parity check performs no network call, process launch, artifact write, provider
+lookup, JNC dispatch, credential read, or publication action.
+
+### D1 clock-seam capture
+
+The runner and direct GM5/GM6 adapters accept a clock only as a local
+test/internal seam. Before preflight in the runner, and before any direct plan
+fields are constructed in an adapter, a clock must be a non-Proxy function
+that yields an exact built-in `Date`. A Proxy clock is rejected without calling
+its `apply` trap; a Proxy date is rejected before any property or prototype
+reflection. Both paths fail closed as `503 connector_unavailable` /
+`CONNECTOR_CLOCK_UNAVAILABLE` and do not create audit, quota, plan, artifact,
+or publication state.
+
+The accepted instant is copied through `Date.prototype.getTime` and a fresh
+native `Date` before it is formatted. Thus a caller-owned `Date` with a
+shadowed `toISOString` cannot relabel synthetic provenance time. This is only
+timestamp hygiene for local review evidence; it is not a scheduler, signature,
+transport, engine call, filesystem write, credential read, or execution
+authorization.
 
 ### D1 submission snapshot and registry seal
 

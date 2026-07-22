@@ -765,6 +765,23 @@ test('invalid governance clocks fail closed before preflight, audit, quota, or a
     throwing.run(request()),
     (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_CLOCK_UNAVAILABLE',
   )
+
+  const proxyClockTraps = { count: 0 }
+  const proxyClock = new Proxy(() => fixedNow(), {
+    apply() { proxyClockTraps.count += 1; return fixedNow() },
+  })
+  const proxyClockAudit = new InMemoryHashChainAuditLog()
+  const proxyClockQuota = new InMemoryDailyConnectorQuota({ dailyRuns: 6, dailyItems: 60 })
+  const proxyClockRunner = new GovernedConnectorRunner(
+    new ConnectorRegistry([connector]), proxyClockAudit, proxyClockQuota, proxyClock,
+  )
+  await assert.rejects(
+    proxyClockRunner.run(request()),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_CLOCK_UNAVAILABLE',
+  )
+  assert.equal(proxyClockTraps.count, 0)
+  assert.equal(proxyClockAudit.entries.length, 0)
+  assert.equal(proxyClockQuota.reservations.length, 0)
 })
 
 test('direct runner calls reject malformed governance context before audit or quota reservation', async () => {
@@ -900,7 +917,7 @@ test('GM5/GM6 proxy-backed boundaries fail closed before reflection, reservation
   assert.equal(egressRejected.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
 })
 
-test('direct GM5/GM6 calls cross the immutable synthetic egress boundary and reject an invalid clock value', async () => {
+test('direct GM5/GM6 calls cross the immutable synthetic egress boundary and capture only a native non-proxy clock instant', async () => {
   const threeD = new SyntheticTextToThreeDConnector(threeDConfig())
   const threeDResult = await threeD.run({ prompt: 'A local synthetic 3D proposal' }, directContext())
   assert.equal(Object.isFrozen(threeDResult), true)
@@ -921,9 +938,37 @@ test('direct GM5/GM6 calls cross the immutable synthetic egress boundary and rej
   }
   await assert.rejects(
     threeD.run({ prompt: 'A local synthetic 3D proposal' }, directContext({ now: invalidClock })),
-    SyntheticResultIntegrityError,
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_CLOCK_UNAVAILABLE',
   )
   assert.equal(invalidClockReads, 1)
+
+  const proxyClockTraps = { count: 0 }
+  const proxyClock = new Proxy(fixedNow, {
+    apply() { proxyClockTraps.count += 1; return fixedNow() },
+  })
+  await assert.rejects(
+    threeD.run({ prompt: 'A local synthetic 3D proposal' }, directContext({ now: proxyClock })),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'CONNECTOR_INVALID_CONTEXT',
+  )
+  assert.equal(proxyClockTraps.count, 0)
+
+  const dateProxyTraps = { count: 0 }
+  const proxyDate = new Proxy(new Date('2026-07-22T10:17:00.000Z'), {
+    get(target, property, receiver) { dateProxyTraps.count += 1; return Reflect.get(target, property, receiver) },
+    getPrototypeOf(target) { dateProxyTraps.count += 1; return Reflect.getPrototypeOf(target) },
+  }) as unknown as Date
+  await assert.rejects(
+    game.run(premiumUnreal, directContext({ scopes: ['game:project:build'], costCapCents: 100, requestedItems: 12, now: () => proxyDate })),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_CLOCK_UNAVAILABLE',
+  )
+  assert.equal(dateProxyTraps.count, 0)
+
+  const shadowedDate = new Date('2026-07-22T10:18:00.000Z')
+  Object.defineProperty(shadowedDate, 'toISOString', { value: () => '2026-01-01T00:00:00.000Z' })
+  const canonicalTimestampResult = await threeD.run(
+    { prompt: 'A local synthetic 3D proposal' }, directContext({ now: () => shadowedDate }),
+  )
+  assert.equal(canonicalTimestampResult.provenance.retrievedAt, '2026-07-22T10:18:00.000Z')
 })
 
 test('runner isolates submitted input and context across preflight/run, then binds the result to that exact submission', async () => {
