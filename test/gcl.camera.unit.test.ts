@@ -36,7 +36,7 @@ function enabledConnector(overrides: SyntheticCameraConnectorConfig = {}): Synth
   return new SyntheticCameraConnector({ ...limits, ...overrides })
 }
 
-function runnerFor(connector = enabledConnector(), quota: ConnectorQuota = new TestQuota()) {
+function runnerFor(connector: Connector = enabledConnector(), quota: ConnectorQuota = new TestQuota()) {
   const audit = new InMemoryHashChainAuditLog()
   return { audit, quota, runner: new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now) }
 }
@@ -955,11 +955,17 @@ test('D11 governed runner freezes one trusted local timestamp and rejects malfor
   assert.equal(proxyDateTrapRead, false)
 })
 
-test('D13 governed runner rejects shaped, stale, injected, or non-synthetic result control planes before a success audit', async () => {
+test('D13 governed runner rejects shaped, stale, injected, mismatched, non-synthetic, or invalid-confidence result control planes before a success audit', async () => {
   const valid = await enabledConnector().run(loadingDockInput, context)
   let resultProxyTrapRead = false
   const proxiedResult = new Proxy(structuredClone(valid), {
-    get() { resultProxyTrapRead = true; throw new Error('RESULT_PROXY_MUST_NOT_RUN') },
+    // Async Promise resolution reads `then` before D13 receives the value.
+    // Every other access must still be rejected by D13 without invoking a trap.
+    get(_target, property) {
+      if (property === 'then') return undefined
+      resultProxyTrapRead = true
+      throw new Error('RESULT_PROXY_MUST_NOT_RUN')
+    },
   })
   const accessorResult = structuredClone(valid)
   let provenanceAccessorRead = false
@@ -973,8 +979,12 @@ test('D13 governed runner rejects shaped, stale, injected, or non-synthetic resu
   injectedAuditHash.provenance.auditHash = '0'.repeat(64)
   const liveClaim = structuredClone(valid)
   liveClaim.provenance.liveStatus = 'LIVE_ENABLED' as never
+  const connectorMismatch = structuredClone(valid)
+  connectorMismatch.provenance.connectorId = 'another-synthetic-connector'
+  const invalidConfidence = structuredClone(valid)
+  invalidConfidence.confidence = Number.NaN
 
-  for (const malformed of [proxiedResult, accessorResult, staleProvenance, injectedAuditHash, liveClaim]) {
+  for (const malformed of [proxiedResult, accessorResult, staleProvenance, injectedAuditHash, liveClaim, connectorMismatch, invalidConfidence]) {
     const setup = runnerFor(connectorReturning(malformed))
     await assert.rejects(
       () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
