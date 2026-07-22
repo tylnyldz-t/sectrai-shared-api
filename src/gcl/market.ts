@@ -81,6 +81,7 @@ export type SyntheticMarketConnectorConfig = {
 }
 
 type ConfiguredMarketLimits = Required<Omit<SyntheticMarketConnectorConfig, 'liveEnabled'>>
+const MARKET_CONFIG_FIELDS = ['liveEnabled', 'maxCostCapCents', 'maxItems', 'maxCapacityUnits'] as const
 
 export type MarketPlanBinding = {
   product: string
@@ -330,6 +331,31 @@ function positiveInteger(value: unknown): number | null {
   return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
 }
 
+/**
+ * D14 copies connector configuration at construction rather than retaining a
+ * caller-owned object across preflight, audit, quota, and run. Configuration
+ * is bounded scalar data only: shaped and unknown (including credential-like)
+ * fields leave the connector unavailable before any governed-run side effect.
+ */
+function snapshotMarketConnectorConfig(value: unknown): SyntheticMarketConnectorConfig | null {
+  if (
+    !value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value) ||
+    Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0
+  ) return null
+
+  const names = Object.getOwnPropertyNames(value)
+  if (names.some((field) => !MARKET_CONFIG_FIELDS.includes(field as typeof MARKET_CONFIG_FIELDS[number]))) return null
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const snapshot: SyntheticMarketConnectorConfig = {}
+  for (const field of MARKET_CONFIG_FIELDS) {
+    const descriptor = descriptors[field]
+    if (!descriptor) continue
+    if (!descriptor.enumerable || !('value' in descriptor)) return null
+    Object.defineProperty(snapshot, field, { enumerable: true, value: descriptor.value })
+  }
+  return Object.freeze(snapshot) as SyntheticMarketConnectorConfig
+}
+
 function ownDataObject(value: unknown, error: string): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Object.prototype || Object.getOwnPropertySymbols(value).length > 0) {
     throw new ConnectorInputError(error)
@@ -381,7 +407,8 @@ function requestedCapacityUnits(value: unknown, maxCapacityUnits: number): numbe
   return parsed
 }
 
-function configured(config: SyntheticMarketConnectorConfig, ctx: ConnectorRunContext): ConfiguredMarketLimits {
+function configured(config: SyntheticMarketConnectorConfig | null, ctx: ConnectorRunContext): ConfiguredMarketLimits {
+  if (!config) throw new ConnectorUnavailableError('MARKET_GOVERNANCE_LIMITS_NOT_CONFIGURED')
   const maxCostCapCents = positiveInteger(config.maxCostCapCents)
   const maxItems = positiveInteger(config.maxItems)
   const maxCapacityUnits = positiveInteger(config.maxCapacityUnits)
@@ -1364,13 +1391,17 @@ export class SyntheticMarketConnector implements Connector<SyntheticMarketInput,
   readonly authKind = 'owner-token' as const
   readonly quotaGroup = 'market'
   readonly scopes = MARKET_SCOPES
+  private readonly config: SyntheticMarketConnectorConfig | null
 
-  constructor(private readonly config: SyntheticMarketConnectorConfig = {}) {}
+  constructor(config: SyntheticMarketConnectorConfig = {}) {
+    this.config = snapshotMarketConnectorConfig(config)
+  }
 
   /**
    * D13 returns the newly parsed scalar-only request rather than retaining a
-   * caller-owned input object. The governed runner passes that snapshot to
-   * `run` after its asynchronous audit and quota boundaries.
+   * caller-owned input object. D14 similarly fixes the constructor's
+   * configuration snapshot. The governed runner then crosses its asynchronous
+   * audit and quota boundaries without retaining either caller-owned value.
    */
   preflight(input: SyntheticMarketInput, ctx: ConnectorRunContext): SyntheticMarketInput {
     return validatedRequest(this.config, input, ctx)
