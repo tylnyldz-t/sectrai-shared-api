@@ -428,7 +428,8 @@ function safetyAssessment(filter: ClosedFamilySafetyFilter, input: Readonly<Text
   let assessment: FamilySafetyAssessment
   // Do not retain or supply the caller's policy object as `this`; the copied
   // callable is a synchronous data-only seam, not a capability receiver.
-  try { assessment = filter.assess(policyInput) as FamilySafetyAssessment } catch { throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_UNAVAILABLE') }
+  const assess = filter.assess
+  try { assessment = assess(policyInput) as FamilySafetyAssessment } catch { throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_UNAVAILABLE') }
   const result = plainRecord(assessment)
   if (!result || !hasOnlyKeys(result, ['allowed', 'reason'])) throw new ConnectorUnavailableError('IMAGE_FAMILY_SAFETY_FILTER_INVALID')
   const allowed = ownDataValue(result, 'allowed')

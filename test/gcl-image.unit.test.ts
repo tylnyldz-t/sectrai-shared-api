@@ -486,7 +486,7 @@ test('candidate issuance rejects direct output, binds the full redacted candidat
   const forgedResult = structuredClone(concurrentResult)
   forgedResult.provenance.auditHash = 'f'.repeat(64)
   await assert.rejects(() => issueSyntheticImageCandidates(forgedResult, new InMemoryImageCandidateLedger(concurrentAudit), context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_RUN_AUDIT_NOT_FOUND')
-  const unrelatedDirectResult = await configuredConnector().run({ prompt: 'A different child-friendly synthetic scene' }, context)
+  const unrelatedDirectResult = structuredClone(await configuredConnector().run({ prompt: 'A different child-friendly synthetic scene' }, context))
   unrelatedDirectResult.provenance.auditHash = concurrentResult.provenance.auditHash
   await assert.rejects(() => issueSyntheticImageCandidates(unrelatedDirectResult, new InMemoryImageCandidateLedger(concurrentAudit), context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'IMAGE_CANDIDATE_RUN_AUDIT_NOT_FOUND')
   const concurrentLedger = new InMemoryImageCandidateLedger(concurrentAudit)
@@ -579,6 +579,25 @@ test('D2 policy capsules reject nested credentials and cannot mutate the normali
   assert.equal(hiddenAudit.entries.length, 0)
   assert.equal(hiddenQuota.requests.length, 0)
   assert.equal(JSON.stringify(hiddenAudit.entries).includes(privateValue), false)
+
+  let policyReceiver: unknown = 'not-called'
+  const recordPolicyReceiver = (value: unknown): void => { policyReceiver = value }
+  const receiverAudit = new InMemoryHashChainAuditLog()
+  const receiverQuota = new TestQuota()
+  const receiverRunner = new GovernedConnectorRunner(new ConnectorRegistry([new SyntheticImageTtiConnector({
+    liveMode: LIVE_DISABLED,
+    maxCostCapCents: 20,
+    maxItems: 2,
+    ownerReviewTtlSeconds: 300,
+    familySafetyFilter: {
+      id: 'receiverless-policy-d2',
+      assess: function (this: unknown) { recordPolicyReceiver(this); return { allowed: true } },
+    },
+  })]), receiverAudit, receiverQuota, now)
+  await receiverRunner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' }))
+  assert.equal(policyReceiver, undefined)
+  assert.equal(receiverAudit.entries.length, 2)
+  assert.equal(receiverQuota.requests.length, 1)
 
   let mutationAttempted = false
   const mutatingPolicy = new SyntheticImageTtiConnector({
