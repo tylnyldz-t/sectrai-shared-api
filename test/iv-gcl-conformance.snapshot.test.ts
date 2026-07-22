@@ -5,7 +5,7 @@ import { posix as path } from 'node:path'
 import test from 'node:test'
 import ts from 'typescript'
 
-type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16'
+type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16' | 'D17'
 
 type PinnedClosureBlob = {
   path: string
@@ -46,7 +46,7 @@ const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
 const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
 
 /*
- * These are immutable local Git snapshots from the D1 through D16 audit batches.
+ * These are immutable local Git snapshots from the D1 through D17 audit batches.
  * Every source read below is `git show <revision>:<path>`, never the mutable
  * worktree file. This fixture does not import target runtime code, load an
  * env file, open a socket, or make a network request. A missing worktree,
@@ -179,6 +179,14 @@ const snapshots: readonly Snapshot[] = [
   { batch: 'D16', name: 'Translation', revision: '8911290', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '46280bb34960ee1ae5794bd8ee952ccfc1262708', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
   { batch: 'D16', name: 'Language education', revision: 'a8d986d', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: 'c016c22ff9c9dc8fd017e18b5c237f173ce9b6f5', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/types.ts', blob: '3736c0bb4c56981efa81641ae94d0595a5030a9f' }] },
   { batch: 'D16', name: 'Camera', revision: 'fe57460', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: 'd01cd7b19acf975a09c9d51e75e66df5e41a6a80', registryBlob: 'fb46d9f3271e79b1966cdffa075bde325cb56e8d', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D17', name: 'RA OCR', revision: '3ff9d1d', directory: 'night-ra-ocr', connectorPath: 'src/gcl/vision.ts', connectorBlob: '8fda0ba56946d74fb389aaa57e7f8e9aa4834963', registryBlob: '2407ff38734546832bd9a8e2e97fae488198e7f9', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
+  { batch: 'D17', name: 'RA image', revision: '2e021b3', directory: 'night-ra-image', connectorPath: 'src/gcl/image.ts', connectorBlob: 'bf63ec84ac4f49d2a96be90c30b77b186e065cae', registryBlob: '6faf3cd1be37336d7cdc4181a81d90199aa2e9a2', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D17', name: 'RA 3D/game', revision: 'a9dbbe6', directory: 'night-ra-3d-game', connectorPath: 'src/gcl/three-d.ts', connectorBlob: 'eccfc749f420702b6c7f206f72d54241a71ce05d', registryBlob: '400933ad278d07687541967370fae5ef584abbc9', hardDeniesLiveOptIn: false, quotaFailureAudited: false, pinnedClosureBlobs: [{ path: 'src/gcl/result-boundary.ts', blob: '10c43280de0db030e79348bcf0026dea6255bd52' }] },
+  { batch: 'D17', name: 'RA market', revision: 'f501388', directory: 'night-ra-market', connectorPath: 'src/gcl/market.ts', connectorBlob: '39451c140ad97b426dbcc76d0793506a84788335', registryBlob: '9fa4810c5ef2d68814dcccb600cdf88c5835e557', hardDeniesLiveOptIn: true, quotaFailureAudited: false },
+  { batch: 'D17', name: 'RFID', revision: '7ee3b11', directory: 'night-gm-rfid', connectorPath: 'src/gcl/rfid.ts', connectorBlob: '688d170d830684e8c0dfd35f0d480ea7d81e4019', registryBlob: '942c93c8f73266f4b2581723ab90666c423ae6da', hardDeniesLiveOptIn: false, quotaFailureAudited: true },
+  { batch: 'D17', name: 'Translation', revision: 'a57b677', directory: 'night-gm-translate', connectorPath: 'src/gcl/translation.ts', connectorBlob: '4c983a29f07983652be61f3c948e823eb9492422', registryBlob: '46280bb34960ee1ae5794bd8ee952ccfc1262708', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedSupplementalBlobs: [{ path: 'src/gcl/audit.ts', blob: '3bc0b92de9e503f6f0d4a4384e619776ab6cff74' }] },
+  { batch: 'D17', name: 'Language education', revision: '7f21473', directory: 'night-gm-langedu', connectorPath: 'src/gcl/language-education.ts', connectorBlob: 'c016c22ff9c9dc8fd017e18b5c237f173ce9b6f5', registryBlob: '1de9365da8153242785b3fed37238f2e860d1842', hardDeniesLiveOptIn: true, quotaFailureAudited: true },
+  { batch: 'D17', name: 'Camera', revision: '1adcf01', directory: 'night-gm-camera', connectorPath: 'src/gcl/camera.ts', connectorBlob: '41e83266ea7f68a06fdf3220137943c4276abb47', registryBlob: '5fc1d513d6ade75defca073e34c2a7d6cd92ee50', hardDeniesLiveOptIn: true, quotaFailureAudited: true, pinnedClosureBlobs: [{ path: 'src/gcl/audit.ts', blob: 'f1d877895b7ba805b3359a40cdd6e76b3c36bf24' }, { path: 'src/gcl/errors.ts', blob: '0cb36107c3f6844d399c7fe1a11f71b07b2a0951' }] },
 ]
 
 function repositoryFor(snapshot: Snapshot): string {
@@ -471,16 +479,22 @@ function assertAllowedImports(source: string, name: string): void {
   }
 }
 
+function quotaReservationIndex(registry: string): number {
+  return Math.max(registry.indexOf('await this.quota.consume'), registry.indexOf('await quotaConsume.call'))
+}
+
 function auditCapturesQuotaFailure(registry: string): boolean {
   const requestedAudit = registry.indexOf('const requestedAudit')
   const protectedExecution = registry.indexOf('try {', requestedAudit)
-  const quota = registry.indexOf('await this.quota.consume', requestedAudit)
+  const quota = quotaReservationIndex(registry)
   const failureAudit = Math.max(
     registry.indexOf("type: 'connector.run.failed'", quota),
     registry.indexOf("this.event('connector.run.failed'", quota),
   )
   const failureSource = registry.slice(failureAudit)
   const directRequestedLink = failureSource.includes('requestedAuditHash: requestedAudit.hash')
+  const requestedHashBoundAtReservation = /const requestedAuditHash\s*=\s*returnedAuditHash\(await auditAppend\.call\(/.test(registry.slice(requestedAudit, protectedExecution))
+  const directRequestedHashLink = requestedHashBoundAtReservation && /\brequestedAuditHash\s*(?=[,}])/.test(failureSource)
   const helperCall = failureSource.match(/\bdetail\s*:\s*([A-Za-z_$][A-Za-z0-9_$]*)\(\s*requestedAudit\.hash\b/)
   const helperName = helperCall?.[1]
   const helperStart = helperName ? registry.indexOf(`function ${helperName}(`) : -1
@@ -489,7 +503,7 @@ function auditCapturesQuotaFailure(registry: string): boolean {
   const helperForwardsRequestedLink = Boolean(helperName)
     && /^function\s+[A-Za-z_$][A-Za-z0-9_$]*\s*\(\s*requestedAuditHash\b/.test(helperSource)
     && /\brequestedAuditHash\s*(?::|[,}])/.test(helperSource)
-  return requestedAudit >= 0 && protectedExecution > requestedAudit && protectedExecution < quota && failureAudit > quota && (directRequestedLink || helperForwardsRequestedLink)
+  return requestedAudit >= 0 && protectedExecution > requestedAudit && protectedExecution < quota && failureAudit > quota && (directRequestedLink || directRequestedHashLink || helperForwardsRequestedLink)
 }
 
 function hardDeniesLiveOptIn(connector: string): boolean {
@@ -500,14 +514,14 @@ function hardDeniesLiveOptIn(connector: string): boolean {
 }
 
 function ownerDenialPrecedesReservations(registry: string): boolean {
-  const ownerGate = registry.search(/if \((?:!(?:request|context|safeRequest)\.ownerApproved|(?:request|context|safeRequest)\.ownerApproved !== true)\) throw new OwnerGateError/)
+  const ownerGate = registry.search(/if \((?:!(?:request|context|safeRequest|validated)\.ownerApproved|(?:request|context|safeRequest|validated)\.ownerApproved !== true)\) throw new OwnerGateError/)
   const preflight = registry.indexOf('await connector.preflight')
   const requestedAudit = registry.indexOf('const requestedAudit')
-  const quota = registry.indexOf('await this.quota.consume')
+  const quota = quotaReservationIndex(registry)
   return ownerGate >= 0 && ownerGate < preflight && preflight < requestedAudit && requestedAudit < quota
 }
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 source fixture pins every audited connector and its governance runner to local Git objects', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
     assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
@@ -524,7 +538,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 source fixture pins
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
     const closure = [...sourceClosure(snapshot).values()].join('\n')
@@ -543,7 +557,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 synthetic source cl
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
@@ -740,4 +754,21 @@ test('D16 fail-closed safety checks reject wrapped process and module roots befo
   ]) assert.throws(() => assertNoRuntimeEscape(source, `D16 runtime-root wrapper probe: ${source}`))
   assert.doesNotThrow(() => assertNoRuntimeEscape('function safe(environment: NodeJS.ProcessEnv = process.env) { return environment.GCL_CAMERA_SYNTHETIC_ENABLED === \'true\' }', 'D16 allowed typed synthetic configuration default'))
   assert.doesNotThrow(() => assertNoRuntimeEscape("const packet = { module: 'synthetic' }; const label = packet.module", 'D16 allowed ordinary data property'))
+})
+
+test('D17 audit-receipt edge accepts only a bounded receipt and never continues a malformed append with a synthetic failure event', () => {
+  const camera = snapshots.find((snapshot) => snapshot.batch === 'D17' && snapshot.name === 'Camera')
+  assert.ok(camera, 'D17 camera snapshot must be present')
+
+  const audit = sourceAt(camera, 'src/gcl/audit.ts')
+  const registry = sourceAt(camera, 'src/gcl/registry.ts')
+  const connector = sourceAt(camera, camera.connectorPath)
+
+  assert.match(audit, /nodeTypes\.isProxy\(value\)/, 'D17 audit receipts must reject Proxy wrappers before descriptor inspection')
+  assert.match(audit, /names\.length !== 1 \|\| names\[0\] !== 'hash'/, 'D17 audit receipts must reject extra or missing fields')
+  assert.match(audit, /!descriptor \|\| !\('value' in descriptor\) \|\| !descriptor\.enumerable \|\| typeof descriptor\.value !== 'string' \|\| !SHA256_PATTERN\.test\(descriptor\.value\)/, 'D17 audit receipts must reject accessor, hidden, or malformed hash values')
+  assert.match(audit, /return validateAuditAppendReceipt\(await auditLog\.append\(event\)\)/, 'D17 audit append must validate before exposing a hash')
+  assert.doesNotMatch(registry, /this\.auditLog\.append\(/, 'D17 governed runner must not bind an unvalidated audit receipt')
+  assert.doesNotMatch(connector, /\bauditLog\.append\(/, 'D17 camera review must not bind an unvalidated audit receipt')
+  assert.match(registry, /if \(error instanceof AuditReceiptError\) throw error/, 'D17 malformed terminal receipt must stop without appending a second failure transition')
 })
