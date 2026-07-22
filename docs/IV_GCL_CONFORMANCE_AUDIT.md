@@ -996,3 +996,69 @@ gaps stay classified; no migration occurs; output is proposal-only with no
 action; JARVIS/JNC is not started; and synthetic evidence is never deployment
 or live-enable authority. D12 adds no network, provider, credential,
 real-world input, production mutation, or live output.
+
+## D13 — first immutable successor package
+
+D13 pins the **first committed successor** after every D12 snapshot, never a
+sibling worktree tip. The pinned commits are RA OCR `e87610c`, RA image
+`1c08de7`, RA 3D/game `48117da`, RA market `f2caeb2`, RFID `a6f5939`,
+translation `8bf4882`, language education `60b6797`, and camera `91ad591`.
+RA voice has no successor after its D1 snapshot. Mutable changes in the RFID
+and language-education worktrees are deliberately not D13 evidence.
+
+Every D13 source is read through `git show <pinned-commit>:<path>` and its
+connector and governance-runner blobs are verified. D13 additionally pins the
+changed 3D result boundary in its local import closure and the changed
+game-engine companion as a separate audited root. The fixture never imports a
+target runtime module, reads mutable sibling source, loads an environment file,
+or invokes a connector.
+
+| Connector | D13 source-only evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D13 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Documentation/unit-test successor; connector and runner remain D12-identical | `requested` only | Pass | Nonconformant |
+| RA image | Descriptor-safe ledger method resolution is cycle-bounded; issuance/review accept only the already validated full run context or their smaller exact context | `requested` only | Pass | Nonconformant |
+| RA 3D/game | Final result boundary re-derives the normalized allowed input from the frozen submission and rejects a substituted but re-hashed synthetic plan; JNC remains contract-only | `requested` only | Pass | Nonconformant |
+| RA market | Documentation successor; connector and runner remain D12-identical | `requested` only | Pass | Nonconformant |
+| RFID | Adds a fixed PSMS-SIM egress/production-boundary review proposal whose check outcomes are data only; it opens no reader, client, deployment, migration, or write path | `requested`, `failed` | Pass | Conformant |
+| Translation | Documentation and synthetic safety-test successor; connector and runner remain D12-identical | `requested`, `failed` | Pass | Conformant |
+| Language education | Documentation/unit-test successor; connector and runner remain D12-identical | `requested`, `failed` | Pass | Conformant |
+| Camera | ADOS control evidence now explicitly covers the D11 frozen runner clock; connector lifecycle remains unchanged | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` remains limited to this immutable, synthetic IV governance
+envelope. It is not approval for a provider, credential/API key, network
+egress, device, camera/RFID/media input, database, migration, JARVIS/JNC
+launch, delivery, handoff, publication, production write, or live enablement.
+
+### D13 negative and edge evidence
+
+- The source-only fixture now denies borrowed reflective host-capability
+  recovery: `Reflect.get.call(...)`, `Reflect.apply(Reflect.get, ...)`, and
+  borrowed descriptor/prototype methods cannot recover `process` environment
+  data or CommonJS loader capability. Reflection over an ordinary input's own
+  keys or descriptor remains allowed because it grants no host authority.
+- The complete D1–D13 closure audit continues to reject egress clients,
+  provider endpoints, credential-like configuration reads, dynamic module
+  loading, evaluation, subprocess/worker launch, global capability access,
+  automatic publication, and local imports that escape `src/gcl`.
+- Owner denial remains before preflight, requested-audit reservation, and quota
+  consumption. The classification stays intentionally conservative: RA OCR,
+  image, 3D/game, and market reserve quota outside the protected failed-audit
+  lifecycle; RFID, translation, language education, and camera retain a linked
+  `connector.run.failed` event.
+
+### D13 test evidence and ADOS boundary
+
+`npm run test:conformance` passes the complete D1–D13 immutable-pin,
+local-closure, disabled-mode, owner-ordering, quota-classification, and
+negative-source suite. It uses local Git objects and in-process TypeScript
+parsing only; it loads no environment file or credential, contacts no provider,
+opens no socket, runs no database or migration, connects no device,
+sends/publishes/handoffs nothing, and writes neither `main` nor production.
+
+All ten ADOS rules remain intact: product data planes stay isolated;
+default-deny and `LIVE_DISABLED` are mandatory; evidence is source/blob-only;
+owner approval is never inferred; maker–checker is retained; unresolved audit
+gaps stay classified; no migration occurs; output is proposal-only with no
+action; JARVIS/JNC is not started; and synthetic evidence is never deployment
+or live-enable authority. D13 adds no network, provider, credential,
+real-world input, production mutation, or live output.

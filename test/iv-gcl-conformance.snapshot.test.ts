@@ -312,6 +312,8 @@ function assertNoRuntimeEscape(source: string, name: string): void {
   assert.doesNotMatch(code, /\bReflect\s*(?:\?\.)?\s*(?:\.\s*get|\[\s*['"`]get['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process(?:\s*(?:\.|\?\.)\s*env)?|module)\b/, `${name} must not reflectively obtain a runtime, module, or environment capability`)
   assert.doesNotMatch(code, /\bObject\s*(?:\?\.)?\s*(?:\.\s*getOwnPropertyDescriptors?|\[\s*['"`]getOwnPropertyDescriptors?['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process(?:\s*(?:\.|\?\.)\s*env)?|module)\b/, `${name} must not obtain a runtime, module, or environment capability by descriptor`)
   assert.doesNotMatch(code, /\b(?:Object|Reflect)\s*(?:\?\.)?\s*(?:\.\s*getPrototypeOf|\[\s*['"`]getPrototypeOf['"`]\s*\])\s*\(\s*(?:globalThis|global|window|process|module)\b/, `${name} must not recover a host capability prototype`)
+  assert.doesNotMatch(code, /\b(?:Reflect|Object)\s*(?:\?\.)?\s*(?:\.\s*(?:get|getOwnPropertyDescriptors?|getPrototypeOf)|\[\s*['"`](?:get|getOwnPropertyDescriptors?|getPrototypeOf)['"`]\s*\])\s*(?:\?\.)?\s*(?:\.\s*(?:call|apply|bind)|\[\s*['"`](?:call|apply|bind)['"`]\s*\])/, `${name} must not borrow reflective host-capability recovery`)
+  assert.doesNotMatch(code, /\bReflect\s*(?:\?\.)?\s*(?:\.\s*apply|\[\s*['"`]apply['"`]\s*\])\s*\(\s*Reflect\s*(?:\?\.)?\s*(?:\.\s*get|\[\s*['"`]get['"`]\s*\])\b/, `${name} must not apply reflective host-capability recovery`)
   assert.doesNotMatch(code, /\b(?:process|environment)\s*(?:\?\.)?\s*\[/, `${name} must not use computed environment access`)
   assert.doesNotMatch(code, /\bmodule\s*(?:\?\.)?\s*\[/, `${name} must not use computed module capability recovery`)
   assert.doesNotMatch(code, /\bprocess\s*(?:\.|\?\.)\s*env\s*(?:\?\.)?\s*\[/, `${name} must not use computed environment access`)
@@ -388,7 +390,7 @@ function ownerDenialPrecedesReservations(registry: string): boolean {
   return ownerGate >= 0 && ownerGate < preflight && preflight < requestedAudit && requestedAudit < quota
 }
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 source fixture pins every audited connector and its governance runner to local Git objects', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13 source fixture pins every audited connector and its governance runner to local Git objects', () => {
   for (const snapshot of snapshots) {
     const resolvedRevision = gitAt(snapshot, ['rev-parse', '--verify', `${snapshot.revision}^{commit}`]).trim()
     assert.equal(resolvedRevision.startsWith(snapshot.revision), true, `${snapshot.name} revision does not resolve to its pinned commit`)
@@ -405,7 +407,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 source fixture pins every audited c
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13 synthetic source closure has no egress, privileged configuration, subprocess, or send surface', () => {
   for (const snapshot of snapshots) {
     const connector = sourceAt(snapshot, snapshot.connectorPath)
     const closure = [...sourceClosure(snapshot).values()].join('\n')
@@ -424,7 +426,7 @@ test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 synthetic source closure has no egr
   }
 })
 
-test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
+test('D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13 denied-owner and quota-rejection edge cases are classified without overstating conformance', () => {
   for (const snapshot of snapshots) {
     const registry = sourceAt(snapshot, 'src/gcl/registry.ts')
     assert.equal(ownerDenialPrecedesReservations(registry), true, `${snapshot.name} denied owner could reach preflight, audit reservation, or quota`)
@@ -567,4 +569,17 @@ test('D12 fail-closed safety checks reject reflective recovery from the Node and
   ]) assert.throws(() => assertNoRuntimeEscape(source, `D12 host-root recovery probe: ${source}`))
   assert.doesNotThrow(() => assertNoRuntimeEscape("const keys = Reflect.ownKeys(input)", 'D12 allowed own-data reflection'))
   assert.doesNotThrow(() => assertNoRuntimeEscape("const descriptor = Object.getOwnPropertyDescriptor(input, 'value')", 'D12 allowed own-data descriptor'))
+})
+
+test('D13 fail-closed safety checks reject borrowed reflective host-capability recovery', () => {
+  for (const source of [
+    "const environment = Reflect.get.call(Reflect, process, 'env')",
+    "const environment = Reflect.apply(Reflect.get, Reflect, [process, 'env'])",
+    "const environment = Object.getOwnPropertyDescriptor.call(Object, process, 'env')?.value",
+    "const environment = Object.getOwnPropertyDescriptors.apply(Object, [process]).env.value",
+    "const prototype = Reflect.getPrototypeOf.call(Reflect, module)",
+    "const loader = Reflect.apply(Reflect.get, Reflect, [module, 'require'])",
+  ]) assert.throws(() => assertNoRuntimeEscape(source, `D13 borrowed reflection probe: ${source}`))
+  assert.doesNotThrow(() => assertNoRuntimeEscape("const keys = Reflect.ownKeys(input)", 'D13 allowed own-data reflection'))
+  assert.doesNotThrow(() => assertNoRuntimeEscape("const descriptor = Object.getOwnPropertyDescriptor(input, 'value')", 'D13 allowed own-data descriptor'))
 })
