@@ -1,4 +1,5 @@
 import { SyntheticResultIntegrityError } from './errors.js'
+import { JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from './jnc-pilot.js'
 import { deepFreeze, isCanonicalJsonData, syntheticPlanSha256 } from './plan-integrity.js'
 import { verifiesSyntheticReviewSnapshot } from './review-snapshot.js'
 import { LIVE_DISABLED } from './safety.js'
@@ -113,7 +114,7 @@ function validGpuResourceCard(value: unknown): boolean {
   return Boolean(request && exactKeys(request, ['computeTier', 'estimatedVramMiB', 'maximumRuntimeSeconds', 'budgetEnvelopeRef']) &&
     (request.computeTier === 'economy' || request.computeTier === 'premium') &&
     (request.estimatedVramMiB === 'UNKNOWN' || typeof request.estimatedVramMiB === 'number' && Number.isSafeInteger(request.estimatedVramMiB) && request.estimatedVramMiB > 0) &&
-    typeof request.maximumRuntimeSeconds === 'number' && Number.isSafeInteger(request.maximumRuntimeSeconds) && request.maximumRuntimeSeconds > 0 && request.maximumRuntimeSeconds <= 5_400 &&
+    typeof request.maximumRuntimeSeconds === 'number' && Number.isSafeInteger(request.maximumRuntimeSeconds) && request.maximumRuntimeSeconds > 0 && request.maximumRuntimeSeconds <= JNC_MAXIMUM_GPU_RUNTIME_SECONDS &&
     typeof request.budgetEnvelopeRef === 'string' && request.budgetEnvelopeRef.trim() === request.budgetEnvelopeRef && request.budgetEnvelopeRef.length > 0 && request.budgetEnvelopeRef.length <= 160)
 }
 

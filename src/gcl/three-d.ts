@@ -1,5 +1,5 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
-import { ContractOnlyJncPilotMapper, type GpuResourceRequest, type JncBlenderPilotHandoff, type JncGpuResourceCard } from './jnc-pilot.js'
+import { ContractOnlyJncPilotMapper, JNC_MAXIMUM_GPU_RUNTIME_SECONDS, type GpuResourceRequest, type JncBlenderPilotHandoff, type JncGpuResourceCard } from './jnc-pilot.js'
 import { deepFreeze, frozenCanonicalJsonCopy, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
 import { validatedSyntheticConnectorResult } from './result-boundary.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
@@ -128,7 +128,7 @@ function gpuResourceRequest(value: unknown): GpuResourceRequest | undefined {
   const estimatedVramMiB = record.estimatedVramMiB === 'UNKNOWN' ? 'UNKNOWN' : positiveInteger(record.estimatedVramMiB)
   if (estimatedVramMiB === null) throw new ConnectorInputError('INVALID_GPU_VRAM_ESTIMATE')
   const maximumRuntimeSeconds = positiveInteger(record.maximumRuntimeSeconds)
-  if (!maximumRuntimeSeconds || maximumRuntimeSeconds > 5_400) throw new ConnectorInputError('INVALID_GPU_RUNTIME_LIMIT')
+  if (!maximumRuntimeSeconds || maximumRuntimeSeconds > JNC_MAXIMUM_GPU_RUNTIME_SECONDS) throw new ConnectorInputError('INVALID_GPU_RUNTIME_LIMIT')
   return {
     computeTier: record.computeTier,
     estimatedVramMiB,

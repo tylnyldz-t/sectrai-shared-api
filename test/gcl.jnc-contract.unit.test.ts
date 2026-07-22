@@ -3,6 +3,7 @@ import test from 'node:test'
 import { hashAuditEvent, InMemoryHashChainAuditLog, verifiedAuditChainHead } from '../src/gcl/audit.js'
 import { AuditChainError, ConnectorInputError, ConnectorUnavailableError, CostCapError, OwnerGateError, ScopeError, SyntheticResultIntegrityError, SyntheticReviewIntegrityError } from '../src/gcl/errors.js'
 import { gameEngineConnectorFromEnvironment, SyntheticGameEngineConnector, type GameEngineBuildInput, type GameEngineBuildPlan } from '../src/gcl/game-engine.js'
+import { ContractOnlyJncPilotMapper, JNC_MAXIMUM_GPU_RUNTIME_MINUTES, JNC_MAXIMUM_GPU_RUNTIME_SECONDS } from '../src/gcl/jnc-pilot.js'
 import { ownerGateError } from '../src/gcl/owner-gate.js'
 import { assertSyntheticPlanIntegrity, createSyntheticPlanIntegrity, deepFreeze, isCanonicalJsonData, syntheticPlanSha256, verifiesSyntheticPlanIntegrity } from '../src/gcl/plan-integrity.js'
 import { InMemoryDailyConnectorQuota } from '../src/gcl/quota.js'
@@ -252,6 +253,60 @@ test('GM6 keeps the economic Godot template as a non-executed, non-GPU plan', as
   assert.equal(result.data.publication.state, 'DISABLED_NOT_IMPLEMENTED')
   assert.equal(result.provenance.source, 'synthetic-game-engine-plan')
   assert.equal(result.provenance.untrustedContent.source, 'game-engine-input')
+})
+
+test('JNC contract-card runtime envelope is immutable and GM6 rejects impossible GPU plans before reservations', async () => {
+  assert.equal(JNC_MAXIMUM_GPU_RUNTIME_SECONDS, 5_400)
+  assert.equal(JNC_MAXIMUM_GPU_RUNTIME_MINUTES, 90)
+  const mapper = new ContractOnlyJncPilotMapper()
+  const card = mapper.createGpuResourceCard({
+    computeTier: 'premium', estimatedVramMiB: 'UNKNOWN', maximumRuntimeSeconds: JNC_MAXIMUM_GPU_RUNTIME_SECONDS, budgetEnvelopeRef: 'budget:bounded-synthetic',
+  })
+  assert.equal(Object.isFrozen(card), true)
+  assert.equal(Object.isFrozen(card.request), true)
+  assert.equal(card.request?.maximumRuntimeSeconds, JNC_MAXIMUM_GPU_RUNTIME_SECONDS)
+  assert.throws(
+    () => mapper.createGpuResourceCard({ ...card.request!, maximumRuntimeSeconds: JNC_MAXIMUM_GPU_RUNTIME_SECONDS + 1 }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_JNC_GPU_RESOURCE_REQUEST',
+  )
+  let getterReads = 0
+  const accessorRequest: Record<string, unknown> = {
+    computeTier: 'premium', estimatedVramMiB: 'UNKNOWN', maximumRuntimeSeconds: 60, budgetEnvelopeRef: 'budget:accessor-rejected',
+  }
+  Object.defineProperty(accessorRequest, 'maximumRuntimeSeconds', {
+    enumerable: true,
+    get() { getterReads += 1; return 60 },
+  })
+  assert.throws(
+    () => mapper.createGpuResourceCard(accessorRequest as unknown as import('../src/gcl/jnc-pilot.js').GpuResourceRequest),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_JNC_GPU_RESOURCE_REQUEST',
+  )
+  assert.equal(getterReads, 0)
+
+  const invalidConfig = runner(new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: JNC_MAXIMUM_GPU_RUNTIME_MINUTES + 1 }))
+  await assert.rejects(
+    invalidConfig.run.run(gameRequest({ ...premiumUnreal, gpuMinutes: JNC_MAXIMUM_GPU_RUNTIME_MINUTES + 1 })),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GAME_ENGINE_JNC_RUNTIME_ENVELOPE_INVALID',
+  )
+  assert.equal(invalidConfig.audit.entries.length, 0)
+  assert.equal(invalidConfig.quota.reservations.length, 0)
+
+  const overLimit = runner(new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: JNC_MAXIMUM_GPU_RUNTIME_MINUTES }))
+  await assert.rejects(
+    overLimit.run.run(gameRequest({ ...premiumUnreal, gpuMinutes: JNC_MAXIMUM_GPU_RUNTIME_MINUTES + 1 })),
+    (error: unknown) => error instanceof CostCapError && error.message === 'GPU_RUNTIME_LIMIT_EXCEEDED',
+  )
+  assert.equal(overLimit.audit.entries.length, 0)
+  assert.equal(overLimit.quota.reservations.length, 0)
+
+  const atLimit = runner(
+    new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: JNC_MAXIMUM_GPU_RUNTIME_MINUTES }),
+    new InMemoryDailyConnectorQuota({ dailyRuns: 1, dailyItems: JNC_MAXIMUM_GPU_RUNTIME_MINUTES }),
+  )
+  const accepted = await atLimit.run.run(gameRequest({ ...premiumUnreal, gpuMinutes: JNC_MAXIMUM_GPU_RUNTIME_MINUTES })) as ConnectorResult<GameEngineBuildPlan>
+  assert.equal(accepted.data.gpuResourceCard?.request?.maximumRuntimeSeconds, JNC_MAXIMUM_GPU_RUNTIME_SECONDS)
+  assert.equal(atLimit.audit.entries[1]?.event.type, 'connector.run.succeeded')
+  assert.equal(atLimit.quota.reservations.length, 1)
 })
 
 test('missing LIVE_DISABLED, owner approval, cost mismatches, and publication input fail closed before reservations', async () => {

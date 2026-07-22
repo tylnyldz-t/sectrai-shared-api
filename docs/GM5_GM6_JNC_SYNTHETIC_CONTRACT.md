@@ -198,6 +198,26 @@ Premium GM6 reserves GPU-minute units: `requestedItems` must exactly equal
 `input.gpuMinutes`. GM5 reserves exactly one proposal item. Both outputs mark
 untrusted input as `UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`.
 
+### D1 runtime-envelope lock: bounded cards before reservation
+
+The JNC contract-card mapper has one shared runtime ceiling of 5,400 seconds
+(90 whole GPU minutes). When a GPU request is supplied, it accepts only an
+exact, own-data request with a non-empty bounded budget reference, then
+returns a recursively frozen
+contract-only card. Accessors, inherited or hidden fields, symbols, malformed
+VRAM values, and a duration outside that range fail closed as
+`INVALID_JNC_GPU_RESOURCE_REQUEST`; the mapper still has no transport or
+execution path.
+
+GM5 uses the same 5,400-second ceiling for its optional resource-request
+input. GM6 validates both its configured `maxGpuMinutes` and premium plan
+before requested-audit append or quota reservation: configuration above 90
+minutes is unavailable, and a requested plan above 90 minutes is rejected as
+`GPU_RUNTIME_LIMIT_EXCEEDED`. Exactly 90 minutes remains a valid synthetic
+boundary value. The final egress validator repeats the seconds ceiling as a
+backstop. These checks do not reserve a GPU, modify quota on rejection, start
+an engine, contact JNC, read a credential, or publish anything.
+
 ### D1 direct-call egress parity
 
 The public `run` methods for GM5 and GM6 also pass their locally constructed

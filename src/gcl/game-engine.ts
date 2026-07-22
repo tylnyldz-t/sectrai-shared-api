@@ -1,5 +1,5 @@
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError } from './errors.js'
-import { ContractOnlyJncPilotMapper, type JncBlenderPilotHandoff, type JncGpuResourceCard, type JncUnrealPilotHandoff } from './jnc-pilot.js'
+import { ContractOnlyJncPilotMapper, JNC_MAXIMUM_GPU_RUNTIME_MINUTES, type JncBlenderPilotHandoff, type JncGpuResourceCard, type JncUnrealPilotHandoff } from './jnc-pilot.js'
 import { deepFreeze, frozenCanonicalJsonCopy, syntheticPlanSha256, type SyntheticPlanIntegrity } from './plan-integrity.js'
 import { validatedSyntheticConnectorResult } from './result-boundary.js'
 import { createSyntheticReviewSnapshot, type SyntheticReviewSnapshot } from './review-snapshot.js'
@@ -165,12 +165,15 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
 
   private configured(context: ConnectorRunContext, input: GameEngineBuildInput): void {
     if (this.config.liveMode !== LIVE_DISABLED) throw new ConnectorUnavailableError('GAME_ENGINE_LIVE_DISABLED_REQUIRED')
-    if (!positiveInteger(this.config.maxCostCapCents) || !positiveInteger(this.config.maxGpuMinutes)) throw new ConnectorUnavailableError('GAME_ENGINE_GOVERNANCE_LIMITS_NOT_CONFIGURED')
+    const maxGpuMinutes = this.config.maxGpuMinutes
+    if (!positiveInteger(this.config.maxCostCapCents) || !positiveInteger(maxGpuMinutes)) throw new ConnectorUnavailableError('GAME_ENGINE_GOVERNANCE_LIMITS_NOT_CONFIGURED')
+    if (maxGpuMinutes > JNC_MAXIMUM_GPU_RUNTIME_MINUTES) throw new ConnectorUnavailableError('GAME_ENGINE_JNC_RUNTIME_ENVELOPE_INVALID')
     if (context.costCapCents > this.config.maxCostCapCents) throw new CostCapError()
     if (input.tier === 'economic' && context.requestedItems !== 1) throw new CostCapError('GODOT_BUILD_UNIT_REQUIRED')
     if (input.tier === 'premium') {
       if (context.requestedItems !== input.gpuMinutes) throw new CostCapError('GPU_QUOTA_UNIT_MISMATCH')
-      if ((input.gpuMinutes ?? 0) > this.config.maxGpuMinutes) throw new CostCapError('GPU_MINUTE_CAP_EXCEEDED')
+      if ((input.gpuMinutes ?? 0) > JNC_MAXIMUM_GPU_RUNTIME_MINUTES) throw new CostCapError('GPU_RUNTIME_LIMIT_EXCEEDED')
+      if ((input.gpuMinutes ?? 0) > maxGpuMinutes) throw new CostCapError('GPU_MINUTE_CAP_EXCEEDED')
     }
   }
 
