@@ -239,21 +239,42 @@ camera/device/media connection, credential, handoff, notification,
 publication, action, or durable state. It only protects construction of the
 existing fixed `SYNTHETIC` / `LIVE_DISABLED` fixture result.
 
+## D11 — governed-run local-time snapshot
+
+`GovernedConnectorRunner` takes exactly one native, finite local `Date` from
+its injected process-local clock at the start of a run. It rejects a thrown,
+invalid, forged, or Proxy-shaped clock/date without invoking a Proxy trap. The
+trusted instant is copied for adapter preflight/provenance, quota reservation,
+and every audit event in that one run, closing a multi-call time-of-check/
+time-of-use gap. Native `Date` methods are used directly, so an overridden
+`toISOString` cannot control the audit timestamp.
+
+If the runner cannot obtain that initial safe timestamp, it fails closed before
+connector lookup, audit append, fixture resolution, or quota reservation. No
+audit event is possible in that case because a canonical audit timestamp cannot
+be constructed. A valid run shares one descriptive synthetic timestamp across
+its `requested`/`succeeded` (or `failed`) records; this is not an external time
+attestation, signature, credential, or authorization.
+
+D11 adds no time-service, route, storage read/write, migration, camera/device
+or media connection, credential, handoff, notification, publication, action,
+or durable state. It accepts no caller time value at the HTTP boundary.
+
 ## Audit and storage boundary
 
-The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1–D10 add no migration and no new persistence model.
+The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1–D11 add no migration and no new persistence model.
 
 ## ADOS 10-rule conformance
 
 1. Product/workspace digest binding keeps each run and review packet scoped to one data plane.
 2. Only minimized built-in synthetic fixture metadata is accepted.
 3. The front door default-denies absent configuration; `LIVE_DISABLED` is permanent.
-4. Unknown, hidden, symbol, Proxy, and accessor-shaped input, evidence, D8 review context, and D10 execution context/provenance-clock values—plus media, device identifiers, personal identity, and biometric inference—are excluded.
+4. Unknown, hidden, symbol, Proxy, and accessor-shaped input, evidence, D8 review context, D10 execution context/provenance-clock values, and the D11 runner clock—plus media, device identifiers, personal identity, and biometric inference—are excluded.
 5. Purpose-bound synthetic KVKK consent must match the fixture.
 6. Owner approval plus maker–checker separation are required; D1 rejects the original maker as reviewer and D2 minimizes that review evidence.
 7. The code has no device SDK, transport, network client, credential, or provider interface.
-8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, D6/D7 only minimize and recheck evidence derived from it, D8/D9 protect review context and its local clock, and D10 rejects shaped execution context or an invalid provenance clock before a fixture result.
-9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate evidence, D8/D9 validate review context and its local clock, and D10 validates only synthetic provenance without evaluating accessors, Proxy traps, or adding a write path.
+8. Preflight, quota reservation, and the scoped hash-chain audit enforce bounded governance without a new database schema; D5 can only read-check a caller-supplied three-event segment, D6/D7 only minimize and recheck evidence derived from it, D8/D9 protect review context and its local clock, D10 rejects shaped execution context or an invalid provenance clock before a fixture result, and D11 freezes one safe runner timestamp before any governed operation.
+9. Owner review, its D2 receipt, and D4/D5/D6/D7 witnesses record no handoff, command, notification, publication, or automatic action; D3/D4/D5/D6/D7 validate evidence, D8/D9 validate review context and its local clock, D10 validates only synthetic provenance, and D11 validates only the local runner timestamp without evaluating accessors, Proxy traps, or adding a write path.
 10. This branch contains no live launch, production migration, main/prod write, or camera hardware path.
 
 ## Explicit non-goals

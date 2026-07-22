@@ -876,21 +876,72 @@ test('D10 execution context and provenance clock fail closed before fixture resu
   assert.equal(accepted.provenance.retrievedAt, '2026-07-22T12:00:00.000Z')
   assert.equal(forgedToISOStringRead, false)
 
+})
+
+test('D11 governed runner freezes one trusted local timestamp and rejects malformed clocks before audit or quota use', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
-  let calls = 0
-  const firstValidThenInvalid = () => {
-    calls += 1
-    return calls === 1 ? new Date('2026-07-22T12:00:00.000Z') : new Date('not-a-date')
+  let clockCalls = 0
+  let forgedToISOStringRead = false
+  const clock = () => {
+    clockCalls += 1
+    const value = clockCalls === 1 ? new Date('2026-07-22T12:00:00.000Z') : new Date('not-a-date')
+    Object.defineProperty(value, 'toISOString', {
+      value() { forgedToISOStringRead = true; throw new Error('FORGED_CLOCK_MUST_NOT_RUN') },
+    })
+    return value
   }
-  const runner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), audit, quota, firstValidThenInvalid)
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), audit, quota, clock)
+  const result = await runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }) as ConnectorResult<CameraObservationResult>
+
+  assert.equal(clockCalls, 1)
+  assert.equal(forgedToISOStringRead, false)
+  assert.equal(result.provenance.retrievedAt, '2026-07-22T12:00:00.000Z')
+  assert.equal(audit.entries.length, 2)
+  assert.equal(audit.entries[0]?.event.occurredAt, '2026-07-22T12:00:00.000Z')
+  assert.equal(audit.entries[1]?.event.occurredAt, '2026-07-22T12:00:00.000Z')
+  assert.equal(quota.requests.length, 1)
+
+  for (const clockCandidate of [
+    () => { throw new Error('CLOCK_MUST_FAIL_CLOSED') },
+    () => new Date('not-a-date'),
+  ]) {
+    const rejectedAudit = new InMemoryHashChainAuditLog()
+    const rejectedQuota = new TestQuota()
+    const rejectedRunner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), rejectedAudit, rejectedQuota, clockCandidate)
+    await assert.rejects(
+      () => rejectedRunner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }),
+      (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_GOVERNED_CONNECTOR_CLOCK',
+    )
+    assert.equal(rejectedAudit.entries.length, 0)
+    assert.equal(rejectedQuota.requests.length, 0)
+  }
+
+  let proxyClockApplied = false
+  const proxyClock = new Proxy(now, {
+    apply() { proxyClockApplied = true; throw new Error('PROXY_CLOCK_MUST_NOT_RUN') },
+  })
+  const proxyAudit = new InMemoryHashChainAuditLog()
+  const proxyQuota = new TestQuota()
+  const proxyRunner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), proxyAudit, proxyQuota, proxyClock)
   await assert.rejects(
-    () => runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }),
-    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CAMERA_PROVENANCE_CLOCK',
+    () => proxyRunner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_GOVERNED_CONNECTOR_CLOCK',
   )
-  assert.equal(quota.requests.length, 0)
-  assert.equal(audit.entries.length, 1)
-  assert.equal(audit.entries[0]?.event.type, 'connector.run.denied')
+  assert.equal(proxyClockApplied, false)
+  assert.equal(proxyAudit.entries.length, 0)
+  assert.equal(proxyQuota.requests.length, 0)
+
+  let proxyDateTrapRead = false
+  const proxyDate = new Proxy(new Date('2026-07-22T12:00:00.000Z'), {
+    get() { proxyDateTrapRead = true; throw new Error('PROXY_DATE_MUST_NOT_RUN') },
+  })
+  const proxyDateRunner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), new InMemoryHashChainAuditLog(), new TestQuota(), () => proxyDate)
+  await assert.rejects(
+    () => proxyDateRunner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...context }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_GOVERNED_CONNECTOR_CLOCK',
+  )
+  assert.equal(proxyDateTrapRead, false)
 })
 
 test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
@@ -955,8 +1006,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, and D10 execution-context\/provenance-clock values/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, and the D11 runner clock/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 
