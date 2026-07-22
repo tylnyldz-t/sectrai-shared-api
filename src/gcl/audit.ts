@@ -1,8 +1,12 @@
 import { createHash } from 'node:crypto'
+import { types as nodeTypes } from 'node:util'
+import { AuditReceiptError } from './errors.js'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import type { AuditLog, ConnectorAuditEvent } from './types.js'
 
 export const GCL_AUDIT_MODULE_ID = 'gcl-audit'
+
+const SHA256_PATTERN = /^[a-f0-9]{64}$/
 
 type AuditRecordValue = {
   event: ConnectorAuditEvent
@@ -20,6 +24,34 @@ function normalize(value: unknown): unknown {
 
 export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string | null): string {
   return createHash('sha256').update(JSON.stringify(normalize({ event, previousHash }))).digest('hex')
+}
+
+/**
+ * D14 accepts only the exact local hash receipt an audit append needs to bind
+ * its successor. This is a data boundary, not an audit-chain lookup or a
+ * signature check: it rejects shaped collaborator output before its hash can
+ * become audit detail or result provenance.
+ */
+export function validateAuditAppendReceipt(value: unknown): { hash: string } {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) {
+    throw new AuditReceiptError()
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) throw new AuditReceiptError()
+  const names = Object.getOwnPropertyNames(value)
+  if (Object.getOwnPropertySymbols(value).length > 0 || names.length !== 1 || names[0] !== 'hash') {
+    throw new AuditReceiptError()
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, 'hash')
+  if (!descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'string' || !SHA256_PATTERN.test(descriptor.value)) {
+    throw new AuditReceiptError()
+  }
+  return { hash: descriptor.value }
+}
+
+/** D14 appends once, then copies the sole safe receipt field before use. */
+export async function appendVerifiedAuditEvent(auditLog: AuditLog, event: ConnectorAuditEvent): Promise<{ hash: string }> {
+  return validateAuditAppendReceipt(await auditLog.append(event))
 }
 
 function auditValue(value: unknown): AuditRecordValue | null {

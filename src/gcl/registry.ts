@@ -1,5 +1,6 @@
 import { types as nodeTypes } from 'node:util'
-import { ConnectorInputError, ConnectorResultError, CostCapError, GclError, MakerCheckerError, OwnerGateError, ScopeError, ConnectorUnavailableError } from './errors.js'
+import { appendVerifiedAuditEvent } from './audit.js'
+import { AuditReceiptError, ConnectorInputError, ConnectorResultError, CostCapError, GclError, MakerCheckerError, OwnerGateError, ScopeError, ConnectorUnavailableError } from './errors.js'
 import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export type RunConnectorRequest = {
@@ -250,7 +251,7 @@ export class GovernedConnectorRunner {
     try {
       connector = this.registry.get(normalizedRequest.connectorId)
     } catch (error) {
-      await this.auditLog.append(this.event('connector.run.denied', normalizedRequest.connectorId, context, occurredAt, auditFailureDetail(error, 'admission')))
+      await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.denied', normalizedRequest.connectorId, context, occurredAt, auditFailureDetail(error, 'admission')))
       throw error
     }
 
@@ -262,18 +263,21 @@ export class GovernedConnectorRunner {
       if (context.scopes.length === 0 || context.scopes.some((scope) => !connector.scopes.includes(scope))) throw new ScopeError()
       await connector.preflight?.(normalizedRequest.input, context)
     } catch (error) {
-      await this.auditLog.append(this.event('connector.run.denied', connector.id, context, occurredAt, auditFailureDetail(error, 'admission')))
+      await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.denied', connector.id, context, occurredAt, auditFailureDetail(error, 'admission')))
       throw error
     }
 
-    const requestedAudit = await this.auditLog.append(this.event('connector.run.requested', connector.id, context, occurredAt, {}))
+    const requestedAudit = await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.requested', connector.id, context, occurredAt, {}))
     try {
       await this.quota.consume({ ...context, connectorId: connector.id, occurredAt: snapshotClock(occurredAt)() })
       const result = governedConnectorResult(await connector.run(normalizedRequest.input, context), connector.id, occurredAt)
-      const succeededAudit = await this.auditLog.append(this.event('connector.run.succeeded', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash }))
+      const succeededAudit = await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.succeeded', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash }))
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
     } catch (error) {
-      await this.auditLog.append(this.event('connector.run.failed', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash, ...auditFailureDetail(error, 'execution') }))
+      // A malformed receipt can mean the preceding append partially persisted.
+      // Do not manufacture a second, unactionable transition after it.
+      if (error instanceof AuditReceiptError) throw error
+      await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.failed', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash, ...auditFailureDetail(error, 'execution') }))
       throw error
     }
   }

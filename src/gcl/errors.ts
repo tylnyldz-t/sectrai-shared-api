@@ -41,3 +41,8 @@ export class ConnectorInputError extends GclError {
 export class ConnectorResultError extends GclError {
   constructor(message = 'INVALID_CONNECTOR_RESULT') { super(message, 502, 'invalid_connector_result') }
 }
+
+/** An audit collaborator did not return the one bounded hash receipt required to continue. */
+export class AuditReceiptError extends GclError {
+  constructor(message = 'INVALID_AUDIT_APPEND_RECEIPT') { super(message, 503, 'audit_log_unavailable') }
+}
