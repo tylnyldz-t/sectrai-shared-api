@@ -620,3 +620,84 @@ no migration; proposal-only/no-action output; no JARVIS/JNC start; and no
 synthetic test result is a deployment or live-enable decision. D7 makes only
 local Git-object reads and synthetic test executions; it adds no provider,
 credential, real-world input, device connection, delivery, or production mutation.
+
+## D8 — next committed connector package
+
+D8 advances each connector with a D7 successor to its next committed local
+Git object: RA OCR `86f8055`, RA image `04b945d`, RA 3D/game `986fd50`, RA
+market `bd75c31`, RFID `89889f7`, translation `c9094d7`, language education
+`df82e56`, and camera `7420369`. RA voice has no successor after its D1
+snapshot and is not represented as changed. Every D8 source is read only with
+`git show <pinned-commit>:<path>` and re-derived against the recorded Git blob
+ID; the mutable sibling worktrees remain outside the audit input boundary.
+
+D8 pins package companions as explicit roots when the public connector is not
+enough to describe the change: image candidate ledger, 3D result boundary and
+game-engine contract, market terminal-review ledger, translation audit and
+artifact store, and language-education types. Each root receives the same
+local import-closure, disabled-mode, no-egress, no-credential, no-launch, and
+no-publish scan. This is source conformance evidence only; it is not an
+execution or deployment path.
+
+| Connector | D8 source-only change/evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D8 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | v9 review packets bind dense own-data field collections and reject sparse, inherited, extra, or accessor-backed entries before they are read | `requested` only | Pass | Nonconformant |
+| RA image | Candidate issuance is bounded to the ledger's 32-receipt limit; backdated issuance, malformed proofs, and mismatched durable receipt time fail closed | `requested` only | Pass | Nonconformant |
+| RA 3D/game | Direct GM5/GM6 results pass the same frozen final-result boundary as governed calls; an invalid local clock fails before a plan is returned | `requested` only | Pass | Nonconformant |
+| RA market | The injected terminal-review ledger accepts only exact own data and a valid hash-only append result; a failed append leaves the decision retryable | `requested` only | Pass | Nonconformant |
+| RFID | A synthetic forbidden-design review emits fixed prohibition checks for identity-card RFID/NFC, person surveillance, device sniffing, biometrics, enforcement claims, and live enablement | `requested`, `failed` | Pass | Conformant |
+| Translation | Durable terminal decisions require a distinct checker and an audit decision at the same canonical instant before a transaction opens | `requested`, `failed` | Pass | Conformant |
+| Language education | Goal and cultural-context fixture-only packages reject raw goals/claims, profiling, recommendations, URLs, cross-package references, invalid clocks, and invalid scopes before audit/quota | `requested`, `failed` | Pass | Conformant |
+| Camera | Caller-supplied review context is copied from exact own data and rejects media/device-shaped, hidden, symbol, inherited, accessor, and Proxy values before a review append | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` remains confined to this immutable synthetic IV GCL envelope. It
+does not authorize a provider, credential, real OCR/media/RFID/camera input,
+database integration, JNC/JARVIS launch, market operation, sending,
+publication, handoff, production write, or live enablement.
+
+### D8 negative and edge evidence
+
+- The fixture now rejects an alias created from `process`, `process.env`, or
+  `process?.env`, including object destructuring, before that alias can be
+  used to recover runtime/environment capability later. It also rejects
+  `process.constructor` and `module.constructor` recovery paths. Normal
+  injected `environment.GCL_*_SYNTHETIC_ENABLED` configuration remains
+  permitted; no credential-shaped setting is allowed.
+- OCR tests demonstrate that a sparse or accessor-backed field array is
+  rejected before its element getter runs, with no audit append or quota
+  reservation. Its review packet binds the collection boundary so an older or
+  altered packet cannot be silently reused.
+- Market and camera tests cover hidden, symbol, inherited, accessor, and
+  Proxy-shaped ingress without evaluating a getter/trap. Market additionally
+  proves malformed append output makes no terminal decision, permitting only a
+  later valid retry; camera rejects the bad context before owner review audit.
+- RFID's new review accepts fixed synthetic fixtures only; card, person,
+  device, biometric, reader, live-flag, public-site, and enforcement-shaped
+  inputs are rejected before audit and quota. Language education applies the
+  same no-raw-content/no-profiling boundary to its two new fixture packages.
+- Translation's durable-decision preflight rejects wrong scope, a noncanonical
+  actor, or a mismatched decision time before it opens its transaction. The
+  local audit check is neither a credential nor a real persistence migration.
+
+### D8 test evidence and ADOS boundary
+
+Run the complete immutable D1–D8 source audit with:
+
+```bash
+npm run test:conformance
+```
+
+The fixture performs only local immutable Git-object reads and in-process
+negative source probes. D8 connector unit suites are limited to their
+explicit synthetic test files; they receive no credential, provider URL,
+device address, database URL, migration, production target, send, publish,
+or live-enable input. No test result is a production decision.
+
+All ten ADOS rules remain enforced: no product data-plane join; default-deny
+and `LIVE_DISABLED`; immutable source/blob pins; no inferred owner decision;
+maker–checker where applicable; linked audit lifecycle classification without
+claiming a missing quota failure audit; no migration; proposal-only/no-action
+output; no JARVIS/JNC start; and no synthetic evidence as deployment or
+live-enable authority. D8 adds no network, provider, credential, real-world
+input, device connection, delivery, publication, production write, `main`
+write, or production mutation.
