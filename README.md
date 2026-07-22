@@ -94,4 +94,8 @@ closed and cannot change the already-snapshotted review scope or authorize an
 action. D11 requires the primitive boolean `true` at the governed runner,
 direct market-run, and independent-review owner gates; truthy lookalikes fail
 before context, clock, ledger, audit, or quota seams and cannot authorize an
-action.
+action. D12 snapshots the governed-run request envelope and scope strings as
+exact own data before connector preflight, audit, or quota; accessor-, Proxy-,
+inherited-, hidden-, symbol-, sparse-, and extra credential-shaped fields fail
+closed. The market input itself remains bounded synthetic data for its own
+parser, never a credential or live action.

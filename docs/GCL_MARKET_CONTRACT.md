@@ -381,6 +381,38 @@ migration, worker, queue, quote, reservation, booking, publication, handoff,
 send, durable approval, signature, authorization, or execution path. Every
 successful result remains fixed at `NOT_AUTHORIZED`.
 
+## D12 — strict governed-run ingress boundary
+
+Before a market connector can run its preflight, append an audit event, or
+consume quota, `GovernedConnectorRunner` snapshots the exact own-data request
+envelope:
+
+```ts
+{
+  connectorId, input, product, workspaceId, actor, ownerApproved,
+  scopes, costCapCents, requestedItems
+}
+```
+
+The envelope must have the normal `Object.prototype`, no symbols, and all and
+only those enumerable data fields. Its `scopes` value must be a bounded dense
+plain array of own string data. Accessors, Proxies, inherited fields, hidden
+fields, symbols, sparse arrays, and every extra field—including a
+credential/provider-shaped field—fail closed as
+`INVALID_CONNECTOR_RUN_REQUEST` without evaluating the shaped member. The
+literal-`true` D11 owner gate still follows the snapshot, so ordinary falsy or
+truthy lookalikes remain an owner-gate denial rather than a coercion path.
+
+D12 copies the scalar envelope fields and scope strings; it intentionally
+leaves `input` opaque for the selected connector's existing parser. For
+`market`, that parser already accepts only its bounded synthetic request shape
+before audit/quota, and no accepted input can carry a provider credential or
+live instruction. Consequently D12 adds no input interpreter, route, storage,
+migration, queue, worker, network call, provider configuration, credential,
+quote, reservation, booking, publication, handoff, send, durable approval,
+signature, authorization, or execution capability. Every successful market
+result remains `SYNTHETIC`, `LIVE_DISABLED`, and `NOT_AUTHORIZED`.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -445,7 +477,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -458,7 +490,8 @@ before semantic reads and validates the injected ledger's member/result
 descriptors before any review receipt can be returned. D10 snapshots every
 review context and limits its clock to one verified host call whose intrinsic
 `Date` value is copied before a terminal ledger operation. D11 requires the
-literal boolean `true` at every owner-gate boundary.
+literal boolean `true` at every owner-gate boundary. D12 snapshots the exact
+governed-run envelope and its scope strings before preflight, audit, or quota.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -486,7 +519,11 @@ scope accessors/Proxies/sparse arrays/oversized arrays, Proxy-shaped clocks,
 and throwing or Proxy-shaped date results without evaluating a shaped value;
 these failures occur before terminal-ledger entry or audit append. D11 rejects
 both falsy values and truthy scalar/object lookalikes before direct execution,
-review context, clock, terminal-ledger, audit, or quota seams are reached.
+review context, clock, terminal-ledger, audit, or quota seams are reached. D12
+additionally rejects extra credential-shaped fields, hidden fields, own
+accessors, root and scope-array Proxies, inherited fields, and scope accessors
+before preflight, audit, or quota; a caller mutation after runner invocation
+cannot replace the snapshotted scope binding.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -505,7 +542,9 @@ review context, clock, terminal-ledger, audit, or quota seams are reached.
    undecided; D9 snapshots all caller-held plan material and rejects shaped
    host-ledger results before a receipt can be formed; D10 snapshots bounded
    review context and copies one verified intrinsic clock value; D11 permits
-   only literal boolean owner approval before any market review seam.
+   only literal boolean owner approval before any market review seam; D12
+   snapshots an exact governed-run envelope before connector preflight, audit,
+   or quota can consume it.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.
@@ -515,8 +554,9 @@ review context, clock, terminal-ledger, audit, or quota seams are reached.
    audit chain bound every run; D5/D6/D7 only check a caller-held three-event
    segment, a minimized rendering, and a further compact binding of it; D8
    only hardens D2's in-process append seam and D9 only validates in-process
-   review inputs/results.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11 evidence cannot quote, reserve, book,
+   review inputs/results; D12 snapshots the run envelope before those governed
+   seams.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -526,4 +566,4 @@ review context, clock, terminal-ledger, audit, or quota seams are reached.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12.

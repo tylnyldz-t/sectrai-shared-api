@@ -58,7 +58,9 @@ Every registered connector is governed by these rules:
   allowed clock seam only after descriptor validation, copying the returned
   intrinsic `Date`. D11 requires literal boolean owner approval at the runner,
   direct market, and independent-review boundaries before later seams are
-  reached. None reads audit storage, writes, or approves execution.
+  reached. D12 snapshots the complete governed-run envelope and its scope
+  array through descriptors before connector preflight, audit, or quota can
+  read it. None reads audit storage, writes, or approves execution.
   All resulting evidence remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
@@ -148,7 +150,14 @@ D9 snapshots caller-held plan material and checks the injected ledger
 descriptor/result boundary. D10 snapshots review-context data and copies one
 verified intrinsic clock value; shaped context, scope, clock, and date values
 fail closed. D11 rejects every non-boolean owner-approval lookalike before a
-direct run or review can reach later seams. D3/D4/D5/D6/D7/D8/D9/D10/D11 are local mutation checks or boundary hardening, never
+direct run or review can reach later seams. D12 additionally requires the
+governed runner's exact own-data request envelope
+`{ connectorId, input, product, workspaceId, actor, ownerApproved, scopes,
+costCapCents, requestedItems }`; accessor-, Proxy-, inherited-, hidden-,
+symbol-, sparse-scope-, and extra-field (including credential-shaped) values
+fail closed as `INVALID_CONNECTOR_RUN_REQUEST` before preflight, audit, or
+quota. It copies the envelope primitives and scope strings only; `input`
+remains opaque data for the selected connector's own parser. D3/D4/D5/D6/D7/D8/D9/D10/D11/D12 are local mutation checks or boundary hardening, never
 signatures, credentials, approval workflows, or execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
 
