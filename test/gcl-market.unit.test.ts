@@ -1288,7 +1288,7 @@ test('D20 freezes direct preflight and result/provenance egress, while changed c
   assert.equal(setup.quota.requests.length, 1)
 })
 
-test('D21 rejects shaped connector-result ingress before a succeeded audit and never evaluates result traps', async () => {
+test('D21 rejects shaped connector-result ingress before a succeeded audit and never reads result data traps', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const quota = new TestQuota()
   let proxyTrapRead = false
@@ -1304,7 +1304,14 @@ test('D21 rejects shaped connector-result ingress before a succeeded audit and n
     },
   }
   const proxyResult = new Proxy({ data: {}, provenance: validProvenance, confidence: 0 }, {
-    get() { proxyTrapRead = true; throw new Error('RESULT_TRAP_MUST_NOT_RUN') },
+    // Promise resolution is specified to probe `then` before the runner can
+    // inspect the fulfillment value. It receives a harmless own-data answer;
+    // every result data field remains unread before the D21 Proxy rejection.
+    get(_, property) {
+      if (property === 'then') return undefined
+      proxyTrapRead = true
+      throw new Error('RESULT_DATA_TRAP_MUST_NOT_RUN')
+    },
   })
   const connector: Connector = {
     id: 'market-result-ingress-test',

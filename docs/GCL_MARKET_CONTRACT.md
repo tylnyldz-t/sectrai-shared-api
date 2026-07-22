@@ -789,7 +789,9 @@ instruction-handling, confidence, root-result, or action mutation fails; a
 provider-shaped request copy is rejected before a direct plan and an
 action-shaped plan copy fails canonical review without adding audit or quota.
 D21 additionally rejects a Proxy or hidden-field connector result without
-evaluating its trap and without a succeeded audit. It proves a retained,
+reading its result data fields and without a succeeded audit. (The JavaScript
+Promise protocol may probe a fulfillment value's `then` member before any
+runner code can inspect it.) It proves a retained,
 mutable connector result cannot change the copied confidence, provenance
 source, or data-only instruction label while the succeeded-audit append is
 pending.
