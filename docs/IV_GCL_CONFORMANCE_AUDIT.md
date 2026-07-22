@@ -862,3 +862,70 @@ no migration; proposal-only/no-action output; no JARVIS/JNC start; and no
 synthetic evidence as deployment or live-enable authority. D10 adds no
 network, provider, credential, real-world input, delivery, `main` write, or
 production mutation.
+
+## D11 — first immutable successor package
+
+D11 deliberately pins the **first** committed successor after every D10
+snapshot, not the mutable sibling worktree tip.  This prevents later,
+in-progress packages from being represented as D11 evidence.  The pinned
+commits are RA OCR `536ac02`, RA image `18196ad`, RA 3D/game `2e05cf1`, RA
+market `424a2cc`, RFID `fc1f4c2`, translation `e7146d1`, language education
+`5dad6ba`, and camera `71d5779`.  RA voice still has no successor after its
+D1 snapshot.
+
+Every D11 source is read through `git show <pinned-commit>:<path>` and its
+connector/runner blob is checked.  D11 also pins the changed image audit and
+candidate-ledger modules plus the changed translation audit helper.  Neither a
+target runtime module nor a mutable target worktree is imported or read by the
+audit fixture.
+
+| Connector | D11 source-only evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D11 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Test/documentation successor; connector and runner remain D10-identical | `requested` only | Pass | Nonconformant |
+| RA image | Candidate issuance and audit closure reject accessor-shaped candidate/ledger data before a getter can run | `requested` only | Pass | Nonconformant |
+| RA 3D/game | Test/documentation successor proves a mismatched game-engine result reaches the stable synthetic-integrity failure path | `requested` only | Pass | Nonconformant |
+| RA market | Synthetic review clock rejects Proxy/invalid date seams before a review write | `requested` only | Pass | Nonconformant |
+| RFID | Fixed ADOS no-actuation boundary fixture wording; connector/runner lifecycle remains D10-identical | `requested`, `failed` | Pass | Conformant |
+| Translation | Audit helper rejects orphan/duplicate run outcomes and checker decisions before durable metadata | `requested`, `failed` | Pass | Conformant |
+| Language education | Test-only successor admits the bounded portfolio fixture connector, never learner work or evaluation | `requested`, `failed` | Pass | Conformant |
+| Camera | Test/documentation successor hardens execution-context and provenance-clock rejection before fixture result or quota | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` remains limited to the immutable synthetic IV envelope.  It is
+not provider, credential, device, real-media/RFID input, database, migration,
+JARVIS/JNC, handoff, publication, delivery, production-write, or live-enable
+approval.
+
+### D11 negative and edge evidence
+
+- Static module scanning now uses the TypeScript AST, rejects malformed source,
+  and follows multiline static imports/exports.  A multiline `node:https`
+  import/export and a multiline local boundary escape are explicit negative
+  probes; a multiline erased Prisma type import is the only permitted case.
+- The `Function` check now examines parsed identifiers rather than comments or
+  string fragments.  It permits only the exact structural terminal comparison
+  `target !== Function.prototype` used by descriptor-safe walkers.  Assignment,
+  constructor recovery, invocation, optional access, and equality alternatives
+  remain rejected.
+- All D11 closures still reject egress, provider endpoints, credential-like
+  environment reads, subprocess/worker launch, automatic publication, dynamic
+  loading/evaluation, global capability recovery, and imports outside local GCL
+  plus the bounded `node:crypto`/`node:util` allowlist.
+- Owner denial remains before preflight, requested audit, and quota reservation.
+  The audit does not overstate the known gap: RA OCR, image, 3D/game, and market
+  still consume quota outside the protected failure lifecycle.
+
+### D11 test evidence and ADOS boundary
+
+`npm run test:conformance` passes all 11 D1–D11 immutable-pin, closure,
+disabled-mode, ordering, quota-classification, and negative-source tests.  It
+uses local Git objects and in-process TypeScript parsing only; it loads no
+environment file or credential, contacts no provider, opens no socket, runs no
+database/migration, connects no device, sends/publishes/handoffs nothing, and
+writes neither `main` nor production.
+
+All ten ADOS rules remain intact: no product data-plane join; default-deny and
+`LIVE_DISABLED`; source/blob pointers only; no inferred owner decision;
+maker–checker where applicable; honest audit-gap classification; no migration;
+proposal-only/no-action output; no JARVIS/JNC start; and synthetic evidence is
+not deployment or live-enable authority.  D11 adds no network, provider,
+credential, real-world input, production mutation, or live output.
