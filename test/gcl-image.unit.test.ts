@@ -782,6 +782,7 @@ test('D8 seals candidate-issuance events across a custom ledger await', async ()
       await appendGate
       return candidates.appendIssuance(event)
     },
+    assertIssued: (...args: Parameters<InMemoryImageCandidateLedger['assertIssued']>) => candidates.assertIssued(...args),
   }
   const pendingIssuance = issueSyntheticImageCandidates(mutableResult, ledger, context)
   await Promise.resolve()
@@ -796,9 +797,10 @@ test('D8 seals candidate-issuance events across a custom ledger await', async ()
   const issuance = await pendingIssuance
   assert.match(issuance.issuanceAuditHash, /^[a-f0-9]{64}$/)
   const event = audit.entries[2]?.event
-  assert.equal(event?.type, 'connector.artifact.candidates_issued')
-  assert.equal((event?.detail as { publication?: string }).publication, 'blocked')
-  assert.equal(((event?.detail as { candidates?: Array<{ candidateId: string }> }).candidates ?? [])[0]?.candidateId, original.candidateId)
+  assert.ok(event)
+  assert.equal(event.type, 'connector.artifact.candidates_issued')
+  assert.equal((event.detail as { publication?: string }).publication, 'blocked')
+  assert.equal(((event.detail as { candidates?: Array<{ candidateId: string }> }).candidates ?? [])[0]?.candidateId, original.candidateId)
 })
 
 test('candidate issuance and terminal review cannot be backdated across the governed lineage', async () => {
