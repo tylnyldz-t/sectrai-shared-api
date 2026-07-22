@@ -15,8 +15,9 @@ const POLICY_VERSION_PATTERN = /^[a-zA-Z0-9._-]{1,80}$/
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
+const POSITIVE_INTEGER_PATTERN = /^[1-9][0-9]*$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v17' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v18' as const
 const SYNTHETIC_DOCUMENT_DATA_BOUNDARY = {
   evidenceSource: 'synthetic-fixture',
   inputShape: 'plain-own-data-only',
@@ -72,6 +73,11 @@ const SYNTHETIC_DOCUMENT_HASH_BOUNDARY = {
   digestEncoding: 'hex-lowercase',
   implementation: 'module-captured-node-crypto-hash-methods',
   latePatchedHashMethodsAccepted: false,
+} as const
+const SYNTHETIC_DOCUMENT_PATTERN_BOUNDARY = {
+  validation: 'module-captured-regexp-exec',
+  latePatchedRegExpMethodsAccepted: false,
+  patternMatcherHooksAccepted: false,
 } as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
@@ -218,6 +224,12 @@ export type SyntheticDocumentReviewPacket = {
     implementation: typeof SYNTHETIC_DOCUMENT_HASH_BOUNDARY.implementation
     latePatchedHashMethodsAccepted: typeof SYNTHETIC_DOCUMENT_HASH_BOUNDARY.latePatchedHashMethodsAccepted
   }
+  /** Regex validation calls the module-captured intrinsic matcher only. */
+  patternBoundaryBinding: {
+    validation: typeof SYNTHETIC_DOCUMENT_PATTERN_BOUNDARY.validation
+    latePatchedRegExpMethodsAccepted: typeof SYNTHETIC_DOCUMENT_PATTERN_BOUNDARY.latePatchedRegExpMethodsAccepted
+    patternMatcherHooksAccepted: typeof SYNTHETIC_DOCUMENT_PATTERN_BOUNDARY.patternMatcherHooksAccepted
+  }
   /** Metadata-only freshness limit for the synthetic evidence reference. */
   evidenceBinding: {
     capturedAt: string
@@ -290,6 +302,7 @@ const intrinsicJsonStringify = JSON.stringify
 const intrinsicCreateHash = createHash
 const intrinsicHashUpdate = Hash.prototype.update
 const intrinsicHashDigest = Hash.prototype.digest
+const intrinsicRegExpExec = RegExp.prototype.exec
 const intrinsicObjectGetPrototypeOf = Object.getPrototypeOf
 const intrinsicObjectGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor
 const intrinsicReflectOwnKeys = Reflect.ownKeys
@@ -326,6 +339,10 @@ function arrayMap<T, TResult>(value: readonly T[], mapper: (item: T, index: numb
 function digest(value: string): string {
   return intrinsicHashDigest.call(intrinsicHashUpdate.call(intrinsicCreateHash('sha256'), value, 'utf8'), 'hex') as string
 }
+/** Do not dispatch through a mutable RegExp instance or prototype method. */
+function matchesPattern(pattern: RegExp, value: string): boolean {
+  return intrinsicRegExpExec.call(pattern, value) !== null
+}
 /**
  * A Proxy may run arbitrary traps during even supposedly structural checks
  * such as Object.getPrototypeOf() or Reflect.ownKeys(). Detect it first with
@@ -343,7 +360,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 function positiveInteger(value: unknown): value is number { return typeof value === 'number' && intrinsicNumberIsSafeInteger(value) && value > 0 }
 function environmentPositiveInteger(value: string | undefined): number | undefined {
-  if (!value || !/^[1-9][0-9]*$/.test(value)) return undefined
+  if (!value || !matchesPattern(POSITIVE_INTEGER_PATTERN, value)) return undefined
   const parsed = intrinsicNumber(value)
   return intrinsicNumberIsSafeInteger(parsed) ? parsed : undefined
 }
@@ -509,6 +526,7 @@ function reviewPacketIntegrityMaterial(
   integrityEncodingBoundaryBinding: SyntheticDocumentReviewPacket['integrityEncodingBoundaryBinding'],
   intrinsicBoundaryBinding: SyntheticDocumentReviewPacket['intrinsicBoundaryBinding'],
   hashBoundaryBinding: SyntheticDocumentReviewPacket['hashBoundaryBinding'],
+  patternBoundaryBinding: SyntheticDocumentReviewPacket['patternBoundaryBinding'],
   evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
   reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): Record<string, unknown> {
@@ -544,6 +562,7 @@ function reviewPacketIntegrityMaterial(
     integrityEncodingBoundaryBinding,
     intrinsicBoundaryBinding,
     hashBoundaryBinding,
+    patternBoundaryBinding,
     evidenceBinding,
     reviewWindow,
   }
@@ -596,11 +615,12 @@ function reviewPacketFor(
   const integrityEncodingBoundaryBinding = { ...SYNTHETIC_DOCUMENT_INTEGRITY_ENCODING_BOUNDARY }
   const intrinsicBoundaryBinding = { ...SYNTHETIC_DOCUMENT_INTRINSIC_BOUNDARY }
   const hashBoundaryBinding = { ...SYNTHETIC_DOCUMENT_HASH_BOUNDARY }
+  const patternBoundaryBinding = { ...SYNTHETIC_DOCUMENT_PATTERN_BOUNDARY }
   const evidenceBinding = evidenceBindingFor(proposal.evidence, issuedAt, maxEvidenceAgeSeconds)
   const reviewWindow = { issuedAt: intrinsicDateToISOString.call(issuedAt), reviewBy: intrinsicDateToISOString.call(reviewByFor(issuedAt, consent.expiresAt, evidenceBinding.expiresAt, maxReviewAgeSeconds)) }
   return {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
-    integrityDigest: digest(canonicalJson(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, integrityEncodingBoundaryBinding, intrinsicBoundaryBinding, hashBoundaryBinding, evidenceBinding, reviewWindow))),
+    integrityDigest: digest(canonicalJson(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, integrityEncodingBoundaryBinding, intrinsicBoundaryBinding, hashBoundaryBinding, patternBoundaryBinding, evidenceBinding, reviewWindow))),
     scopeBinding,
     consentBinding,
     governanceBinding,
@@ -615,6 +635,7 @@ function reviewPacketFor(
     integrityEncodingBoundaryBinding,
     intrinsicBoundaryBinding,
     hashBoundaryBinding,
+    patternBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -634,9 +655,9 @@ function normalizedInput(value: unknown, now: Date): SyntheticDocumentScanInput 
   exactKeys(evidence, ['source', 'evidenceId', 'sha256', 'mediaType', 'byteLength', 'capturedAt'], 'UNEXPECTED_DOCUMENT_EVIDENCE_FIELD')
   if (evidence.source !== 'synthetic-fixture') throw new ConnectorInputError('RAW_DOCUMENT_CONTENT_NOT_ACCEPTED')
   const evidenceId = requiredString(evidence.evidenceId, 'INVALID_SYNTHETIC_EVIDENCE_ID', 128)
-  if (!EVIDENCE_ID_PATTERN.test(evidenceId)) throw new ConnectorInputError('INVALID_SYNTHETIC_EVIDENCE_ID')
+  if (!matchesPattern(EVIDENCE_ID_PATTERN, evidenceId)) throw new ConnectorInputError('INVALID_SYNTHETIC_EVIDENCE_ID')
   const sha256 = requiredString(evidence.sha256, 'INVALID_DOCUMENT_EVIDENCE_SHA256', 64)
-  if (!SHA256_PATTERN.test(sha256)) throw new ConnectorInputError('INVALID_DOCUMENT_EVIDENCE_SHA256')
+  if (!matchesPattern(SHA256_PATTERN, sha256)) throw new ConnectorInputError('INVALID_DOCUMENT_EVIDENCE_SHA256')
   if (typeof evidence.mediaType !== 'string' || !intrinsicSetHas.call(DOCUMENT_MEDIA_TYPES, evidence.mediaType)) throw new ConnectorInputError('INVALID_DOCUMENT_MEDIA_TYPE')
   if (!positiveInteger(evidence.byteLength) || evidence.byteLength > MAX_SYNTHETIC_EVIDENCE_BYTES) throw new ConnectorInputError('INVALID_DOCUMENT_EVIDENCE_SIZE')
   const capturedAt = parsedDate(evidence.capturedAt, 'INVALID_DOCUMENT_CAPTURE_TIME')
@@ -646,7 +667,7 @@ function normalizedInput(value: unknown, now: Date): SyntheticDocumentScanInput 
   exactKeys(consent, ['purpose', 'status', 'policyVersion', 'expiresAt'], 'UNEXPECTED_DOCUMENT_CONSENT_FIELD')
   if (consent.purpose !== 'document-field-extraction' || consent.status !== 'granted') throw new ConsentError()
   const policyVersion = requiredString(consent.policyVersion, 'INVALID_DOCUMENT_POLICY_VERSION', 80)
-  if (!POLICY_VERSION_PATTERN.test(policyVersion)) throw new ConsentError('INVALID_DOCUMENT_POLICY_VERSION')
+  if (!matchesPattern(POLICY_VERSION_PATTERN, policyVersion)) throw new ConsentError('INVALID_DOCUMENT_POLICY_VERSION')
   const expiresAt = parsedDate(consent.expiresAt, 'INVALID_DOCUMENT_CONSENT_EXPIRY')
   if (intrinsicDateGetTime.call(expiresAt) <= intrinsicDateGetTime.call(now)) throw new ConsentError('DOCUMENT_CONSENT_EXPIRED')
 
@@ -679,7 +700,7 @@ function fieldsFrom(input: SyntheticDocumentScanInput): SyntheticDocumentField[]
 }
 
 function reviewContext(context: Pick<ConnectorRunContext, 'product' | 'workspaceId'>): { product: string; workspaceId: string } {
-  if (typeof context.product !== 'string' || typeof context.workspaceId !== 'string' || !SCOPE_ID_PATTERN.test(context.product) || !SCOPE_ID_PATTERN.test(context.workspaceId)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_CONTEXT')
+  if (typeof context.product !== 'string' || typeof context.workspaceId !== 'string' || !matchesPattern(SCOPE_ID_PATTERN, context.product) || !matchesPattern(SCOPE_ID_PATTERN, context.workspaceId)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_CONTEXT')
   return { product: context.product, workspaceId: context.workspaceId }
 }
 
@@ -691,7 +712,7 @@ function reviewNow(context: Pick<ConnectorRunContext, 'now'>): Date {
 function reviewActor(reviewer: unknown): string {
   if (typeof reviewer !== 'string' || !intrinsicStringTrim.call(reviewer) || reviewer.length > 160 || hasControlCharacter(reviewer) || hasUnpairedSurrogate(reviewer)) throw new OwnerGateError('OWNER_REVIEWER_REQUIRED')
   const normalized = intrinsicStringTrim.call(reviewer)
-  if (!ACTOR_PATTERN.test(normalized)) throw new OwnerGateError('OWNER_REVIEWER_REQUIRED')
+  if (!matchesPattern(ACTOR_PATTERN, normalized)) throw new OwnerGateError('OWNER_REVIEWER_REQUIRED')
   return normalized
 }
 
@@ -702,9 +723,9 @@ function reviewedEvidence(value: unknown): SyntheticDocumentProposal['evidence']
   if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_EVIDENCE')
   exactKeys(value, ['evidenceId', 'sha256', 'mediaType', 'byteLength', 'capturedAt', 'rawContentStored'], 'UNEXPECTED_DOCUMENT_PROPOSAL_EVIDENCE_FIELD')
   const evidenceId = requiredString(value.evidenceId, 'INVALID_SYNTHETIC_EVIDENCE_ID', 128)
-  if (!EVIDENCE_ID_PATTERN.test(evidenceId)) throw new ConnectorInputError('INVALID_SYNTHETIC_EVIDENCE_ID')
+  if (!matchesPattern(EVIDENCE_ID_PATTERN, evidenceId)) throw new ConnectorInputError('INVALID_SYNTHETIC_EVIDENCE_ID')
   const sha256 = requiredString(value.sha256, 'INVALID_DOCUMENT_EVIDENCE_SHA256', 64)
-  if (!SHA256_PATTERN.test(sha256)) throw new ConnectorInputError('INVALID_DOCUMENT_EVIDENCE_SHA256')
+  if (!matchesPattern(SHA256_PATTERN, sha256)) throw new ConnectorInputError('INVALID_DOCUMENT_EVIDENCE_SHA256')
   if (typeof value.mediaType !== 'string' || !intrinsicSetHas.call(DOCUMENT_MEDIA_TYPES, value.mediaType)) throw new ConnectorInputError('INVALID_DOCUMENT_MEDIA_TYPE')
   if (!positiveInteger(value.byteLength) || value.byteLength > MAX_SYNTHETIC_EVIDENCE_BYTES) throw new ConnectorInputError('INVALID_DOCUMENT_EVIDENCE_SIZE')
   const capturedAt = parsedDate(value.capturedAt, 'INVALID_DOCUMENT_CAPTURE_TIME')
@@ -725,7 +746,7 @@ function reviewedFields(value: unknown): SyntheticDocumentField[] {
     previousField = field
     if (item.status !== 'synthetic-proposal' || item.confidence !== 0 || typeof item.privacy !== 'string') throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_FIELD')
     const valueDigest = requiredString(item.valueDigest, 'INVALID_DOCUMENT_PROPOSAL_FIELD_DIGEST', 64)
-    if (!SHA256_PATTERN.test(valueDigest)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_FIELD_DIGEST')
+    if (!matchesPattern(SHA256_PATTERN, valueDigest)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_FIELD_DIGEST')
     if (item.privacy === 'standard' && !isSensitive(field)) {
       exactKeys(item, ['field', 'status', 'privacy', 'valueDigest', 'value', 'confidence'], 'UNEXPECTED_DOCUMENT_PROPOSAL_FIELD')
       const fieldValue = requiredString(item.value, 'INVALID_SYNTHETIC_DOCUMENT_VALUE', 240)
@@ -747,7 +768,7 @@ function reviewedConsentBinding(value: unknown, reviewedAt: Date): SyntheticDocu
   exactKeys(value, ['purpose', 'policyVersionDigest', 'expiresAt'], 'UNEXPECTED_DOCUMENT_REVIEW_CONSENT_BINDING_FIELD')
   if (value.purpose !== 'document-field-extraction') throw new ConsentError('INVALID_DOCUMENT_REVIEW_CONSENT_PURPOSE')
   const policyVersionDigest = requiredString(value.policyVersionDigest, 'INVALID_DOCUMENT_REVIEW_POLICY_DIGEST', 64)
-  if (!SHA256_PATTERN.test(policyVersionDigest)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_POLICY_DIGEST')
+  if (!matchesPattern(SHA256_PATTERN, policyVersionDigest)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_POLICY_DIGEST')
   const expiresAt = parsedDate(value.expiresAt, 'INVALID_DOCUMENT_REVIEW_CONSENT_EXPIRY')
   if (intrinsicDateGetTime.call(expiresAt) <= intrinsicDateGetTime.call(reviewedAt)) throw new ConsentError('DOCUMENT_REVIEW_CONSENT_EXPIRED')
   return { purpose: 'document-field-extraction', policyVersionDigest, expiresAt: intrinsicDateToISOString.call(expiresAt) }
@@ -896,14 +917,14 @@ function validateSyntheticDocumentProposalForReviewAt(
   if (!isRecord(proposal)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL')
   exactKeys(proposal, ['proposalId', 'syntheticUri', 'preparedBy', 'mode', 'extraction', 'evidence', 'fields', 'fieldsDigest', 'ownerReview', 'reviewPacket', 'mesaEvidenceHandoff'], 'UNEXPECTED_DOCUMENT_PROPOSAL_FIELD')
   const proposalId = requiredString(proposal.proposalId, 'INVALID_DOCUMENT_PROPOSAL_ID', 48)
-  if (!PROPOSAL_ID_PATTERN.test(proposalId)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_ID')
+  if (!matchesPattern(PROPOSAL_ID_PATTERN, proposalId)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_ID')
   const preparedBy = requiredString(proposal.preparedBy, 'INVALID_DOCUMENT_PROPOSAL_PREPARER', 160)
-  if (!ACTOR_PATTERN.test(preparedBy)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_PREPARER')
+  if (!matchesPattern(ACTOR_PATTERN, preparedBy)) throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_PREPARER')
   if (proposal.mode !== LIVE_DISABLED || proposal.extraction !== 'SYNTHETIC_PROPOSAL_ONLY_NOT_OCR') throw new ConnectorInputError('INVALID_DOCUMENT_PROPOSAL_MODE')
   const evidence = reviewedEvidence(proposal.evidence)
   const fields = reviewedFields(proposal.fields)
   const fieldsDigest = requiredString(proposal.fieldsDigest, 'INVALID_DOCUMENT_PROPOSAL_FIELDS_DIGEST', 64)
-  if (!SHA256_PATTERN.test(fieldsDigest) || fieldsDigest !== fieldsDigestFrom(fields)) throw new ConnectorInputError('DOCUMENT_PROPOSAL_FIELDS_DIGEST_MISMATCH')
+  if (!matchesPattern(SHA256_PATTERN, fieldsDigest) || fieldsDigest !== fieldsDigestFrom(fields)) throw new ConnectorInputError('DOCUMENT_PROPOSAL_FIELDS_DIGEST_MISMATCH')
   const expectedProposalId = proposalIdFor(scoped.product, scoped.workspaceId, evidence.sha256, fieldsDigest)
   if (proposalId !== expectedProposalId) throw new ConnectorInputError('DOCUMENT_PROPOSAL_SCOPE_MISMATCH')
   if (proposal.syntheticUri !== `synthetic://gcl/${VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID}/${proposalId}`) throw new ConnectorInputError('DOCUMENT_PROPOSAL_URI_MISMATCH')
@@ -927,7 +948,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const productDigest = requiredString(proposal.reviewPacket.scopeBinding.productDigest, 'INVALID_DOCUMENT_REVIEW_PACKET_SCOPE', 64)
   const workspaceDigest = requiredString(proposal.reviewPacket.scopeBinding.workspaceDigest, 'INVALID_DOCUMENT_REVIEW_PACKET_SCOPE', 64)
   const integrityDigest = requiredString(proposal.reviewPacket.integrityDigest, 'INVALID_DOCUMENT_REVIEW_PACKET_DIGEST', 64)
-  if (!SHA256_PATTERN.test(productDigest) || !SHA256_PATTERN.test(workspaceDigest) || !SHA256_PATTERN.test(integrityDigest)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_DIGEST')
+  if (!matchesPattern(SHA256_PATTERN, productDigest) || !matchesPattern(SHA256_PATTERN, workspaceDigest) || !matchesPattern(SHA256_PATTERN, integrityDigest)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_DIGEST')
   const consentBinding = reviewedConsentBinding(proposal.reviewPacket.consentBinding, reviewedAt)
   const governanceBinding = reviewedGovernanceBinding(proposal.reviewPacket.governanceBinding)
   const dataBoundaryBinding = reviewedDataBoundaryBinding(proposal.reviewPacket.dataBoundaryBinding)
