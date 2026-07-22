@@ -33,6 +33,7 @@ const MAX_GOVERNED_INPUT_KEYS = 48
 const MAX_GOVERNED_INPUT_ARRAY_ITEMS = 48
 const MAX_GOVERNED_INPUT_STRING_LENGTH = 4096
 const MAX_REGISTERED_CONNECTORS = 12
+const intrinsicReflectApply = Reflect.apply
 
 type RegisteredConnector = Readonly<{
   id: string
@@ -120,7 +121,7 @@ function registeredConnectorMethod(value: object, field: typeof REGISTERED_CONNE
     }
     candidate = Object.getPrototypeOf(candidate)
   }
-  if (required || candidate !== null) return connectorRegistrationError()
+  if (required || (candidate !== null && candidate !== Object.prototype)) return connectorRegistrationError()
   return undefined
 }
 
@@ -138,7 +139,7 @@ function registeredConnector(value: unknown): RegisteredConnector {
   const preflight = registeredConnectorMethod(candidate, 'preflight', false)
   const run = registeredConnectorMethod(candidate, 'run', true)
   const validateResult = registeredConnectorMethod(candidate, 'validateResult', false)
-  const call = (method: Function, args: readonly unknown[]): unknown => Reflect.apply(method, candidate, args)
+  const call = (method: Function, args: readonly unknown[]): unknown => intrinsicReflectApply(method, candidate, args)
 
   return Object.freeze({
     id,
@@ -425,19 +426,67 @@ function auditFailureDetail(error: unknown, stage: 'admission' | 'execution'): R
   }
 }
 
+type GovernedRunnerCollaborators = Readonly<{
+  resolve: (connectorId: string) => RegisteredConnector
+  auditLog: AuditLog
+  consume: ConnectorQuota['consume']
+  now: () => Date
+}>
+
+/**
+ * D23 admits only descriptor-backed collaborator methods and captures both
+ * their original receiver and the module-initialized apply intrinsic. This
+ * prevents a later public-property replacement from retargeting the runner's
+ * registry, audit, or quota path. It intentionally does not claim to sandbox
+ * code or private mutable state inside an already-admitted collaborator.
+ */
+function runnerCollaboratorError(): never {
+  throw new ConnectorUnavailableError('INVALID_GOVERNED_RUNNER_COLLABORATOR')
+}
+
+function capturedRunnerCollaboratorMethod(value: unknown, field: string): (...args: unknown[]) => unknown {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) return runnerCollaboratorError()
+  const receiver = value as object
+  let candidate: object | null = receiver
+  for (let depth = 0; candidate !== null && candidate !== Object.prototype && depth < 8; depth += 1) {
+    if (nodeTypes.isProxy(candidate)) return runnerCollaboratorError()
+    const descriptor = Object.getOwnPropertyDescriptor(candidate, field)
+    if (descriptor) {
+      if (!('value' in descriptor) || typeof descriptor.value !== 'function' || nodeTypes.isProxy(descriptor.value)) return runnerCollaboratorError()
+      const method = descriptor.value
+      return (...args: unknown[]): unknown => intrinsicReflectApply(method, receiver, args)
+    }
+    candidate = Object.getPrototypeOf(candidate)
+  }
+  return runnerCollaboratorError()
+}
+
+function governedRunnerCollaborators(registry: ConnectorRegistry, auditLog: AuditLog, quota: ConnectorQuota, now: () => Date): GovernedRunnerCollaborators {
+  if (typeof now !== 'function' || nodeTypes.isProxy(now)) return runnerCollaboratorError()
+  const resolve = capturedRunnerCollaboratorMethod(registry, 'get')
+  const append = capturedRunnerCollaboratorMethod(auditLog, 'append')
+  const consume = capturedRunnerCollaboratorMethod(quota, 'consume')
+  return Object.freeze({
+    resolve: (connectorId: string) => resolve(connectorId) as RegisteredConnector,
+    auditLog: Object.freeze({ append: (event: ConnectorAuditEvent) => append(event) as ReturnType<AuditLog['append']> }),
+    consume: (request: Parameters<ConnectorQuota['consume']>[0]) => consume(request) as ReturnType<ConnectorQuota['consume']>,
+    now,
+  })
+}
+
 export class ConnectorRegistry {
-  private readonly connectors = new Map<string, RegisteredConnector>()
+  readonly #connectors = new Map<string, RegisteredConnector>()
 
   constructor(connectors: readonly Connector[]) {
     for (const candidate of registeredConnectorList(connectors)) {
       const connector = registeredConnector(candidate)
-      if (this.connectors.has(connector.id)) throw new Error(`DUPLICATE_CONNECTOR:${connector.id}`)
-      this.connectors.set(connector.id, connector)
+      if (this.#connectors.has(connector.id)) throw new Error(`DUPLICATE_CONNECTOR:${connector.id}`)
+      this.#connectors.set(connector.id, connector)
     }
   }
 
   get(connectorId: string): RegisteredConnector {
-    const connector = this.connectors.get(connectorId)
+    const connector = this.#connectors.get(connectorId)
     if (!connector) throw new ConnectorUnavailableError('CONNECTOR_NOT_REGISTERED')
     return connector
   }
@@ -445,9 +494,13 @@ export class ConnectorRegistry {
 
 /** Governance is evaluated before any fixture lookup, quota reservation, or adapter run. */
 export class GovernedConnectorRunner {
-  constructor(private readonly registry: ConnectorRegistry, private readonly auditLog: AuditLog, private readonly quota: ConnectorQuota, private readonly now: () => Date = () => new Date()) {}
+  readonly #collaborators: GovernedRunnerCollaborators
 
-  private event(type: ConnectorAuditEvent['type'], connectorId: string, context: ConnectorRunContext, occurredAt: Date, detail: Record<string, unknown>): ConnectorAuditEvent {
+  constructor(registry: ConnectorRegistry, auditLog: AuditLog, quota: ConnectorQuota, now: () => Date = () => new Date()) {
+    this.#collaborators = governedRunnerCollaborators(registry, auditLog, quota, now)
+  }
+
+  #event(type: ConnectorAuditEvent['type'], connectorId: string, context: ConnectorRunContext, occurredAt: Date, detail: Record<string, unknown>): ConnectorAuditEvent {
     return {
       type, connectorId, product: context.product, workspaceId: context.workspaceId,
       requestedBy: context.requestedBy, checkedBy: context.checkedBy, correlationId: context.correlationId,
@@ -457,14 +510,15 @@ export class GovernedConnectorRunner {
   }
 
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
+    const { resolve, auditLog, consume, now } = this.#collaborators
     const normalizedRequest = governedRunRequest(request)
-    const occurredAt = governedRunTimeSnapshot(this.now)
+    const occurredAt = governedRunTimeSnapshot(now)
     const context = governedRunContext(normalizedRequest, occurredAt)
     let connector: Connector
     try {
-      connector = this.registry.get(normalizedRequest.connectorId)
+      connector = resolve(normalizedRequest.connectorId)
     } catch (error) {
-      await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.denied', normalizedRequest.connectorId, context, occurredAt, auditFailureDetail(error, 'admission')))
+      await appendVerifiedAuditEvent(auditLog, this.#event('connector.run.denied', normalizedRequest.connectorId, context, occurredAt, auditFailureDetail(error, 'admission')))
       throw error
     }
 
@@ -476,21 +530,21 @@ export class GovernedConnectorRunner {
       if (context.scopes.length === 0 || context.scopes.some((scope) => !connector.scopes.includes(scope))) throw new ScopeError()
       await connector.preflight?.(normalizedRequest.input, context)
     } catch (error) {
-      await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.denied', connector.id, context, occurredAt, auditFailureDetail(error, 'admission')))
+      await appendVerifiedAuditEvent(auditLog, this.#event('connector.run.denied', connector.id, context, occurredAt, auditFailureDetail(error, 'admission')))
       throw error
     }
 
-    const requestedAudit = await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.requested', connector.id, context, occurredAt, {}))
+    const requestedAudit = await appendVerifiedAuditEvent(auditLog, this.#event('connector.run.requested', connector.id, context, occurredAt, {}))
     try {
-      await this.quota.consume({ ...context, connectorId: connector.id, occurredAt: snapshotClock(occurredAt)() })
+      await consume({ ...context, connectorId: connector.id, occurredAt: snapshotClock(occurredAt)() })
       const result = governedVerifiedConnectorResult(await connector.run(normalizedRequest.input, context), connector, context, occurredAt)
-      const succeededAudit = await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.succeeded', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash }), requestedAudit.hash)
+      const succeededAudit = await appendVerifiedAuditEvent(auditLog, this.#event('connector.run.succeeded', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash }), requestedAudit.hash)
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
     } catch (error) {
       // A malformed receipt can mean the preceding append partially persisted.
       // Do not manufacture a second, unactionable transition after it.
       if (error instanceof AuditReceiptError || error instanceof AuditEventError || error instanceof AuditChainError) throw error
-      await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.failed', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash, ...auditFailureDetail(error, 'execution') }), requestedAudit.hash)
+      await appendVerifiedAuditEvent(auditLog, this.#event('connector.run.failed', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash, ...auditFailureDetail(error, 'execution') }), requestedAudit.hash)
       throw error
     }
   }

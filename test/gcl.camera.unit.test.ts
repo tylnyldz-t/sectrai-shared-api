@@ -980,10 +980,9 @@ test('D11 governed runner freezes one trusted local timestamp and rejects malfor
   })
   const proxyAudit = new InMemoryHashChainAuditLog()
   const proxyQuota = new TestQuota()
-  const proxyRunner = new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), proxyAudit, proxyQuota, proxyClock)
-  await assert.rejects(
-    () => proxyRunner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
-    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_GOVERNED_CONNECTOR_CLOCK',
+  assert.throws(
+    () => new GovernedConnectorRunner(new ConnectorRegistry([enabledConnector()]), proxyAudit, proxyQuota, proxyClock),
+    (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'INVALID_GOVERNED_RUNNER_COLLABORATOR',
   )
   assert.equal(proxyClockApplied, false)
   assert.equal(proxyAudit.entries.length, 0)
@@ -1366,6 +1365,66 @@ test('D22 rejects shaped registry collections, connector control metadata, scope
   )
   assert.equal(proxyTrapRead, false)
 
+})
+
+test('D23 seals runner collaborator methods so later registry, audit, quota, clock, or legacy-field replacement cannot retarget a synthetic run', async () => {
+  const registry = new ConnectorRegistry([enabledConnector()])
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(registry, audit, quota, now)
+  let retargetedCalls = 0
+  const retarget = () => { retargetedCalls += 1; throw new Error('REPLACED_COLLABORATOR_MUST_NOT_RUN') }
+
+  ;(registry as unknown as { get: unknown }).get = retarget
+  ;(audit as unknown as { append: unknown }).append = retarget
+  ;(quota as unknown as { consume: unknown }).consume = retarget
+  Object.assign(runner as unknown as Record<string, unknown>, {
+    registry: { get: retarget }, auditLog: { append: retarget }, quota: { consume: retarget }, now: retarget,
+  })
+
+  const result = await runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
+
+  assert.equal(retargetedCalls, 0)
+  assert.equal(result.data.mode, 'SYNTHETIC')
+  assert.equal(result.data.liveStatus, 'LIVE_DISABLED')
+  assert.deepEqual(audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.succeeded'])
+  assert.deepEqual(quota.requests, [{ connectorId: CAMERA_CONNECTOR_ID, requestedItems: 1 }])
+})
+
+test('D23 rejects Proxy, accessor, and Proxy-method runner collaborators at construction without evaluating a trap or running work', () => {
+  const registry = new ConnectorRegistry([enabledConnector()])
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  let trapRead = false
+  let accessorRead = false
+  let methodApplied = false
+  const proxyRegistry = new Proxy(registry, {
+    get() { trapRead = true; throw new Error('RUNNER_REGISTRY_PROXY_MUST_NOT_RUN') },
+  })
+  const accessorAudit = {}
+  Object.defineProperty(accessorAudit, 'append', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('RUNNER_AUDIT_ACCESSOR_MUST_NOT_RUN') },
+  })
+  const proxyConsume = new Proxy(async () => undefined, {
+    apply() { methodApplied = true; throw new Error('RUNNER_QUOTA_METHOD_PROXY_MUST_NOT_RUN') },
+  })
+
+  const rejects = (candidateRegistry: unknown, candidateAudit: unknown, candidateQuota: unknown) => {
+    assert.throws(
+      () => new GovernedConnectorRunner(candidateRegistry as ConnectorRegistry, candidateAudit as AuditLog, candidateQuota as ConnectorQuota, now),
+      (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'INVALID_GOVERNED_RUNNER_COLLABORATOR',
+    )
+  }
+
+  rejects(proxyRegistry, audit, quota)
+  rejects(registry, accessorAudit, quota)
+  rejects(registry, audit, { consume: proxyConsume })
+  assert.equal(trapRead, false)
+  assert.equal(accessorRead, false)
+  assert.equal(methodApplied, false)
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
 })
 
 test('D15 seals audit events before append: shaped or cyclic events never reach the audit collaborator', async () => {
