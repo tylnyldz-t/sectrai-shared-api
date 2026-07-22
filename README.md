@@ -72,6 +72,8 @@ D22 snapshots the selected synthetic connector control plane at registry constru
 
 D24 captures the native `Date` constructor/methods used by governed, audit, fixture, and review timestamps, together with the runner registration/collaborator own-data inspection helpers. Hooks installed after module initialization cannot retarget those existing checks. It is not a clean-realm attestation and adds no time service, route, storage operation, credential, provider/device call, handoff, publication, action, or capability.
 
+D25 completes that local post-load hook boundary for the governed input/result parser, audit sealer/canonicalizer, and synthetic camera review code: own-data inspection/copy/freeze, array identity/map/sort, numeric checks, Set cycle/uniqueness helpers, canonical `JSON.stringify`, and audit-key ordering use module-captured operations. Late replacements cannot turn a result/review integrity comparison into a constant, bypass a tampered fixture finding, or retarget the fixed no-media audit path. This is only in-process hardening—not a clean-realm or durable-proof claim—and adds no route, storage operation, credential, provider/device call, handoff, publication, action, or capability.
+
 No migration, camera connection, notification, action, or publication is part of this connector.
 
 ## Run and migrate

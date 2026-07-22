@@ -1,8 +1,12 @@
 import { createHash, Hash } from 'node:crypto'
-import { types as nodeTypes } from 'node:util'
 import { appendVerifiedAuditEvent, hashAuditEvent } from './audit.js'
 import { CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError } from './errors.js'
-import { intrinsicDate, intrinsicDateGetTime, intrinsicDateToISOString, intrinsicIsDate, intrinsicNumberIsFinite, intrinsicNumberIsNaN, intrinsicReflectApply } from './intrinsics.js'
+import {
+  intrinsicArrayIsArray, intrinsicArrayPrototype, intrinsicDate, intrinsicDateGetTime, intrinsicDateToISOString, intrinsicIsDate,
+  intrinsicIsProxy, intrinsicJsonStringify, intrinsicNumber, intrinsicNumberIsFinite, intrinsicNumberIsNaN, intrinsicNumberIsSafeInteger,
+  intrinsicObjectCreate, intrinsicObjectFreeze, intrinsicObjectGetOwnPropertyDescriptors, intrinsicObjectGetOwnPropertyNames,
+  intrinsicObjectGetOwnPropertySymbols, intrinsicObjectGetPrototypeOf, intrinsicObjectPrototype, intrinsicReflectApply,
+} from './intrinsics.js'
 import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export const CAMERA_CONNECTOR_ID = 'camera-observation'
@@ -25,7 +29,7 @@ export type AdosCameraControl = {
  * Contract-local proof of the non-production boundary. These controls are
  * descriptive evidence only; none grants a device, transport, or launch path.
  */
-export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.freeze([
+export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = intrinsicObjectFreeze([
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every audit and review packet is bound to one product and workspace digest.' },
   { id: 'ADOS-02', control: 'MINIMIZED_SYNTHETIC_FIXTURE', enforcement: 'Only an allowlisted synthetic fixture ID and fixed finding are resolved.' },
   { id: 'ADOS-03', control: 'DEFAULT_DENY_LIVE_DISABLED', enforcement: 'Synthetic enablement and positive limits are required; a live flag is rejected.' },
@@ -253,7 +257,7 @@ const CAMERA_REVIEW_CONTEXT_FIELDS = [
 const intrinsicCreateHash = createHash
 const intrinsicHashUpdate = Hash.prototype.update
 const intrinsicHashDigest = Hash.prototype.digest
-const FIXTURES: Readonly<Record<string, CameraFixture>> = Object.freeze({
+const FIXTURES: Readonly<Record<string, CameraFixture>> = intrinsicObjectFreeze({
   'synthetic-loading-dock-001': {
     purpose: 'operational-safety', consentReceiptRef: 'synthetic-consent-safety-001',
     observation: { category: 'operational-safety', severity: 'warning', findingCode: 'PPE_DRILL_INDICATOR', summary: 'Synthetic loading-dock safety drill indicator requires owner review.' },
@@ -269,13 +273,13 @@ const FIXTURES: Readonly<Record<string, CameraFixture>> = Object.freeze({
 })
 
 function positiveInteger(value: unknown): number | null {
-  return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 ? value : null
+  return typeof value === 'number' && intrinsicNumberIsSafeInteger(value) && value > 0 ? value : null
 }
 
 function environmentPositiveInteger(value: string | undefined): number | undefined {
   if (!value || !/^[1-9][0-9]*$/.test(value)) return undefined
-  const parsed = Number(value)
-  return Number.isSafeInteger(parsed) ? parsed : undefined
+  const parsed = intrinsicNumber(value)
+  return intrinsicNumberIsSafeInteger(parsed) ? parsed : undefined
 }
 
 function digest(value: string): string {
@@ -285,9 +289,9 @@ function digest(value: string): string {
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) return false
-  const prototype = Object.getPrototypeOf(value)
-  return prototype === Object.prototype || prototype === null
+  if (!value || typeof value !== 'object' || intrinsicArrayIsArray(value) || intrinsicIsProxy(value)) return false
+  const prototype = intrinsicObjectGetPrototypeOf(value)
+  return prototype === intrinsicObjectPrototype || prototype === null
 }
 
 /**
@@ -298,10 +302,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
  */
 function exactObject(value: unknown, allowed: readonly string[], error: string): Record<string, unknown> {
   if (!isRecord(value)) throw new ConnectorInputError(error)
-  const names = Object.getOwnPropertyNames(value)
-  if (Object.getOwnPropertySymbols(value).length > 0 || names.some((key) => !allowed.includes(key))) throw new ConnectorInputError(error)
-  const descriptors = Object.getOwnPropertyDescriptors(value)
-  const normalized = Object.create(null) as Record<string, unknown>
+  const names = intrinsicObjectGetOwnPropertyNames(value)
+  if (intrinsicObjectGetOwnPropertySymbols(value).length > 0 || names.some((key) => !allowed.includes(key))) throw new ConnectorInputError(error)
+  const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
+  const normalized = intrinsicObjectCreate(null) as Record<string, unknown>
   for (const key of names) {
     const descriptor = descriptors[key]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError(error)
@@ -312,16 +316,16 @@ function exactObject(value: unknown, allowed: readonly string[], error: string):
 
 /** Accepts a dense, ordinary array of own enumerable data strings only. */
 function exactStringArray(value: unknown, error: string, maximumItems: number, maximumItemLength: number): string[] {
-  if (!Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype) throw new ConnectorInputError(error)
-  if (value.length > maximumItems || Object.getOwnPropertySymbols(value).length > 0) throw new ConnectorInputError(error)
-  const names = Object.getOwnPropertyNames(value)
+  if (!intrinsicArrayIsArray(value) || intrinsicIsProxy(value) || intrinsicObjectGetPrototypeOf(value) !== intrinsicArrayPrototype) throw new ConnectorInputError(error)
+  if (value.length > maximumItems || intrinsicObjectGetOwnPropertySymbols(value).length > 0) throw new ConnectorInputError(error)
+  const names = intrinsicObjectGetOwnPropertyNames(value)
   if (names.length !== value.length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
     throw new ConnectorInputError(error)
   }
-  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const descriptors = intrinsicObjectGetOwnPropertyDescriptors(value)
   const normalized: string[] = []
   for (let index = 0; index < value.length; index += 1) {
-    const descriptor = descriptors[String(index)]
+    const descriptor = descriptors[`${index}`]
     if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError(error)
     normalized.push(requiredString(descriptor.value, error, maximumItemLength))
   }
@@ -397,7 +401,7 @@ function cameraReviewAuditWitnessContext(context: Pick<ConnectorRunContext, 'pro
 function independentCameraReviewContext(context: ConnectorRunContext): { product: string; workspaceId: string; requestedBy: string; correlationId: string; costCapCents: number; requestedItems: number; now: () => Date } {
   const candidate = cameraReviewContextRecord(context)
   const witness = cameraReviewAuditWitnessContextFromRecord(candidate)
-  if (typeof candidate.now !== 'function' || nodeTypes.isProxy(candidate.now)) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CONTEXT')
+  if (typeof candidate.now !== 'function' || intrinsicIsProxy(candidate.now)) throw new ConnectorInputError('INVALID_CAMERA_REVIEW_CONTEXT')
   return { ...witness, now: candidate.now as () => Date }
 }
 
@@ -414,7 +418,7 @@ function localCameraOccurredAt(now: () => Date, errorCode: string): string {
   } catch {
     throw new ConnectorInputError(errorCode)
   }
-  if (!intrinsicIsDate(candidate) || nodeTypes.isProxy(candidate)) throw new ConnectorInputError(errorCode)
+  if (!intrinsicIsDate(candidate) || intrinsicIsProxy(candidate)) throw new ConnectorInputError(errorCode)
   try {
     if (!intrinsicNumberIsFinite(intrinsicReflectApply(intrinsicDateGetTime, candidate, []) as number)) throw new ConnectorInputError(errorCode)
     return canonicalIsoInstant(intrinsicReflectApply(intrinsicDateToISOString, candidate, []), errorCode)
@@ -452,7 +456,7 @@ function cameraExecutionContext(value: unknown): CameraExecutionContext {
   const costCapCents = positiveInteger(candidate.costCapCents)
   const requestedItems = positiveInteger(candidate.requestedItems)
   const now = candidate.now
-  if (!requestedBy || requestedBy !== candidate.requestedBy || !checkedBy || checkedBy !== candidate.checkedBy || requestedBy === checkedBy || candidate.ownerApproved !== true || !SCOPE_ID_PATTERN.test(correlationId) || scopes.length !== 1 || scopes[0] !== CAMERA_SCOPE || !costCapCents || !requestedItems || typeof now !== 'function' || nodeTypes.isProxy(now)) {
+  if (!requestedBy || requestedBy !== candidate.requestedBy || !checkedBy || checkedBy !== candidate.checkedBy || requestedBy === checkedBy || candidate.ownerApproved !== true || !SCOPE_ID_PATTERN.test(correlationId) || scopes.length !== 1 || scopes[0] !== CAMERA_SCOPE || !costCapCents || !requestedItems || typeof now !== 'function' || intrinsicIsProxy(now)) {
     throw new ConnectorInputError('INVALID_CAMERA_EXECUTION_CONTEXT')
   }
   return { ...scope, costCapCents, requestedItems, now: now as () => Date }
@@ -509,14 +513,14 @@ function reviewPacketIntegrityMaterial(result: Omit<CameraObservationResult, 're
 
 function reviewPacketFor(result: Omit<CameraObservationResult, 'reviewPacket'>, product: string, workspaceId: string): SyntheticCameraReviewPacket {
   const scopeBinding = { productDigest: digest(product), workspaceDigest: digest(workspaceId) }
-  const observationDigest = digest(JSON.stringify(result.observation))
+  const observationDigest = digest(intrinsicJsonStringify(result.observation))
   const reviewId = reviewIdFor(product, workspaceId, result.cameraFixtureId, result.purpose, observationDigest)
   return {
     version: CAMERA_REVIEW_PACKET_VERSION,
     reviewId,
     scopeBinding,
     observationDigest,
-    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(result, scopeBinding, reviewId, observationDigest))),
+    integrityDigest: digest(intrinsicJsonStringify(reviewPacketIntegrityMaterial(result, scopeBinding, reviewId, observationDigest))),
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
     rawMediaIncluded: false,
     automaticAction: false,
@@ -587,7 +591,7 @@ function reviewReceiptFor(result: CameraObservationResult, reviewed: ReviewedCam
     publication: 'NOT_PUBLISHED',
     auditHash: reviewed.auditHash,
   }
-  const integrityDigest = digest(JSON.stringify(reviewReceiptIntegrityMaterial(material)))
+  const integrityDigest = digest(intrinsicJsonStringify(reviewReceiptIntegrityMaterial(material)))
   return {
     ...material,
     receiptId: `synthetic-camera-review-receipt-${digest(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
@@ -638,7 +642,7 @@ export function validateCameraObservationForReview(value: unknown, context: Pick
   const fixture = FIXTURES[cameraFixtureId]
   if (!fixture || fixture.purpose !== purpose) throw new ConnectorInputError('CAMERA_REVIEW_FIXTURE_MISMATCH')
   const observation = cameraObservationForReview(result.observation)
-  if (JSON.stringify(observation) !== JSON.stringify(fixture.observation)) throw new ConnectorInputError('CAMERA_REVIEW_OBSERVATION_MISMATCH')
+  if (intrinsicJsonStringify(observation) !== intrinsicJsonStringify(fixture.observation)) throw new ConnectorInputError('CAMERA_REVIEW_OBSERVATION_MISMATCH')
   const privacy = cameraPrivacyForReview(result.privacy)
   const review = cameraOwnerReviewForReview(result.review)
 
@@ -657,14 +661,14 @@ export function validateCameraObservationForReview(value: unknown, context: Pick
   }
   if (productDigest !== digest(scoped.product) || workspaceDigest !== digest(scoped.workspaceId)) throw new ConnectorInputError('CAMERA_REVIEW_PACKET_SCOPE_MISMATCH')
   const normalizedWithoutPacket: Omit<CameraObservationResult, 'reviewPacket'> = { mode: 'SYNTHETIC', liveStatus: CAMERA_LIVE_STATUS, cameraFixtureId, purpose, observation, privacy, review }
-  const expectedObservationDigest = digest(JSON.stringify(observation))
+  const expectedObservationDigest = digest(intrinsicJsonStringify(observation))
   const expectedReviewId = reviewIdFor(scoped.product, scoped.workspaceId, cameraFixtureId, purpose, expectedObservationDigest)
   if (observationDigest !== expectedObservationDigest || reviewId !== expectedReviewId) throw new ConnectorInputError('CAMERA_REVIEW_PACKET_BINDING_MISMATCH')
   const reviewPacket: SyntheticCameraReviewPacket = {
     version: CAMERA_REVIEW_PACKET_VERSION, reviewId, scopeBinding: { productDigest, workspaceDigest }, observationDigest, integrityDigest,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW', rawMediaIncluded: false, automaticAction: false, notification: 'NOT_SENT', publication: 'NOT_PUBLISHED',
   }
-  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalizedWithoutPacket, reviewPacket.scopeBinding, reviewId, observationDigest)))) {
+  if (integrityDigest !== digest(intrinsicJsonStringify(reviewPacketIntegrityMaterial(normalizedWithoutPacket, reviewPacket.scopeBinding, reviewId, observationDigest)))) {
     throw new ConnectorInputError('CAMERA_REVIEW_PACKET_INTEGRITY_MISMATCH')
   }
   return { ...normalizedWithoutPacket, reviewPacket }
@@ -752,7 +756,7 @@ export function validateCameraReviewReceipt(sourceResult: unknown, value: unknow
   if (candidate.reviewed.reviewId !== source.reviewPacket.reviewId || candidate.reviewed.reviewPacketIntegrityDigest !== source.reviewPacket.integrityDigest) {
     throw new ConnectorInputError('CAMERA_REVIEW_RECEIPT_PACKET_MISMATCH')
   }
-  if (receipt.integrityDigest !== digest(JSON.stringify(reviewReceiptIntegrityMaterial(receipt))) || receipt.receiptId !== expected.receiptId || receipt.integrityDigest !== expected.integrityDigest) {
+  if (receipt.integrityDigest !== digest(intrinsicJsonStringify(reviewReceiptIntegrityMaterial(receipt))) || receipt.receiptId !== expected.receiptId || receipt.integrityDigest !== expected.integrityDigest) {
     throw new ConnectorInputError('CAMERA_REVIEW_RECEIPT_INTEGRITY_MISMATCH')
   }
   return { ...candidate.reviewed, reviewReceipt: expected }
@@ -969,7 +973,7 @@ function reviewAuditTrailReceiptFor(witness: CameraReviewAuditTrailWitness, cont
     notification: 'NOT_SENT',
     publication: 'NOT_PUBLISHED',
   }
-  const integrityDigest = digest(JSON.stringify(reviewAuditTrailReceiptIntegrityMaterial(material)))
+  const integrityDigest = digest(intrinsicJsonStringify(reviewAuditTrailReceiptIntegrityMaterial(material)))
   return {
     ...material,
     receiptId: `synthetic-camera-review-audit-trail-receipt-${digest(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
@@ -1026,7 +1030,7 @@ export function createCameraReviewAuditTrailReceipt(sourceResult: unknown, revie
 export function validateCameraReviewAuditTrailReceipt(sourceResult: unknown, reviewedResult: unknown, auditTrail: unknown, value: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'checkedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): CameraReviewAuditTrailReceipt {
   const receipt = cameraReviewAuditTrailReceipt(value)
   const expected = createCameraReviewAuditTrailReceipt(sourceResult, reviewedResult, auditTrail, context)
-  if (receipt.integrityDigest !== digest(JSON.stringify(reviewAuditTrailReceiptIntegrityMaterial(receipt))) || receipt.receiptId !== expected.receiptId || receipt.integrityDigest !== expected.integrityDigest) {
+  if (receipt.integrityDigest !== digest(intrinsicJsonStringify(reviewAuditTrailReceiptIntegrityMaterial(receipt))) || receipt.receiptId !== expected.receiptId || receipt.integrityDigest !== expected.integrityDigest) {
     throw new ConnectorInputError('CAMERA_AUDIT_TRAIL_RECEIPT_INTEGRITY_MISMATCH')
   }
   return expected
@@ -1061,7 +1065,7 @@ function reviewEvidenceManifestFor(reviewed: ReviewedCameraObservation, auditTra
     notification: 'NOT_SENT',
     publication: 'NOT_PUBLISHED',
   }
-  const integrityDigest = digest(JSON.stringify(reviewEvidenceManifestIntegrityMaterial(material)))
+  const integrityDigest = digest(intrinsicJsonStringify(reviewEvidenceManifestIntegrityMaterial(material)))
   return {
     ...material,
     manifestId: `synthetic-camera-review-evidence-manifest-${digest(`${material.reviewId}:${integrityDigest}`).slice(0, 24)}`,
@@ -1116,7 +1120,7 @@ export function createCameraReviewEvidenceManifest(sourceResult: unknown, review
 export function validateCameraReviewEvidenceManifest(sourceResult: unknown, reviewedResult: unknown, auditTrail: unknown, value: unknown, context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'requestedBy' | 'checkedBy' | 'correlationId' | 'costCapCents' | 'requestedItems'>): CameraReviewEvidenceManifest {
   const manifest = cameraReviewEvidenceManifest(value)
   const expected = createCameraReviewEvidenceManifest(sourceResult, reviewedResult, auditTrail, context)
-  if (manifest.integrityDigest !== digest(JSON.stringify(reviewEvidenceManifestIntegrityMaterial(manifest))) || manifest.manifestId !== expected.manifestId || manifest.integrityDigest !== expected.integrityDigest) {
+  if (manifest.integrityDigest !== digest(intrinsicJsonStringify(reviewEvidenceManifestIntegrityMaterial(manifest))) || manifest.manifestId !== expected.manifestId || manifest.integrityDigest !== expected.integrityDigest) {
     throw new ConnectorInputError('CAMERA_REVIEW_EVIDENCE_MANIFEST_INTEGRITY_MISMATCH')
   }
   return expected
@@ -1209,7 +1213,7 @@ export class SyntheticCameraConnector implements Connector<unknown, CameraObserv
     }
     if (result.confidence !== 0 || provenance.source !== `synthetic-camera-fixture:${data.cameraFixtureId}` ||
       isolated.source !== 'synthetic-camera-observation' ||
-      JSON.stringify(isolatedObservation) !== JSON.stringify(data.observation)) {
+      intrinsicJsonStringify(isolatedObservation) !== intrinsicJsonStringify(data.observation)) {
       throw new ConnectorResultError('INVALID_CAMERA_RESULT_DATA_PLANE')
     }
     return {

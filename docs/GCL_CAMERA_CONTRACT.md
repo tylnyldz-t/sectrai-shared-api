@@ -573,9 +573,35 @@ media connection, credential, handoff, notification, publication, action,
 durable state, or capability. The connector remains fixture-only,
 `SYNTHETIC`, `LIVE_DISABLED`, and no-send.
 
+## D25 — module-captured data-boundary and canonicalization intrinsics
+
+D25 completes D24's post-load hook boundary across the governed runner, shared
+audit sealer/canonicalizer, and synthetic camera/review parser. At module
+initialization they capture the own-data inspection, create/freeze, array
+identity/map/sort, numeric, Set cycle/uniqueness, canonical `JSON.stringify`,
+and audit-key ordering operations they use. The recursive input and audit
+snapshots use captured Set `has`/`add`/`delete` operations; they never depend
+on a subsequently replaced global Set or its iterator.
+
+A later replacement of public `Object`, `Array`, `Number`, `Set`,
+`String.prototype.localeCompare`, or `JSON.stringify` helpers therefore cannot
+retarget a governed input/result boundary, alter audit canonicalization, turn a
+review digest into a constant, or make a changed fixture finding pass review.
+The negative test installs hostile late hooks across a full synthetic run,
+tampered review rejection, and independent no-action review; no hook is called,
+the tampered finding is rejected before a review audit append, and the valid
+review still has no handoff, notification, publication, or action.
+
+D25 is a narrow in-process hardening only. It does not attest that the realm
+was clean before module initialization, sandbox admitted code, provide a
+signature or durable audit proof, authenticate a reviewer, or authorize a
+camera, handoff, notification, publication, or action. It adds no route,
+storage lookup/write, migration, provider/time-service call, camera/device or
+media connection, credential interface, durable state, or production write.
+
 ## Audit and storage boundary
 
-The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1–D24 add no migration and no new persistence model.
+The existing shared `gcl-audit` and `gcl-usage` records use the product/workspace scoped SHA-256 chain and quota reservation. Audit detail includes IDs/digests and decision state only—never raw request input, media, stream/device values, or consent receipt content. The regular records API excludes both reserved modules. D1–D25 add no migration and no new persistence model.
 
 ## ADOS 10-rule conformance
 

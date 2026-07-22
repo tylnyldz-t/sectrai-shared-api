@@ -1501,6 +1501,93 @@ test('D24 keeps late Date prototype hooks out of governed, audit, fixture, and r
   assert.equal(reviewed?.handoff.sent, false)
 })
 
+test('D25 keeps late data-boundary and canonical-JSON hooks out of governed, audit, fixture, and review work', async () => {
+  const setup = runnerFor()
+  const originalArrayIsArray = Array.isArray
+  const originalArrayMap = Array.prototype.map
+  const originalArraySort = Array.prototype.sort
+  const originalJsonStringify = JSON.stringify
+  const originalNumberIsFinite = Number.isFinite
+  const originalNumberIsSafeInteger = Number.isSafeInteger
+  const originalObjectCreate = Object.create
+  const originalObjectEntries = Object.entries
+  const originalObjectFreeze = Object.freeze
+  const originalObjectFromEntries = Object.fromEntries
+  const originalGetOwnPropertyDescriptor = Object.getOwnPropertyDescriptor
+  const originalGetOwnPropertyDescriptors = Object.getOwnPropertyDescriptors
+  const originalGetOwnPropertyNames = Object.getOwnPropertyNames
+  const originalGetOwnPropertySymbols = Object.getOwnPropertySymbols
+  const originalGetPrototypeOf = Object.getPrototypeOf
+  const originalSet = globalThis.Set
+  const originalLocaleCompare = String.prototype.localeCompare
+  let hostileHookCalls = 0
+  const hostileHook = () => { hostileHookCalls += 1; throw new Error('LATE_D25_HOOK_MUST_NOT_RUN') }
+  let result: ConnectorResult<CameraObservationResult> | undefined
+  let reviewed: Awaited<ReturnType<typeof independentlyReviewCameraObservation>> | undefined
+  let tamperedReviewError: unknown
+
+  try {
+    Array.isArray = hostileHook as unknown as typeof Array.isArray
+    Array.prototype.map = hostileHook as unknown as typeof Array.prototype.map
+    Array.prototype.sort = hostileHook as unknown as typeof Array.prototype.sort
+    JSON.stringify = hostileHook as typeof JSON.stringify
+    Number.isFinite = hostileHook as typeof Number.isFinite
+    Number.isSafeInteger = hostileHook as typeof Number.isSafeInteger
+    Object.create = hostileHook as typeof Object.create
+    Object.entries = hostileHook as typeof Object.entries
+    Object.freeze = hostileHook as typeof Object.freeze
+    Object.fromEntries = hostileHook as typeof Object.fromEntries
+    Object.getOwnPropertyDescriptor = hostileHook as typeof Object.getOwnPropertyDescriptor
+    Object.getOwnPropertyDescriptors = hostileHook as typeof Object.getOwnPropertyDescriptors
+    Object.getOwnPropertyNames = hostileHook as typeof Object.getOwnPropertyNames
+    Object.getOwnPropertySymbols = hostileHook as typeof Object.getOwnPropertySymbols
+    Object.getPrototypeOf = hostileHook as typeof Object.getPrototypeOf
+    globalThis.Set = hostileHook as unknown as SetConstructor
+    String.prototype.localeCompare = hostileHook as typeof String.prototype.localeCompare
+
+    result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
+    const tampered = {
+      ...result.data,
+      observation: { ...result.data.observation, findingCode: 'CHANGED_AFTER_SYNTHETIC_RUN' },
+    }
+    try {
+      await independentlyReviewCameraObservation(tampered, 'approved', true, 'reviewer@example.test', setup.audit, context)
+    } catch (error) {
+      tamperedReviewError = error
+    }
+    reviewed = await independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', setup.audit, context)
+  } finally {
+    Array.isArray = originalArrayIsArray
+    Array.prototype.map = originalArrayMap
+    Array.prototype.sort = originalArraySort
+    JSON.stringify = originalJsonStringify
+    Number.isFinite = originalNumberIsFinite
+    Number.isSafeInteger = originalNumberIsSafeInteger
+    Object.create = originalObjectCreate
+    Object.entries = originalObjectEntries
+    Object.freeze = originalObjectFreeze
+    Object.fromEntries = originalObjectFromEntries
+    Object.getOwnPropertyDescriptor = originalGetOwnPropertyDescriptor
+    Object.getOwnPropertyDescriptors = originalGetOwnPropertyDescriptors
+    Object.getOwnPropertyNames = originalGetOwnPropertyNames
+    Object.getOwnPropertySymbols = originalGetOwnPropertySymbols
+    Object.getPrototypeOf = originalGetPrototypeOf
+    globalThis.Set = originalSet
+    String.prototype.localeCompare = originalLocaleCompare
+  }
+
+  assert.equal(hostileHookCalls, 0)
+  assert.ok(tamperedReviewError instanceof ConnectorInputError)
+  assert.equal(tamperedReviewError.message, 'CAMERA_REVIEW_OBSERVATION_MISMATCH')
+  assert.equal(result?.data.mode, 'SYNTHETIC')
+  assert.equal(reviewed?.decision, 'approved')
+  assert.equal(reviewed?.handoff.sent, false)
+  assert.deepEqual(setup.audit.entries.map((entry) => entry.event.type), [
+    'connector.run.requested', 'connector.run.succeeded', 'connector.camera.owner_reviewed',
+  ])
+  assert.deepEqual((setup.quota as TestQuota).requests, [{ connectorId: CAMERA_CONNECTOR_ID, requestedItems: 1 }])
+})
+
 test('D15 seals audit events before append: shaped or cyclic events never reach the audit collaborator', async () => {
   const received: ConnectorAuditEvent[] = []
   const audit: AuditLog = {
