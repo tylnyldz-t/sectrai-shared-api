@@ -528,6 +528,98 @@ test('D15 copies one verified runner clock and rejects malformed audit results b
   assert.equal(successQuota.requests.length, 1)
 })
 
+test('D16 snapshots direct market-run context and copies its one clock value before plan construction', async () => {
+  const connector = new SyntheticMarketConnector(limits)
+  let clockCalls = 0
+  const directContext = {
+    ...context,
+    scopes: ['market:capacity:quote'],
+    now: () => {
+      clockCalls += 1
+      // The connector has already copied all static governance fields. A
+      // caller-owned clock cannot turn this into a different plan mid-run.
+      directContext.product = 'other-product'
+      directContext.actor = 'other-maker@example.test'
+      directContext.scopes[0] = 'market:review'
+      Object.defineProperty(directContext, 'providerCredential', { value: 'must-not-cross-direct-boundary' })
+      return new Date('2026-07-22T12:34:56.000Z')
+    },
+  }
+
+  const result = await connector.run(capacityQuote, directContext)
+  const plan = result.data as SyntheticMarketPlan
+  assert.equal(clockCalls, 1)
+  assert.equal(result.provenance.retrievedAt, '2026-07-22T12:34:56.000Z')
+  assert.equal(plan.binding.product, context.product)
+  assert.equal(plan.binding.requestedBy, context.actor)
+  assert.deepEqual(plan.binding.scopes, ['market:capacity:quote'])
+  assert.equal(plan.liveStatus, 'LIVE_DISABLED')
+  assert.deepEqual(plan.sideEffects, { externalNetwork: false, reservation: false, booking: false, publication: false })
+})
+
+test('D16 rejects shaped direct market contexts and invalid clocks without evaluating caller traps', async () => {
+  const connector = new SyntheticMarketConnector(limits)
+  const directContext = () => ({ ...context, scopes: ['market:capacity:quote'], now })
+  const mustReject = async (candidate: unknown) => {
+    await assert.rejects(
+      () => connector.run(capacityQuote, candidate as never),
+      (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_CONTEXT',
+    )
+  }
+
+  await mustReject({ ...directContext(), providerCredential: 'synthetic-not-accepted' })
+  const hiddenCredential = directContext()
+  Object.defineProperty(hiddenCredential, 'providerCredential', { value: 'synthetic-not-accepted' })
+  await mustReject(hiddenCredential)
+
+  let actorGetterRead = false
+  const accessorActor = directContext()
+  Object.defineProperty(accessorActor, 'actor', {
+    enumerable: true,
+    get() { actorGetterRead = true; throw new Error('DIRECT_CONTEXT_ACTOR_GETTER_MUST_NOT_RUN') },
+  })
+  await mustReject(accessorActor)
+  assert.equal(actorGetterRead, false)
+
+  let rootProxyRead = false
+  const proxyContext = new Proxy(directContext(), {
+    get() { rootProxyRead = true; throw new Error('DIRECT_CONTEXT_PROXY_MUST_NOT_RUN') },
+  })
+  await mustReject(proxyContext)
+  assert.equal(rootProxyRead, false)
+
+  let scopeGetterRead = false
+  const accessorScopes = ['market:capacity:quote']
+  Object.defineProperty(accessorScopes, '0', {
+    enumerable: true,
+    get() { scopeGetterRead = true; throw new Error('DIRECT_SCOPE_GETTER_MUST_NOT_RUN') },
+  })
+  await mustReject({ ...directContext(), scopes: accessorScopes })
+  await mustReject({ ...directContext(), scopes: new Array(1) })
+  assert.equal(scopeGetterRead, false)
+
+  assert.throws(
+    () => connector.preflight(capacityQuote, Object.create(directContext()) as never),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_CONTEXT',
+  )
+
+  await assert.rejects(
+    () => connector.run(capacityQuote, { ...directContext(), now: () => new Date('not-a-real-time') }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_RUN_TIME',
+  )
+  await assert.rejects(
+    () => connector.run(capacityQuote, { ...directContext(), now: () => { throw new Error('DIRECT_CLOCK_MUST_FAIL_CLOSED') } }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_RUN_TIME',
+  )
+  await assert.rejects(
+    () => connector.run(capacityQuote, {
+      ...directContext(),
+      now: () => new Proxy(new Date('2026-07-22T12:34:56.000Z'), {}),
+    }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_RUN_TIME',
+  )
+})
+
 test('a distinct owner can audit a market review, but neither decision can authorize an execution', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })

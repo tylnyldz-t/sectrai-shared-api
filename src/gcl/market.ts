@@ -18,6 +18,8 @@ export const MARKET_REVIEW_EVIDENCE_MANIFEST_VERSION = 'synthetic-market-review-
 const MARKET_SCOPES = ['market:discover', 'market:capacity:quote', 'market:review'] as const
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
+const MARKET_RUN_CONTEXT_FIELDS = ['product', 'workspaceId', 'actor', 'ownerApproved', 'scopes', 'costCapCents', 'requestedItems', 'now'] as const
+const MAX_MARKET_RUN_SCOPES = 64
 const PLAN_ID_PATTERN = /^synthetic-market-[a-f0-9]{24}$/
 const REVIEW_ID_PATTERN = /^synthetic-market-review-[a-f0-9]{24}$/
 const REVIEW_RECEIPT_ID_PATTERN = /^synthetic-market-review-receipt-[a-f0-9]{24}$/
@@ -321,6 +323,16 @@ type ReviewedMarketContext = {
   now: () => Date
 }
 
+/**
+ * D16 gives the direct connector path the same own-data boundary as the
+ * governed route. It deliberately preserves the public ConnectorRunContext
+ * shape, but no later market validation or provenance step reads the
+ * caller-owned object after this copy.
+ */
+type SnapshottedMarketRunContext = Omit<ConnectorRunContext, 'scopes'> & {
+  scopes: readonly string[]
+}
+
 const OWNER_ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 const MAX_MARKET_REVIEW_DATA_DEPTH = 16
 const MAX_MARKET_REVIEW_DATA_NODES = 256
@@ -501,6 +513,68 @@ function reviewNow(context: ReviewedMarketContext): Date {
   const timestamp = Date.prototype.getTime.call(value)
   if (!Number.isFinite(timestamp)) throw new ConnectorInputError('INVALID_MARKET_REVIEW_TIME')
   return new Date(timestamp)
+}
+
+function marketRunScopes(value: unknown): readonly string[] {
+  if (
+    !Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype ||
+    Object.getOwnPropertySymbols(value).length > 0
+  ) throw new ConnectorInputError('INVALID_MARKET_CONTEXT')
+
+  const names = Object.getOwnPropertyNames(value)
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const length = descriptors.length
+  if (
+    !length || !('value' in length) || length.enumerable || typeof length.value !== 'number' ||
+    !Number.isSafeInteger(length.value) || length.value > MAX_MARKET_RUN_SCOPES || names.length !== length.value + 1 ||
+    names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))
+  ) throw new ConnectorInputError('INVALID_MARKET_CONTEXT')
+
+  const scopes: string[] = []
+  for (let index = 0; index < length.value; index += 1) {
+    const descriptor = descriptors[String(index)]
+    if (!descriptor || !descriptor.enumerable || !('value' in descriptor) || typeof descriptor.value !== 'string') {
+      throw new ConnectorInputError('INVALID_MARKET_CONTEXT')
+    }
+    scopes.push(descriptor.value)
+  }
+  return Object.freeze(scopes)
+}
+
+/**
+ * D16 snapshots every direct-run context field through descriptors. This
+ * rejects getters, Proxies, inheritance, sparse scope lists, hidden fields,
+ * symbols, and credential-shaped extras without evaluating them.
+ */
+function marketRunContext(value: unknown): SnapshottedMarketRunContext {
+  const candidate = exactMarketObject(value, MARKET_RUN_CONTEXT_FIELDS, 'INVALID_MARKET_CONTEXT')
+  if (typeof candidate.now !== 'function' || nodeTypes.isProxy(candidate.now)) {
+    throw new ConnectorInputError('INVALID_MARKET_CONTEXT')
+  }
+  return Object.freeze({
+    product: candidate.product,
+    workspaceId: candidate.workspaceId,
+    actor: candidate.actor,
+    ownerApproved: candidate.ownerApproved,
+    scopes: marketRunScopes(candidate.scopes),
+    costCapCents: candidate.costCapCents,
+    requestedItems: candidate.requestedItems,
+    now: candidate.now as () => Date,
+  }) as SnapshottedMarketRunContext
+}
+
+/** D16 copies the only direct-run executable seam before plan construction. */
+function marketRunNow(context: SnapshottedMarketRunContext): Date {
+  let candidate: unknown
+  try {
+    candidate = Reflect.apply(context.now, undefined, [])
+  } catch {
+    throw new ConnectorInputError('INVALID_MARKET_RUN_TIME')
+  }
+  if (!nodeTypes.isDate(candidate) || nodeTypes.isProxy(candidate)) throw new ConnectorInputError('INVALID_MARKET_RUN_TIME')
+  const epoch = Date.prototype.getTime.call(candidate)
+  if (!Number.isFinite(epoch)) throw new ConnectorInputError('INVALID_MARKET_RUN_TIME')
+  return new Date(epoch)
 }
 
 function canonicalJson(value: unknown): string {
@@ -773,7 +847,7 @@ function requiredScope(request: SyntheticMarketInput): 'market:discover' | 'mark
   return request.operation === 'capacity-quote' ? 'market:capacity:quote' : 'market:discover'
 }
 
-function validatedRequest(config: SyntheticMarketConnectorConfig | null, input: unknown, ctx: ConnectorRunContext): SyntheticMarketInput {
+function validatedRequest(config: SyntheticMarketConnectorConfig | null, input: unknown, ctx: SnapshottedMarketRunContext): SyntheticMarketInput {
   // Keep direct connector invocation as fail-closed as the governed runner.
   if (ctx.ownerApproved !== true) throw new OwnerGateError()
   const limits = configured(config, ctx)
@@ -1404,19 +1478,21 @@ export class SyntheticMarketConnector implements Connector<SyntheticMarketInput,
    * audit and quota boundaries without retaining either caller-owned value.
    */
   preflight(input: SyntheticMarketInput, ctx: ConnectorRunContext): SyntheticMarketInput {
-    return validatedRequest(this.config, input, ctx)
+    return validatedRequest(this.config, input, marketRunContext(ctx))
   }
 
   async run(input: SyntheticMarketInput, ctx: ConnectorRunContext): Promise<ConnectorResult<SyntheticMarketPlan>> {
-    const request = validatedRequest(this.config, input, ctx)
-    const binding = planBinding(ctx)
+    const safeContext = marketRunContext(ctx)
+    const request = validatedRequest(this.config, input, safeContext)
+    const occurredAt = marketRunNow(safeContext)
+    const binding = planBinding(safeContext)
     const plan = syntheticMarketPlan(binding, request)
     return {
       data: plan,
       provenance: {
         connectorId: this.id,
         source: 'synthetic-market-proposal',
-        retrievedAt: ctx.now().toISOString(),
+        retrievedAt: occurredAt.toISOString(),
         runId: plan.id,
         untrustedContent: {
           source: 'synthetic-market-request',
