@@ -159,7 +159,10 @@ function reviewExpiry(now: Date, reviewTtlMs: number): Date {
 }
 
 function configured(config: TranslationConnectorConfig, ctx: ConnectorRunContext): Required<Pick<TranslationConnectorConfig, 'maxCostCapCents' | 'maxInputCharacters' | 'maxAudioDurationMs' | 'reviewTtlMs'>> & { now: Date; reviewExpiresAt: Date } {
-  if (config.liveOptInRequested) throw new ConnectorUnavailableError('TRANSLATION_LIVE_EXECUTION_FORBIDDEN')
+  // Treat the configuration *surface* as forbidden, not merely a true value.
+  // A programmatic adapter construction must not turn an explicit false into a
+  // future-compatible live-mode switch.
+  if (Object.hasOwn(config, 'liveOptInRequested')) throw new ConnectorUnavailableError('TRANSLATION_LIVE_EXECUTION_FORBIDDEN')
   if (!SYNTHETIC_TRANSLATION_ONLY || !config.syntheticEnabled || config.liveState !== LIVE_DISABLED) throw new ConnectorUnavailableError('TRANSLATION_SYNTHETIC_CONNECTOR_NOT_CONFIGURED')
   const maxCostCapCents = config.maxCostCapCents
   const maxInputCharacters = config.maxInputCharacters
@@ -338,7 +341,7 @@ export function translationConnectorsFromEnvironment(environment: NodeJS.Process
   const liveOptInWasProvided = Object.hasOwn(environment, 'GCL_TRANSLATION_LIVE_ENABLED')
   const config: TranslationConnectorConfig = {
     syntheticEnabled: environment.GCL_TRANSLATION_SYNTHETIC_ENABLED === 'true' && !liveOptInWasProvided,
-    liveOptInRequested: liveOptInWasProvided,
+    ...(liveOptInWasProvided ? { liveOptInRequested: true } : {}),
     liveState: environment.GCL_TRANSLATION_LIVE_DISABLED === 'true' ? LIVE_DISABLED : undefined,
     maxCostCapCents: environmentPositiveInteger(environment.GCL_TRANSLATION_MAX_COST_CENTS),
     maxInputCharacters: environmentPositiveInteger(environment.GCL_TRANSLATION_MAX_INPUT_CHARACTERS),

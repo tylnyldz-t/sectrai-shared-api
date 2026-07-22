@@ -181,6 +181,37 @@ test('HTTP connector route rejects a blank owner actor before the runner, artifa
   }
 })
 
+test('HTTP connector route rejects a whitespace-padded owner actor instead of rewriting its audit identity', async (context) => {
+  const oldProductKey = process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+  process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = productKey
+  const service = await running()
+  if (!service) {
+    if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+    else process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = oldProductKey
+    return context.skip('sandbox disallows loopback listeners')
+  }
+  try {
+    const response = await fetch(`${service.base}/connectors/translation-text-synthetic/runs`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-sectrai-product-key': productKey,
+        'x-sectrai-owner-token': ownerToken,
+        'x-sectrai-owner-actor': ' maker@example.test ',
+      },
+      body: JSON.stringify({ input: { synthetic: true }, scopes: ['translation:text'], costCapCents: 25, requestedItems: 1 }),
+    })
+    assert.equal(response.status, 422)
+    assert.equal((await response.json() as { error: string }).error, 'INVALID_OWNER_ACTOR')
+    assert.equal(service.runnerCalls(), 0)
+    assert.equal(service.audit.entries.length, 0)
+  } finally {
+    await close(service.server)
+    if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+    else process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = oldProductKey
+  }
+})
+
 test('HTTP connector route rejects a whitespace-padded scope instead of rewriting its authority envelope', async (context) => {
   assert.throws(() => connectorRunFrom({
     input: { synthetic: true }, scopes: [' translation:text '], costCapCents: 25, requestedItems: 1,

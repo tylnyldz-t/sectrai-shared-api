@@ -67,6 +67,17 @@ test('text translation remains synthetic-only and fails closed before any artifa
   await assert.rejects(() => missingReviewTtl.run(textInput(), context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_GOVERNANCE_LIMITS_NOT_CONFIGURED')
 })
 
+test('an explicit programmatic live opt-in surface is a poison pill even when false', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const connector = new SyntheticTextTranslationConnector({ ...config, liveOptInRequested: false })
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+
+  await assert.rejects(() => runner.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: textInput(), ...context }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_LIVE_EXECUTION_FORBIDDEN')
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+})
+
 test('a present live-enable environment key is a configuration poison pill, even when false', async () => {
   const environment: NodeJS.ProcessEnv = {
     GCL_TRANSLATION_SYNTHETIC_ENABLED: 'true',
@@ -205,6 +216,22 @@ test('audit rejects terminal outcomes that do not echo their requested run-clock
     }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_EVENT_INVALID')
     assert.equal(audit.entries.length, 1)
   }
+})
+
+test('audit rejects a successful artifact run whose review is expired at its canonical run instant', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const requested = await audit.append({
+    type: 'connector.run.requested', connectorId: TEXT_TRANSLATION_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
+    scopes: ['translation:text'], costCapCents: context.costCapCents, requestedItems: 1, occurredAt: now().toISOString(), detail: {},
+  })
+  const expiredProposal = (await new SyntheticTextTranslationConnector(config).run(textInput(), context)).artifact!
+
+  await assert.rejects(() => audit.append({
+    type: 'connector.run.succeeded', connectorId: TEXT_TRANSLATION_CONNECTOR_ID, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
+    scopes: ['translation:text'], costCapCents: context.costCapCents, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { requestedAuditHash: requested.hash, artifact: { ...expiredProposal, reviewExpiresAt: now().toISOString() } },
+  }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_EVENT_INVALID')
+  assert.equal(audit.entries.length, 1)
 })
 
 test('owner, cost, item, personal-data, locale, and synthetic-descriptor failures stop translation before quota or artifact creation', async () => {

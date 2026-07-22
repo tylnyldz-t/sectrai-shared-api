@@ -42,6 +42,14 @@ does not trim or otherwise rewrite a padded scope into an accepted authority;
 such a request returns `INVALID_CONNECTOR_SCOPES` before the runner, artifact
 store, audit log, or quota can observe it.
 
+The owner actor is likewise a canonical audit identity, not display text. The
+HTTP boundary rejects a blank or whitespace-padded `X-Sectrai-Owner-Actor`
+with `INVALID_OWNER_ACTOR`; it never trims that header into a different maker
+or checker. The connector configuration is equally closed: the presence of a
+`liveOptInRequested` construction field, even `false`, is a poison pill. This
+keeps programmatic construction aligned with the environment rule for
+`GCL_TRANSLATION_LIVE_ENABLED`.
+
 ## Canonical synthetic run clock
 
 Before connector preflight, the runner takes one valid native `Date` snapshot.
@@ -61,6 +69,11 @@ ordering hint: the terminal `succeeded` or `failed` record must exactly echo
 its linked `requested` record's timestamp. A hash-valid record that is later
 than its request—even by one millisecond—invalidates the audit chain and
 cannot authorize an artifact or another audit append.
+
+An artifact-producing success must also carry a `reviewExpiresAt` strictly
+after that same canonical run instant. A success whose review is already
+expired (or expires at exactly the run instant) is rejected before it becomes
+an audit-chain link or can reach artifact persistence.
 
 ## Connector routes
 

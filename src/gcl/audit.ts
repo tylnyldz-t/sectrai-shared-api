@@ -200,7 +200,12 @@ function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
   if (value.type === 'connector.run.succeeded') {
     if (!connectorRunScopes(value.connectorId, value.scopes) || !isObject(value.detail) || value.costCapCents < 1 || value.requestedItems !== 1 || typeof value.detail.requestedAuditHash !== 'string' || !SHA256.test(value.detail.requestedAuditHash)) return false
     if (hasExactlyKeys(value.detail, ['requestedAuditHash'])) return true
-    return hasExactlyKeys(value.detail, ['requestedAuditHash', 'artifact']) && artifactProposalDetail(value.connectorId, value.detail.artifact)
+    // A result cannot introduce review authority that was already expired at
+    // its canonical run instant. This blocks a hash-valid but unusable success
+    // event before it can become a durable chain link.
+    return hasExactlyKeys(value.detail, ['requestedAuditHash', 'artifact'])
+      && artifactProposalDetail(value.connectorId, value.detail.artifact)
+      && before(value.occurredAt, value.detail.artifact.reviewExpiresAt)
   }
   if (value.type === 'connector.run.failed') return connectorRunScopes(value.connectorId, value.scopes) && isObject(value.detail) && hasExactlyKeys(value.detail, ['requestedAuditHash', 'error']) && typeof value.detail.requestedAuditHash === 'string' && SHA256.test(value.detail.requestedAuditHash) && typeof value.detail.error === 'string' && ERROR_CODE.test(value.detail.error) && value.costCapCents >= 1 && value.requestedItems === 1
   if (value.type === 'translation.artifact.created') return connectorRunScopes(value.connectorId, value.scopes) && isObject(value.detail) && artifactDetail(value.detail, 'pending-checker-approval') && reviewDigestMatchesArtifactDetail(value.connectorId, value.detail) && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents >= 1 && value.requestedItems === 1

@@ -54,9 +54,11 @@ function gclOwnerAuth(expectedToken: string | undefined): RequestHandler {
 
 function ownerActorFrom(request: Request): string {
   const actor = request.header('x-sectrai-owner-actor')
-  const normalized = typeof actor === 'string' ? actor.trim() : ''
-  if (!normalized || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(normalized)) throw Object.assign(new Error('INVALID_OWNER_ACTOR'), { status: 422 })
-  return normalized
+  // The actor is part of the durable maker/checker audit identity. Never
+  // rewrite a header value into a different principal: padded identity is an
+  // invalid request, just like a padded scope is invalid authority.
+  if (typeof actor !== 'string' || !actor || actor.trim() !== actor || !/^[a-zA-Z0-9:_@. -]{1,160}$/.test(actor)) throw Object.assign(new Error('INVALID_OWNER_ACTOR'), { status: 422 })
+  return actor
 }
 
 function connectorIdFrom(request: Request): string {
