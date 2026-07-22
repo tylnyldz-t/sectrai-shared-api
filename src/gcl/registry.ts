@@ -462,24 +462,20 @@ export class ConnectorRegistry {
 }
 
 export class GovernedConnectorRunner {
-  private readonly auditAppend: (event: ConnectorAuditEvent) => Promise<unknown>
-  private readonly quotaConsume: (context: Parameters<ConnectorQuota['consume']>[0]) => Promise<unknown>
-  private readonly runClock: () => Date
+  readonly #collaborators: GovernedRunnerCollaborators
 
-  constructor(private readonly registry: ConnectorRegistry, auditLog: AuditLog, quota: ConnectorQuota, now: () => Date = () => new Date()) {
-    this.auditAppend = hostMethod<ConnectorAuditEvent>(auditLog, 'append', 'CONNECTOR_AUDIT_LOG_UNAVAILABLE')
-    this.quotaConsume = hostMethod<Parameters<ConnectorQuota['consume']>[0]>(quota, 'consume', 'CONNECTOR_QUOTA_UNAVAILABLE')
-    if (typeof now !== 'function' || nodeTypes.isProxy(now)) throw new ConnectorUnavailableError('INVALID_GOVERNED_RUN_TIME')
-    this.runClock = now
+  constructor(registry: ConnectorRegistry, auditLog: AuditLog, quota: ConnectorQuota, now: () => Date = () => new Date()) {
+    this.#collaborators = governedRunnerCollaborators(registry, auditLog, quota, now)
   }
 
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
+    const { resolve, auditAppend, quotaConsume, runClock } = this.#collaborators
     // D12: do not read a caller-owned request after this exact own-data copy.
     const safeRequest = snapshotRunRequest(request)
     // Runtime callers can bypass TypeScript, so owner approval is an exact
     // authority value, never a truthiness check.
     if (safeRequest.ownerApproved !== true) throw new OwnerGateError()
-    const connector = this.registry.get(safeRequest.connectorId)
+    const connector = resolve(safeRequest.connectorId)
     if (!isSafeNonNegativeInteger(safeRequest.costCapCents) || safeRequest.costCapCents < 1) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
     if (!Number.isSafeInteger(safeRequest.requestedItems) || safeRequest.requestedItems < 1) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
     if (safeRequest.scopes.length === 0 || safeRequest.scopes.some((scope) => !connector.scopes.includes(scope))) throw new ScopeError()
@@ -487,7 +483,7 @@ export class GovernedConnectorRunner {
     // D15: copy one verified clock value before connector preflight, audit, or
     // quota. Every event and the connector's provenance context derive from
     // this local instant, so a host clock cannot mutate later async seams.
-    const occurredAt = governedRunTime(this.runClock)
+    const occurredAt = governedRunTime(runClock)
     const localNow = () => new Date(occurredAt.getTime())
     const context: ConnectorRunContext = {
       product: safeRequest.product,
@@ -505,16 +501,16 @@ export class GovernedConnectorRunner {
     // opaque-input contract.
     const preparedInput = await connector.preflight?.(safeRequest.input, context)
     const connectorInput = preparedInput === undefined ? safeRequest.input : preparedInput
-    const requestedAudit = auditAppendResult(await this.auditAppend({
+    const requestedAudit = auditAppendResult(await auditAppend({
       type: 'connector.run.requested', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
       scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(), detail: {},
     }))
-    await this.quotaConsume({ ...context, connectorId: connector.id, quotaGroup: connector.quotaGroup, occurredAt })
+    await quotaConsume({ ...context, connectorId: connector.id, quotaGroup: connector.quotaGroup, occurredAt })
     let result: ConnectorResult
     try {
       result = connectorResultSnapshot(await connector.run(connectorInput, context), connector.id)
     } catch (error) {
-      auditAppendResult(await this.auditAppend({
+      auditAppendResult(await auditAppend({
         type: 'connector.run.failed', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
         scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(),
         detail: { requestedAuditHash: requestedAudit.hash, error: error instanceof Error ? error.message : 'UNKNOWN_ERROR' },
@@ -524,7 +520,7 @@ export class GovernedConnectorRunner {
     // Keep a malformed host result from being mistaken for a successful run;
     // do not append a second, misleading failure event after the success append
     // itself has already crossed the host seam.
-    const succeededAudit = auditAppendResult(await this.auditAppend({
+    const succeededAudit = auditAppendResult(await auditAppend({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
         scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(), detail: { requestedAuditHash: requestedAudit.hash },
     }))

@@ -1501,6 +1501,81 @@ test('D22 rejects shaped market registry collections, connector control metadata
   assert.equal(proxyTrapRead, false)
 })
 
+test('D23 seals runner collaborator references so later registry, audit, quota, clock, or legacy-field replacement cannot retarget a market run', async () => {
+  const connector = new SyntheticMarketConnector(limits)
+  const registry = new ConnectorRegistry([connector])
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(registry, audit, quota, now)
+  let retargetedCalls = 0
+  const retarget = () => { retargetedCalls += 1; throw new Error('REPLACED_RUNNER_COLLABORATOR_MUST_NOT_RUN') }
+
+  ;(registry as unknown as { get: unknown }).get = retarget
+  ;(audit as unknown as { append: unknown }).append = retarget
+  ;(quota as unknown as { consume: unknown }).consume = retarget
+  Object.assign(runner as unknown as Record<string, unknown>, {
+    registry: { get: retarget },
+    auditAppend: retarget,
+    quotaConsume: retarget,
+    runClock: retarget,
+    collaborators: { resolve: retarget, auditAppend: retarget, quotaConsume: retarget, runClock: retarget },
+  })
+
+  const result = await runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
+
+  assert.equal(retargetedCalls, 0)
+  assert.equal((result.data as SyntheticMarketPlan).mode, 'SYNTHETIC')
+  assert.equal((result.data as SyntheticMarketPlan).liveStatus, 'LIVE_DISABLED')
+  assert.deepEqual(audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.succeeded'])
+  assert.deepEqual(quota.requests, [{ connectorId: MARKET_CONNECTOR_ID, quotaGroup: 'market', requestedItems: 1 }])
+})
+
+test('D23 rejects Proxy, accessor, missing-method, and Proxy-clock collaborators during construction without evaluating traps or running work', () => {
+  const registry = new ConnectorRegistry([new SyntheticMarketConnector(limits)])
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  let proxyTrapRead = false
+  let accessorRead = false
+  let methodApplied = false
+  let clockCalls = 0
+  const proxyRegistry = new Proxy(registry, {
+    get() { proxyTrapRead = true; throw new Error('RUNNER_REGISTRY_PROXY_MUST_NOT_RUN') },
+  })
+  const accessorRegistry = new ConnectorRegistry([new SyntheticMarketConnector(limits)])
+  Object.defineProperty(accessorRegistry, 'get', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('RUNNER_REGISTRY_ACCESSOR_MUST_NOT_RUN') },
+  })
+  const proxyAuditMethod = new Proxy(async () => ({ hash: 'a'.repeat(64) }), {
+    apply() { methodApplied = true; throw new Error('RUNNER_AUDIT_METHOD_PROXY_MUST_NOT_RUN') },
+  })
+  const proxyClock = new Proxy(() => {
+    clockCalls += 1
+    return now()
+  }, {
+    apply() { methodApplied = true; throw new Error('RUNNER_CLOCK_PROXY_MUST_NOT_RUN') },
+  })
+
+  const rejectsCollaborator = (candidateRegistry: unknown, candidateAudit: unknown, candidateQuota: unknown, candidateClock: unknown, expected: string) => {
+    assert.throws(
+      () => new GovernedConnectorRunner(candidateRegistry as ConnectorRegistry, candidateAudit as never, candidateQuota as never, candidateClock as never),
+      (error: unknown) => error instanceof ConnectorUnavailableError && error.message === expected,
+    )
+  }
+
+  rejectsCollaborator(proxyRegistry, audit, quota, now, 'INVALID_GOVERNED_RUNNER_COLLABORATOR')
+  rejectsCollaborator(accessorRegistry, audit, quota, now, 'INVALID_GOVERNED_RUNNER_COLLABORATOR')
+  rejectsCollaborator(registry, { append: proxyAuditMethod }, quota, now, 'CONNECTOR_AUDIT_LOG_UNAVAILABLE')
+  rejectsCollaborator(registry, audit, Object.create(Object.prototype), now, 'CONNECTOR_QUOTA_UNAVAILABLE')
+  rejectsCollaborator(registry, audit, quota, proxyClock, 'INVALID_GOVERNED_RUNNER_COLLABORATOR')
+  assert.equal(proxyTrapRead, false)
+  assert.equal(accessorRead, false)
+  assert.equal(methodApplied, false)
+  assert.equal(clockCalls, 0)
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+})
+
 test('D1 review packet reconstruction rejects injection, source/quote/action drift, scope drift, and whitespace identity bypasses before audit append', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
@@ -1926,7 +2001,8 @@ test('ADOS 10 controls are complete and explicitly prohibit egress and productio
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D20 freezes outward preflight\/result data/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D21 copies strict result\/provenance ingress/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D22 fixes the registered connector control plane/i)
-  assert.match(ADOS_10_MARKET_CONTROLS[8]?.enforcement ?? '', /D22 evidence permanently report no quote/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D23 fixes runner collaborator references/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[8]?.enforcement ?? '', /D22\/D23 evidence permanently report no quote/i)
   assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
   assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })

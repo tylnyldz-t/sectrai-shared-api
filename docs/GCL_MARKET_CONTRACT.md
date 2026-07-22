@@ -650,6 +650,31 @@ D22 adds no provider code, credential handling, network call, route, storage,
 migration, queue, worker, quote, reservation, booking, publication, handoff,
 send, durable approval, signature, authorization, or execution capability.
 
+## D23 — sealed governed-run collaborators
+
+`GovernedConnectorRunner` now admits its registry resolver, audit append
+method, quota consume method, and local clock at construction, then retains
+those references only in a native private field. The resolver, audit, and
+quota methods must be bounded-prototype, descriptor-backed data functions with
+non-Proxy receivers and callbacks. D15's existing audit/quota unavailable
+errors remain stable; a malformed registry resolver or Proxy clock fails
+closed as `INVALID_GOVERNED_RUNNER_COLLABORATOR`. D15 still validates the one
+clock result at run time as an intrinsic finite `Date`.
+
+Replacing public `registry.get`, `audit.append`, `quota.consume`, or legacy
+runner fields after construction cannot retarget connector selection, audit
+append, quota reservation, or the fixed synthetic timestamp path. Proxy
+receivers, accessors, missing methods, Proxy callbacks, and Proxy clocks are
+rejected without evaluating their traps, calling the clock, appending audit,
+consuming quota, preflighting, or running the connector.
+
+D23 is an in-process control-plane snapshot, not a collaborator sandbox or a
+durability/signature claim. It adds no provider code, credential handling,
+network call, route, storage, migration, queue, worker, quote, reservation,
+booking, publication, handoff, send, durable approval, authorization, or
+execution capability. Every admitted result remains exactly `SYNTHETIC`,
+`LIVE_DISABLED`, and `NOT_AUTHORIZED`.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -714,7 +739,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -748,7 +773,9 @@ wrappers before a succeeded audit, copies result/provenance metadata before
 that asynchronous append, and freezes the copied final egress. D22 snapshots
 the market registry's control-plane metadata, scope tuple, quota group, and
 method references at construction, so later connector mutation cannot retarget
-a governed run.
+a governed run. D23 snapshots the runner's registry resolver, audit/quota
+callbacks, and local clock behind a native private field, so later public
+collaborator or legacy-runner-field replacement cannot retarget that run.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -825,6 +852,12 @@ scope tuples, hidden credential/provider-shaped fields, and callbacks without
 evaluating their traps. It proves a later mutation of a registered connector's
 ID, quota group, scopes, preflight, or run function cannot alter the frozen
 entry's audit, quota, or synthetic no-action result.
+D23 additionally rejects Proxy and accessor registry collaborators, Proxy
+audit callbacks, missing quota methods, and Proxy clocks at construction
+without evaluating a trap, calling a clock, appending an audit event, consuming
+quota, or running a connector. It proves later replacement of public registry,
+audit, quota, clock, or legacy runner fields cannot change the selected
+synthetic, no-action path.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -857,7 +890,8 @@ entry's audit, quota, or synthetic no-action result.
    caller; D20 freezes direct preflight output and direct/governed
    result/provenance output after audit enrichment; D21 validates and copies
    strict connector-result ingress before the succeeded-audit seam; D22 fixes
-   registry-visible connector metadata, scopes, quota group, and methods.
+   registry-visible connector metadata, scopes, quota group, and methods; D23
+   fixes runner collaborator references behind a native private field.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.
@@ -877,8 +911,9 @@ entry's audit, quota, or synthetic no-action result.
    result and its derived no-action evidence before they reach a caller; D20
    freezes the direct/governed no-action preflight/result/provenance boundary;
    D21 copies exact result/provenance metadata before the succeeded audit; D22
-   fixes the registered connector control plane before a governed run.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22 evidence cannot quote, reserve, book,
+   fixes the registered connector control plane; D23 fixes runner collaborator
+   references before a governed run.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -888,4 +923,4 @@ entry's audit, quota, or synthetic no-action result.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19/D20/D21/D22/D23.
