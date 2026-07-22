@@ -271,13 +271,13 @@ export class GovernedConnectorRunner {
     try {
       await this.quota.consume({ ...context, connectorId: connector.id, occurredAt: snapshotClock(occurredAt)() })
       const result = governedConnectorResult(await connector.run(normalizedRequest.input, context), connector.id, occurredAt)
-      const succeededAudit = await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.succeeded', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash }))
+      const succeededAudit = await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.succeeded', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash }), requestedAudit.hash)
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
     } catch (error) {
       // A malformed receipt can mean the preceding append partially persisted.
       // Do not manufacture a second, unactionable transition after it.
       if (error instanceof AuditReceiptError || error instanceof AuditEventError || error instanceof AuditChainError) throw error
-      await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.failed', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash, ...auditFailureDetail(error, 'execution') }))
+      await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.failed', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash, ...auditFailureDetail(error, 'execution') }), requestedAudit.hash)
       throw error
     }
   }

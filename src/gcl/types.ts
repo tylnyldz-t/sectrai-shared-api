@@ -62,8 +62,14 @@ export type ConnectorAuditEvent = {
   detail: Record<string, unknown>
 }
 
+/** A locally checked append witness; it is not a durable audit lookup or signature. */
+export type AuditAppendReceipt = Readonly<{
+  hash: string
+  previousHash: string | null
+}>
+
 export interface AuditLog {
-  append(event: ConnectorAuditEvent): Promise<{ hash: string }>
+  append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt>
 }
 
 export interface ConnectorQuota {

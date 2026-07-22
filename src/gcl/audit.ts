@@ -2,11 +2,12 @@ import { createHash } from 'node:crypto'
 import { types as nodeTypes } from 'node:util'
 import { AuditChainError, AuditEventError, AuditReceiptError } from './errors.js'
 import { type Prisma, type PrismaClient } from '@prisma/client'
-import type { AuditLog, ConnectorAuditEvent } from './types.js'
+import type { AuditAppendReceipt, AuditLog, ConnectorAuditEvent } from './types.js'
 
 export const GCL_AUDIT_MODULE_ID = 'gcl-audit'
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/
+const AUDIT_APPEND_RECEIPT_FIELDS = ['hash', 'previousHash'] as const
 const AUDIT_EVENT_FIELDS = [
   'type', 'connectorId', 'product', 'workspaceId', 'requestedBy', 'checkedBy', 'correlationId',
   'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail',
@@ -42,26 +43,29 @@ export function hashAuditEvent(event: ConnectorAuditEvent, previousHash: string 
 }
 
 /**
- * D14 accepts only the exact local hash receipt an audit append needs to bind
- * its successor. This is a data boundary, not an audit-chain lookup or a
- * signature check: it rejects shaped collaborator output before its hash can
- * become audit detail or result provenance.
+ * D14/D17 accept only an exact own-data local append witness. D17 adds the
+ * predecessor value so the sealed event can be re-hashed before either value
+ * reaches audit detail or result provenance. This is not a durable lookup or
+ * signature check.
  */
-export function validateAuditAppendReceipt(value: unknown): { hash: string } {
+export function validateAuditAppendReceipt(value: unknown): AuditAppendReceipt {
   if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) {
     throw new AuditReceiptError()
   }
   const prototype = Object.getPrototypeOf(value)
   if (prototype !== Object.prototype && prototype !== null) throw new AuditReceiptError()
   const names = Object.getOwnPropertyNames(value)
-  if (Object.getOwnPropertySymbols(value).length > 0 || names.length !== 1 || names[0] !== 'hash') {
+  if (Object.getOwnPropertySymbols(value).length > 0 || names.length !== AUDIT_APPEND_RECEIPT_FIELDS.length || names.some((name) => !AUDIT_APPEND_RECEIPT_FIELDS.includes(name as typeof AUDIT_APPEND_RECEIPT_FIELDS[number]))) {
     throw new AuditReceiptError()
   }
-  const descriptor = Object.getOwnPropertyDescriptor(value, 'hash')
-  if (!descriptor || !('value' in descriptor) || !descriptor.enumerable || typeof descriptor.value !== 'string' || !SHA256_PATTERN.test(descriptor.value)) {
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const hash = descriptors.hash
+  const previousHash = descriptors.previousHash
+  if (!hash || !('value' in hash) || !hash.enumerable || typeof hash.value !== 'string' || !SHA256_PATTERN.test(hash.value) ||
+    !previousHash || !('value' in previousHash) || !previousHash.enumerable || (previousHash.value !== null && (typeof previousHash.value !== 'string' || !SHA256_PATTERN.test(previousHash.value)))) {
     throw new AuditReceiptError()
   }
-  return { hash: descriptor.value }
+  return Object.freeze({ hash: hash.value, previousHash: previousHash.value })
 }
 
 function auditEventRecord(value: unknown): Record<string, unknown> {
@@ -239,16 +243,25 @@ export function validateAuditChainHead(value: unknown): Readonly<AuditRecordValu
   return Object.freeze({ event, previousHash, hash })
 }
 
-/** D14/D15 append one immutable local event, then copy the sole safe receipt field before use. */
-export async function appendVerifiedAuditEvent(auditLog: AuditLog, event: ConnectorAuditEvent): Promise<{ hash: string }> {
-  return validateAuditAppendReceipt(await auditLog.append(sealAuditAppendEvent(event)))
+/**
+ * D17 seals an event, checks the append witness is an exact re-hash of it,
+ * and optionally pins a predecessor already known by this caller. It does not
+ * read storage or prove that either hash was durably persisted.
+ */
+export async function appendVerifiedAuditEvent(auditLog: AuditLog, event: ConnectorAuditEvent, expectedPreviousHash?: string): Promise<AuditAppendReceipt> {
+  const sealedEvent = sealAuditAppendEvent(event)
+  const receipt = validateAuditAppendReceipt(await auditLog.append(sealedEvent))
+  if (receipt.hash !== hashAuditEvent(sealedEvent, receipt.previousHash) || (expectedPreviousHash !== undefined && receipt.previousHash !== expectedPreviousHash)) {
+    throw new AuditReceiptError()
+  }
+  return receipt
 }
 
 /** A per-product/workspace append-only SHA-256 chain that contains no raw media. */
 export class PrismaHashChainAuditLog implements AuditLog {
   constructor(private readonly prisma: PrismaClient) {}
 
-  async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
+  async append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
     return this.prisma.$transaction(async (transaction) => {
       await transaction.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`${event.product}:${event.workspaceId}:${GCL_AUDIT_MODULE_ID}`}))`
       const previous = await transaction.record.findFirst({
@@ -267,7 +280,7 @@ export class PrismaHashChainAuditLog implements AuditLog {
           createdBy: 'gcl-audit',
         },
       })
-      return { hash }
+      return { hash, previousHash }
     })
   }
 }
@@ -276,10 +289,10 @@ export class PrismaHashChainAuditLog implements AuditLog {
 export class InMemoryHashChainAuditLog implements AuditLog {
   readonly entries: AuditRecordValue[] = []
 
-  async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
+  async append(event: ConnectorAuditEvent): Promise<AuditAppendReceipt> {
     const previousHash = this.entries.at(-1)?.hash ?? null
     const hash = hashAuditEvent(event, previousHash)
     this.entries.push({ event, previousHash, hash })
-    return { hash }
+    return { hash, previousHash }
   }
 }
