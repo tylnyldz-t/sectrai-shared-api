@@ -427,6 +427,7 @@ test('GM6 maps premium Unreal and Blender plans to JNC pilot contracts without s
   assert.equal(unreal.data.integrity.mutation, 'DEEP_FROZEN')
   assert.equal(verifiesSyntheticReviewReceipt(unreal.data.reviewReceipt), true)
   assert.equal(verifiesSyntheticReviewSnapshot(unreal.data.reviewSnapshot), true)
+  assert.equal(unreal.data.reviewSnapshot.payload.retrievedAt, unreal.provenance.retrievedAt)
   assert.equal(unreal.data.reviewReceipt.execution, 'NOT_EXECUTED')
   assert.equal(unreal.data.reviewReceipt.externalEffects.publication, 'DISABLED_NOT_PUBLISHED')
   assert.equal(Object.isFrozen(unreal.data.pipeline), true)
@@ -441,6 +442,7 @@ test('GM6 maps premium Unreal and Blender plans to JNC pilot contracts without s
   assert.equal(unreal.data.publication.state, 'DISABLED_NOT_IMPLEMENTED')
 
   const blender = await governed.run.run(gameRequest({ ...premiumUnreal, engine: 'blender', projectId: 'forest-assets' })) as ConnectorResult<GameEngineBuildPlan>
+  assert.equal(blender.data.reviewSnapshot.payload.retrievedAt, blender.provenance.retrievedAt)
   assert.equal(blender.data.jncPilotHandoff?.contract, 'jarvis-node-controller.windows-blender-neutral-asset-pilot.v1')
   assert.equal(blender.data.jncPilotHandoff?.state, 'SYNTHETIC_HANDOFF_ONLY_NOT_SENT')
   assert.equal('gpu' in (blender.data.jncPilotHandoff ?? {}), true)
@@ -697,23 +699,31 @@ test('runner captures one valid clock instant for audit, quota, and synthetic pr
     },
   )
 
-  const result = await governed.run(request())
+  const result = await governed.run(request()) as ConnectorResult<SyntheticThreeDResult>
   assert.equal(clockCalls, 1)
   assert.deepEqual(audit.entries.map((entry) => entry.event.occurredAt), [capturedAt, capturedAt])
   assert.equal(quota.reservations[0]?.occurredAt.toISOString(), capturedAt)
   assert.equal(result.provenance.retrievedAt, capturedAt)
+  assert.equal(result.data.reviewSnapshot.payload.retrievedAt, capturedAt)
 })
 
-test('final egress binds provenance time to the runner audit instant and rejects a stale synthetic result', async () => {
+test('final egress seals the provenance instant into the review snapshot and rejects a relabelled stale plan', async () => {
   const staleAt = '2026-07-22T10:14:59.999Z'
   const governedAt = '2026-07-22T10:15:00.000Z'
   const staleResult = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
     { prompt: 'A provenance-time-bound synthetic proposal' },
     directContext({ now: () => new Date(staleAt) }),
   )
+  assert.equal(staleResult.data.reviewSnapshot.payload.retrievedAt, staleAt)
   const staleConnector: Connector = {
     id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
-    async run() { return staleResult },
+    async run() {
+      return {
+        data: staleResult.data,
+        provenance: { ...staleResult.provenance, retrievedAt: governedAt },
+        confidence: 0,
+      }
+    },
   }
   const audit = new InMemoryHashChainAuditLog()
   const quota = new InMemoryDailyConnectorQuota({ dailyRuns: 6, dailyItems: 60 })

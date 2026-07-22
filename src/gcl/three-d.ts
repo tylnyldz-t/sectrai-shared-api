@@ -263,6 +263,7 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
         costCapCents: validatedContext.costCapCents,
         requestedItems: validatedContext.requestedItems,
       },
+      retrievedAt,
       submittedInputSha256,
       input: validated,
       artifact,

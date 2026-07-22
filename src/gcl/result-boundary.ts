@@ -263,7 +263,7 @@ function snapshotAndCoreData(data: DataRecord, connectorId: string, submission: 
   const payload = ownDataRecord(snapshot.payload)
   if (!payload || payload.connectorId !== connectorId || payload.submittedInputSha256 !== submission.sha256 ||
     !sameCanonicalData(payload.scope, binding.scope) || payload.actor !== binding.actor || !sameCanonicalData(payload.governance, binding.governance) ||
-    !sameCanonicalData(payload.input, submission.normalizedInput)) return null
+    payload.retrievedAt !== binding.retrievedAt || !sameCanonicalData(payload.input, submission.normalizedInput)) return null
   return payload
 }
 

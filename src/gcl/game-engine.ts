@@ -212,6 +212,7 @@ export class SyntheticGameEngineConnector implements Connector<GameEngineBuildIn
         costCapCents: validatedContext.costCapCents,
         requestedItems: validatedContext.requestedItems,
       },
+      retrievedAt,
       submittedInputSha256,
       input,
       buildId: id,

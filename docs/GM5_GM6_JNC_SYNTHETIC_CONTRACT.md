@@ -335,21 +335,25 @@ timestamp hygiene for local review evidence; it is not a scheduler, signature,
 transport, engine call, filesystem write, credential read, or execution
 authorization.
 
-### D1 provenance-time egress binding
+### D1 provenance-time snapshot seal
 
-The final GM5/GM6 egress boundary also receives the exact captured instant as
-an explicit binding and requires `provenance.retrievedAt` to equal it. The
-runner supplies its one audit/quota instant; a direct adapter supplies the
-native timestamp it captured before it constructed a plan. The binding itself
-requires an exact ISO instant and is freshly frozen local data.
+The final GM5/GM6 egress boundary receives the exact captured instant as an
+explicit binding and requires both `provenance.retrievedAt` and the signed
+`reviewSnapshot.payload.retrievedAt` to equal it. GM5 and GM6 write this
+instant into the payload before its canonical digest and review receipt are
+created. The runner supplies its one audit/quota instant; a direct adapter
+supplies the native timestamp it captured before it constructed a plan. The
+binding itself requires an exact ISO instant and is freshly frozen local data.
 
 Consequently, a separately valid but stale or future synthetic result cannot
-be replayed under the same owner, scope, reservation, and review snapshot with
-its provenance relabelled. The runner records its normal requested/failed audit
-pair and retains the quota reservation; no result is returned. This is only a
-local timestamp-consistency check. It does not send a hand-off, schedule work,
-contact JNC or a provider, launch Blender/Unreal/Godot, read a credential,
-write an artifact, or authorize publication.
+be replayed under the same owner, scope, reservation, and review snapshot by
+changing only its outer provenance label. Rewriting that instant inside the
+review snapshot changes its digest and receipt, but final egress still rejects
+it unless it equals the run's governed instant. The runner records its normal
+requested/failed audit pair and retains the quota reservation; no result is
+returned. This is only a local timestamp-consistency check. It does not send a
+hand-off, schedule work, contact JNC or a provider, launch Blender/Unreal/Godot,
+read a credential, write an artifact, or authorize publication.
 
 ### D1 submission snapshot and registry seal
 
