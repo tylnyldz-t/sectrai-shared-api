@@ -16,7 +16,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v13' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v14' as const
 const SYNTHETIC_DOCUMENT_DATA_BOUNDARY = {
   evidenceSource: 'synthetic-fixture',
   inputShape: 'plain-own-data-only',
@@ -51,8 +51,15 @@ const SYNTHETIC_DOCUMENT_PROXY_BOUNDARY = {
   proxyObjectsAccepted: false,
   proxyArraysAccepted: false,
 } as const
+const SYNTHETIC_DOCUMENT_DATE_ARITHMETIC_BOUNDARY = {
+  arithmetic: 'checked-utc-epoch-milliseconds',
+  overflowAccepted: false,
+  invalidDateAccepted: false,
+} as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
+/** ECMAScript Time Values are bounded more tightly than safe integers. */
+const MAX_UTC_EPOCH_MILLISECONDS = 8_640_000_000_000_000
 
 const fieldNames = [
   'containerId', 'referenceNumber', 'importOrderNumber', 'exportOrderNumber', 'loadType', 'loadAmount', 'loadWeight',
@@ -167,6 +174,12 @@ export type SyntheticDocumentReviewPacket = {
     proxyDetection: typeof SYNTHETIC_DOCUMENT_PROXY_BOUNDARY.proxyDetection
     proxyObjectsAccepted: typeof SYNTHETIC_DOCUMENT_PROXY_BOUNDARY.proxyObjectsAccepted
     proxyArraysAccepted: typeof SYNTHETIC_DOCUMENT_PROXY_BOUNDARY.proxyArraysAccepted
+  }
+  /** Deadline arithmetic is checked before an invalid Date can be serialized. */
+  dateArithmeticBoundaryBinding: {
+    arithmetic: typeof SYNTHETIC_DOCUMENT_DATE_ARITHMETIC_BOUNDARY.arithmetic
+    overflowAccepted: typeof SYNTHETIC_DOCUMENT_DATE_ARITHMETIC_BOUNDARY.overflowAccepted
+    invalidDateAccepted: typeof SYNTHETIC_DOCUMENT_DATE_ARITHMETIC_BOUNDARY.invalidDateAccepted
   }
   /** Metadata-only freshness limit for the synthetic evidence reference. */
   evidenceBinding: {
@@ -313,6 +326,21 @@ function parsedDate(value: unknown, error: string): Date {
   return parsed
 }
 /**
+ * A canonical input timestamp can still be close enough to the ECMAScript
+ * ceiling that adding a bounded synthetic interval produces an invalid Date.
+ * Reject that condition explicitly instead of leaking a RangeError from
+ * toISOString() or allowing NaN through deadline comparisons.
+ */
+function checkedDateAddSeconds(value: Date, seconds: number, error: string): Date {
+  const epochMilliseconds = Date.prototype.getTime.call(value)
+  const intervalMilliseconds = seconds * 1000
+  const resultMilliseconds = epochMilliseconds + intervalMilliseconds
+  if (!Number.isSafeInteger(epochMilliseconds) || !Number.isSafeInteger(intervalMilliseconds) || !Number.isSafeInteger(resultMilliseconds) || Math.abs(resultMilliseconds) > MAX_UTC_EPOCH_MILLISECONDS) throw new ConnectorInputError(error)
+  const result = new Date(resultMilliseconds)
+  if (!Number.isFinite(Date.prototype.getTime.call(result))) throw new ConnectorInputError(error)
+  return result
+}
+/**
  * A caller-controlled clock must not supply overridden Date methods or extra
  * state to the review path. Copy only the intrinsic epoch value into a fresh
  * built-in Date before it can affect packet timing or an audit decision.
@@ -350,6 +378,7 @@ function reviewPacketIntegrityMaterial(
   timeBoundaryBinding: SyntheticDocumentReviewPacket['timeBoundaryBinding'],
   fieldRecordBoundaryBinding: SyntheticDocumentReviewPacket['fieldRecordBoundaryBinding'],
   proxyBoundaryBinding: SyntheticDocumentReviewPacket['proxyBoundaryBinding'],
+  dateArithmeticBoundaryBinding: SyntheticDocumentReviewPacket['dateArithmeticBoundaryBinding'],
   evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
   reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): Record<string, unknown> {
@@ -374,6 +403,7 @@ function reviewPacketIntegrityMaterial(
     timeBoundaryBinding,
     fieldRecordBoundaryBinding,
     proxyBoundaryBinding,
+    dateArithmeticBoundaryBinding,
     evidenceBinding,
     reviewWindow,
   }
@@ -385,7 +415,7 @@ function evidenceBindingFor(
   maxEvidenceAgeSeconds: number,
 ): SyntheticDocumentReviewPacket['evidenceBinding'] {
   const capturedAt = new Date(evidence.capturedAt)
-  const expiresAt = new Date(capturedAt.getTime() + (maxEvidenceAgeSeconds * 1000))
+  const expiresAt = checkedDateAddSeconds(capturedAt, maxEvidenceAgeSeconds, 'DOCUMENT_EVIDENCE_EXPIRY_ARITHMETIC_INVALID')
   if (expiresAt.getTime() <= issuedAt.getTime()) throw new ConnectorInputError('DOCUMENT_EVIDENCE_STALE')
   return { capturedAt: capturedAt.toISOString(), expiresAt: expiresAt.toISOString() }
 }
@@ -397,7 +427,7 @@ function reviewByFor(
   maxReviewAgeSeconds: number,
 ): Date {
   return new Date(Math.min(
-    issuedAt.getTime() + (maxReviewAgeSeconds * 1000),
+    checkedDateAddSeconds(issuedAt, maxReviewAgeSeconds, 'DOCUMENT_REVIEW_WINDOW_ARITHMETIC_INVALID').getTime(),
     new Date(consentExpiresAt).getTime(),
     new Date(evidenceExpiresAt).getTime(),
   ))
@@ -422,11 +452,12 @@ function reviewPacketFor(
   const timeBoundaryBinding = { ...SYNTHETIC_DOCUMENT_TIME_BOUNDARY }
   const fieldRecordBoundaryBinding = { ...SYNTHETIC_DOCUMENT_FIELD_RECORD_BOUNDARY }
   const proxyBoundaryBinding = { ...SYNTHETIC_DOCUMENT_PROXY_BOUNDARY }
+  const dateArithmeticBoundaryBinding = { ...SYNTHETIC_DOCUMENT_DATE_ARITHMETIC_BOUNDARY }
   const evidenceBinding = evidenceBindingFor(proposal.evidence, issuedAt, maxEvidenceAgeSeconds)
   const reviewWindow = { issuedAt: issuedAt.toISOString(), reviewBy: reviewByFor(issuedAt, consent.expiresAt, evidenceBinding.expiresAt, maxReviewAgeSeconds).toISOString() }
   return {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
-    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, evidenceBinding, reviewWindow))),
+    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, fieldRecordBoundaryBinding, proxyBoundaryBinding, dateArithmeticBoundaryBinding, evidenceBinding, reviewWindow))),
     scopeBinding,
     consentBinding,
     governanceBinding,
@@ -437,6 +468,7 @@ function reviewPacketFor(
     timeBoundaryBinding,
     fieldRecordBoundaryBinding,
     proxyBoundaryBinding,
+    dateArithmeticBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -629,6 +661,13 @@ function reviewedProxyBoundaryBinding(value: unknown): SyntheticDocumentReviewPa
   return { ...SYNTHETIC_DOCUMENT_PROXY_BOUNDARY }
 }
 
+function reviewedDateArithmeticBoundaryBinding(value: unknown): SyntheticDocumentReviewPacket['dateArithmeticBoundaryBinding'] {
+  if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_DATE_ARITHMETIC_BOUNDARY_BINDING')
+  exactKeys(value, ['arithmetic', 'overflowAccepted', 'invalidDateAccepted'], 'UNEXPECTED_DOCUMENT_REVIEW_DATE_ARITHMETIC_BOUNDARY_BINDING_FIELD')
+  if (value.arithmetic !== SYNTHETIC_DOCUMENT_DATE_ARITHMETIC_BOUNDARY.arithmetic || value.overflowAccepted !== false || value.invalidDateAccepted !== false) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_DATE_ARITHMETIC_BOUNDARY_BINDING')
+  return { ...SYNTHETIC_DOCUMENT_DATE_ARITHMETIC_BOUNDARY }
+}
+
 function reviewedEvidenceBinding(
   value: unknown,
   evidence: SyntheticDocumentProposal['evidence'],
@@ -642,7 +681,7 @@ function reviewedEvidenceBinding(
   if (capturedAt.toISOString() !== evidence.capturedAt) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_CAPTURE_MISMATCH')
   const evidenceWindowMilliseconds = expiresAt.getTime() - capturedAt.getTime()
   if (evidenceWindowMilliseconds <= 0 || evidenceWindowMilliseconds > MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS * 1000) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_EVIDENCE_BINDING')
-  if (expiresAt.toISOString() !== new Date(capturedAt.getTime() + (governanceBinding.maxEvidenceAgeSeconds * 1000)).toISOString()) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_EXPIRY_MISMATCH')
+  if (expiresAt.toISOString() !== checkedDateAddSeconds(capturedAt, governanceBinding.maxEvidenceAgeSeconds, 'DOCUMENT_REVIEW_EVIDENCE_EXPIRY_ARITHMETIC_INVALID').toISOString()) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_EXPIRY_MISMATCH')
   if (expiresAt.getTime() <= reviewedAt.getTime()) throw new ConnectorInputError('DOCUMENT_REVIEW_EVIDENCE_EXPIRED')
   return { capturedAt: capturedAt.toISOString(), expiresAt: expiresAt.toISOString() }
 }
