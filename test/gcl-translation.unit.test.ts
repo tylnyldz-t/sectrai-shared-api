@@ -111,6 +111,48 @@ test('governed text translation returns only the owner-supplied fixture, reserve
   assert.equal(JSON.stringify(audit.entries).includes('There are pending approvals.'), false)
 })
 
+test('a governed run snapshots one valid clock for audit, quota, provenance, and review expiry', async () => {
+  const connector = new SyntheticTextTranslationConnector(config)
+  const audit = new InMemoryHashChainAuditLog()
+  let quotaOccurredAt: string | undefined
+  const quota: ConnectorQuota = {
+    async consume(request): Promise<void> { quotaOccurredAt = request.occurredAt.toISOString() },
+  }
+  let clockCalls = 0
+  const unstableNow = (): Date => {
+    clockCalls += 1
+    return new Date(`2026-07-22T12:0${clockCalls}:00.000Z`)
+  }
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, unstableNow)
+  const result = await runner.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: textInput(), ...context }) as ConnectorResult<TextTranslationData>
+
+  assert.equal(clockCalls, 1)
+  assert.equal(quotaOccurredAt, '2026-07-22T12:01:00.000Z')
+  assert.deepEqual(audit.entries.map((entry) => entry.event.occurredAt), ['2026-07-22T12:01:00.000Z', '2026-07-22T12:01:00.000Z'])
+  assert.equal(result.provenance.retrievedAt, '2026-07-22T12:01:00.000Z')
+  assert.equal(result.artifact?.reviewExpiresAt, '2026-07-22T12:02:00.000Z')
+})
+
+test('an invalid run clock fails closed before preflight, audit, or quota reservation', async () => {
+  let preflightCalls = 0
+  const connector: Connector = {
+    id: TEXT_TRANSLATION_CONNECTOR_ID,
+    kind: 'text-translation',
+    authKind: 'owner-token',
+    scopes: ['translation:text'],
+    preflight(): void { preflightCalls += 1 },
+    async run(): Promise<ConnectorResult> { throw new Error('must not run') },
+  }
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, () => new Date('invalid'))
+
+  await assert.rejects(() => runner.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: textInput(), ...context }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_RUN_CLOCK_INVALID')
+  assert.equal(preflightCalls, 0)
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+})
+
 test('owner, cost, item, personal-data, locale, and synthetic-descriptor failures stop translation before quota or artifact creation', async () => {
   const connector = new SyntheticSpeechTranslationConnector(config)
   const audit = new InMemoryHashChainAuditLog()

@@ -7,6 +7,24 @@ function canonicalActor(value: unknown): value is string {
   return typeof value === 'string' && value.trim() === value && Boolean(value) && ACTOR_ID.test(value)
 }
 
+/**
+ * A governed run gets one native-clock snapshot.  Do not hand a connector the
+ * ambient clock: an unstable or hostile clock could otherwise make the audit
+ * outcome, provenance, and review expiry describe different runs.
+ */
+function runClock(now: () => Date): { occurredAt: string; now: () => Date } {
+  try {
+    const candidate = now()
+    if (!(candidate instanceof Date)) throw new TypeError('not a date')
+    const milliseconds = Date.prototype.getTime.call(candidate)
+    if (!Number.isFinite(milliseconds)) throw new TypeError('invalid date')
+    const occurredAt = new Date(milliseconds).toISOString()
+    return { occurredAt, now: () => new Date(milliseconds) }
+  } catch {
+    throw new ConnectorUnavailableError('CONNECTOR_RUN_CLOCK_INVALID')
+  }
+}
+
 export type RunConnectorRequest = {
   connectorId: string
   input: unknown
@@ -47,7 +65,7 @@ export class GovernedConnectorRunner {
     if (!Number.isSafeInteger(request.requestedItems) || request.requestedItems < 1) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
     if (request.scopes.length === 0 || request.scopes.some((scope) => !connector.scopes.includes(scope))) throw new ScopeError()
 
-    const occurredAt = this.now()
+    const run = runClock(this.now)
     const context: ConnectorRunContext = {
       product: request.product,
       workspaceId: request.workspaceId,
@@ -56,23 +74,23 @@ export class GovernedConnectorRunner {
       scopes: [...new Set(request.scopes)].sort(),
       costCapCents: request.costCapCents,
       requestedItems: request.requestedItems,
-      now: this.now,
+      now: run.now,
     }
     await connector.preflight?.(request.input, context)
     const requestedAudit = await this.auditLog.append({
       type: 'connector.run.requested', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
-      scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(), detail: {},
+      scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: run.occurredAt, detail: {},
     })
     try {
       // A rejected reservation is still a terminal governed run. Keep its
       // stable error code in the chain so a requested audit cannot be left
       // without an outcome. Preflight remains outside this boundary because
       // malformed input must not create an audit or quota record at all.
-      await this.quota.consume({ ...context, connectorId: connector.id, occurredAt })
+      await this.quota.consume({ ...context, connectorId: connector.id, occurredAt: new Date(run.occurredAt) })
       const result = await connector.run(request.input, context)
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
-        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(),
+        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: run.occurredAt,
         detail: result.artifact ? { requestedAuditHash: requestedAudit.hash, artifact: result.artifact } : { requestedAuditHash: requestedAudit.hash },
       })
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
@@ -81,7 +99,7 @@ export class GovernedConnectorRunner {
       const errorCode = error instanceof GclError ? error.code : 'connector_run_failed'
       await this.auditLog.append({
         type: 'connector.run.failed', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
-        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(),
+        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: run.occurredAt,
         detail: { requestedAuditHash: requestedAudit.hash, error: errorCode },
       })
       throw error

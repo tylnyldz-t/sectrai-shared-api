@@ -29,6 +29,20 @@ stable `connector_quota_exceeded` code. The adapter is not invoked and no raw
 input is placed in that audit record. Preflight failures remain before the
 first audit entry and quota reservation.
 
+## Canonical synthetic run clock
+
+Before connector preflight, the runner takes one valid native `Date` snapshot.
+That snapshot is copied rather than exposed as the ambient clock: the
+`requested` and terminal (`succeeded` or `failed`) audit entries, quota
+reservation context, provenance `retrievedAt`, and proposal review-expiry
+calculation all use the same instant. This prevents a changing clock from
+making one synthetic run appear to have conflicting audit and review times.
+An invalid or non-Date clock result fails closed with
+`CONNECTOR_RUN_CLOCK_INVALID` before preflight, audit append, quota
+reservation, adapter execution, or artifact creation. This is a local
+metadata-integrity boundary only; it makes no provider call and grants no live
+execution capability.
+
 ## Connector routes
 
 ```text
@@ -261,9 +275,9 @@ artifact.
    both artifact storage and audit validation.
 8. One requested run has one terminal outcome, and one successful run can bind
    exactly one artifact; the SHA-256 audit chain replays these transitions.
-9. Maker/checker separation, TTL, one canonical creation/decision timestamp,
-   and compare-and-set terminal decisions prevent self-approval, stale review,
-   timestamp substitution, and overwrite races.
+9. One canonical run/creation/decision timestamp, maker/checker separation,
+   TTL, and compare-and-set terminal decisions prevent self-approval, stale
+   review, timestamp substitution, and overwrite races.
 10. Each durable mutation shares a transaction with its audit row; no migration,
     publication, send, provider invocation, real-data ingestion, or production
     enablement is authorized by this synthetic contract or its tests.
