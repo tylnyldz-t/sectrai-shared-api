@@ -1672,6 +1672,7 @@ test('ADOS 10 controls are complete and explicitly prohibit egress and productio
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D16 snapshots direct market context and time/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D17 fixes the selected synthetic connector binding/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D18 freezes the emitted synthetic plan/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D19 freezes review and derived evidence/i)
   assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
   assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })

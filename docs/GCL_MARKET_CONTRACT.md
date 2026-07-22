@@ -553,6 +553,27 @@ D18 adds no provider code, credential handling, network call, route, storage,
 migration, queue, worker, quote, reservation, booking, publication, handoff,
 send, durable approval, signature, authorization, or execution capability.
 
+## D19 — immutable review and derived-evidence egress
+
+D19 freezes every public canonical review output after it has been rebuilt:
+the D2 terminal review result and nested D3 receipt, the D3 revalidation
+result, D4 audit witness plus its event/scopes/detail, D5 audit-trail witness,
+D6 audit-trail receipt, D7 evidence manifest, and the nested scope-binding,
+execution, and integrity branches they expose. `validateSyntheticMarketPlanForReview()`
+also returns the D18-sealed canonical plan rather than a mutable reconstruction.
+
+This makes in-place addition of a provider/credential-shaped field, an action
+flag, or a prototype impossible on module-emitted review evidence. A consumer
+may still make a separate copy for transport or simulation, but every existing
+validator reconstructs the fixed `NOT_AUTHORIZED` shape and rejects action or
+integrity drift. D19 is an object-integrity boundary only: it is not a
+signature, durable audit store, approval workflow, authorization, or execution
+permission.
+
+D19 adds no provider code, credential handling, network call, route, storage,
+migration, queue, worker, quote, reservation, booking, publication, handoff,
+send, durable approval, signature, authorization, or execution capability.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,
@@ -617,7 +638,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -642,7 +663,8 @@ value before plan construction. D17 fixes the market connector's own
 preflight/run functions, private configuration reference, and scope tuple
 before any runner audit or quota await. D18 freezes every emitted plan branch
 and the request value exposed as data-only provenance before a caller receives
-it.
+it. D19 freezes the canonical review result and its D3–D7 receipt, audit,
+trail, and manifest evidence branches before any caller can retain them.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -696,7 +718,13 @@ D18 additionally proves that the emitted plan's root and nested binding,
 request, sources, quote, side-effect, owner-review, and review-packet branches
 cannot receive an action, provider, credential, or prototype mutation in
 place. A separately mutated clone remains no-action and fails canonical
-review; the original plan's audit and quota counts are unchanged.
+review; the original plan's audit and quota counts are unchanged. D19
+additionally proves that canonical plan reconstruction, terminal review
+results, D3 receipts, D4 audit events, D5 witnesses, D6 receipts, and D7
+manifests freeze their complete known branches. In-place action, provider,
+credential, or prototype mutation fails; a separately mutated manifest
+fails closed without adding a review event, quota item, or local terminal
+entry.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -724,7 +752,9 @@ review; the original plan's audit and quota counts are unchanged.
    preflight/run context and copies one direct clock result before plan
    construction; D17 fixes the selected synthetic connector instance and its
    market scope tuple before the runner's asynchronous seams; D18 freezes every
-   emitted synthetic plan branch before it reaches a caller.
+   emitted synthetic plan branch before it reaches a caller; D19 freezes every
+   canonical review result and D3–D7 evidence branch before it reaches a
+   caller.
 5. Request content is explicitly data-only, never an instruction.
 6. A literal boolean owner gate, `market:review`, and maker–checker separation
    are mandatory.
@@ -740,8 +770,9 @@ review; the original plan's audit and quota counts are unchanged.
    members and clock before preflight; D16 snapshots direct market context and
    time before its plan construction; D17 fixes the selected synthetic
    connector binding before the runner's asynchronous seams; D18 freezes the
-   emitted no-action plan before it reaches a caller.
-9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18 evidence cannot quote, reserve, book,
+   emitted no-action plan before it reaches a caller; D19 freezes the review
+   result and its derived no-action evidence before they reach a caller.
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -751,4 +782,4 @@ review; the original plan's audit and quota counts are unchanged.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17/D18/D19.

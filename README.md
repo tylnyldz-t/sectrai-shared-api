@@ -119,4 +119,8 @@ emitted synthetic plan—including its request, binding, sources, quote,
 side-effect, owner-review, and review-packet objects—before it crosses the
 caller boundary. A caller must make a separate copy to propose a change, and
 the canonical review validator rejects action or credential-shaped drift in
-that copy; neither form can authorize an action.
+that copy; neither form can authorize an action. D19 applies the same
+immutable egress boundary to canonical review results and all D3–D7 evidence:
+the review receipt, audit witness/event, audit-trail witness/receipt, and
+evidence manifest can neither acquire action/provider fields in place nor
+authorize an action. Any simulated change needs a separate fail-closed copy.
