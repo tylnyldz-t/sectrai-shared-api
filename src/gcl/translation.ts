@@ -130,7 +130,7 @@ function digest(value: unknown): string {
   return `sha256:${createHash('sha256').update(JSON.stringify(value)).digest('hex')}`
 }
 
-function artifact(kind: TranslationArtifactProposal['kind'], contentHash: string, mediaType: TranslationArtifactProposal['mediaType'], source: TranslationArtifactProposal['source'], reviewTtlMs: number, now: Date): TranslationArtifactProposal {
+function artifact(kind: TranslationArtifactProposal['kind'], contentHash: string, mediaType: TranslationArtifactProposal['mediaType'], source: TranslationArtifactProposal['source'], reviewExpiresAt: Date): TranslationArtifactProposal {
   return {
     kind,
     contentHash,
@@ -140,13 +140,25 @@ function artifact(kind: TranslationArtifactProposal['kind'], contentHash: string
     approvalState: 'pending-checker-approval',
     autoPublish: false,
     reviewPolicyVersion: 'gcl-translation-synthetic-v1',
-    reviewExpiresAt: new Date(now.valueOf() + reviewTtlMs).toISOString(),
+    reviewExpiresAt: reviewExpiresAt.toISOString(),
   }
 }
 
 function positiveConfig(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 }
 
-function configured(config: TranslationConnectorConfig, ctx: ConnectorRunContext): Required<Pick<TranslationConnectorConfig, 'maxCostCapCents' | 'maxInputCharacters' | 'maxAudioDurationMs' | 'reviewTtlMs'>> {
+function connectorClock(value: unknown): Date {
+  if (!(value instanceof Date) || !Number.isFinite(value.valueOf())) throw new ConnectorUnavailableError('TRANSLATION_CONNECTOR_CLOCK_INVALID')
+  return new Date(value.valueOf())
+}
+
+/** The configured TTL must produce a representable canonical review instant. */
+function reviewExpiry(now: Date, reviewTtlMs: number): Date {
+  const expiresAt = new Date(now.valueOf() + reviewTtlMs)
+  if (!Number.isFinite(expiresAt.valueOf())) throw new ConnectorUnavailableError('TRANSLATION_REVIEW_TTL_INVALID')
+  return expiresAt
+}
+
+function configured(config: TranslationConnectorConfig, ctx: ConnectorRunContext): Required<Pick<TranslationConnectorConfig, 'maxCostCapCents' | 'maxInputCharacters' | 'maxAudioDurationMs' | 'reviewTtlMs'>> & { now: Date; reviewExpiresAt: Date } {
   if (config.liveOptInRequested) throw new ConnectorUnavailableError('TRANSLATION_LIVE_EXECUTION_FORBIDDEN')
   if (!SYNTHETIC_TRANSLATION_ONLY || !config.syntheticEnabled || config.liveState !== LIVE_DISABLED) throw new ConnectorUnavailableError('TRANSLATION_SYNTHETIC_CONNECTOR_NOT_CONFIGURED')
   const maxCostCapCents = config.maxCostCapCents
@@ -158,7 +170,8 @@ function configured(config: TranslationConnectorConfig, ctx: ConnectorRunContext
   }
   if (ctx.costCapCents > maxCostCapCents) throw new CostCapError()
   if (ctx.requestedItems !== 1) throw new CostCapError('TRANSLATION_SINGLE_ARTIFACT_REQUIRED')
-  return { maxCostCapCents, maxInputCharacters, maxAudioDurationMs, reviewTtlMs }
+  const now = connectorClock(ctx.now())
+  return { maxCostCapCents, maxInputCharacters, maxAudioDurationMs, reviewTtlMs, now, reviewExpiresAt: reviewExpiry(now, reviewTtlMs) }
 }
 
 function audioDescriptor(value: unknown, maxAudioDurationMs: number): SyntheticAudioDescriptor {
@@ -236,11 +249,11 @@ export class SyntheticTextTranslationConnector implements Connector<TextTranslat
     const contentHash = digest({ sourceText: parsed.sourceText, ...data })
     return {
       data,
-      artifact: artifact('translated-text', contentHash, 'text/plain', 'synthetic-text-translation', limits.reviewTtlMs, ctx.now()),
+      artifact: artifact('translated-text', contentHash, 'text/plain', 'synthetic-text-translation', limits.reviewExpiresAt),
       provenance: {
         connectorId: this.id,
         source: 'synthetic-text-translation-fixture',
-        retrievedAt: ctx.now().toISOString(),
+        retrievedAt: limits.now.toISOString(),
         untrustedContent: {
           source: 'owner-supplied-synthetic-text-translation',
           value: { contentHash, sourceLocale: parsed.sourceLocale, targetLocale: parsed.targetLocale },
@@ -294,11 +307,11 @@ export class SyntheticSpeechTranslationConnector implements Connector<SpeechTran
     const contentHash = digest({ sourceAudioHash: parsed.sourceAudio.contentHash, sourceTranscript: parsed.sourceTranscript, ...data })
     return {
       data,
-      artifact: artifact('translated-speech', contentHash, 'audio/wav', 'synthetic-speech-translation', limits.reviewTtlMs, ctx.now()),
+      artifact: artifact('translated-speech', contentHash, 'audio/wav', 'synthetic-speech-translation', limits.reviewExpiresAt),
       provenance: {
         connectorId: this.id,
         source: 'synthetic-speech-translation-fixture',
-        retrievedAt: ctx.now().toISOString(),
+        retrievedAt: limits.now.toISOString(),
         untrustedContent: {
           source: 'owner-supplied-synthetic-speech-translation',
           value: { contentHash, sourceAudioHash: parsed.sourceAudio.contentHash, sourceLocale: parsed.sourceLocale, targetLocale: parsed.targetLocale },

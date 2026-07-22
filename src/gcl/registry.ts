@@ -2,9 +2,24 @@ import { CostCapError, ConnectorUnavailableError, GclError, OwnerGateError, Scop
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 const ACTOR_ID = /^[a-zA-Z0-9:_@. -]{1,160}$/
+const SCOPE_ID = /^[a-z][a-z0-9:-]{0,79}$/
 
 function canonicalActor(value: unknown): value is string {
   return typeof value === 'string' && value.trim() === value && Boolean(value) && ACTOR_ID.test(value)
+}
+
+/**
+ * Do not silently deduplicate a caller's authority request.  The audit must
+ * describe the exact authorization that was accepted, so duplicate or
+ * noncanonical scope values fail before a clock, preflight, audit, or quota
+ * reservation can be reached.
+ */
+function canonicalScopes(value: unknown, connector: Connector): readonly string[] {
+  if (!Array.isArray(value)
+    || value.length === 0
+    || value.some((scope) => typeof scope !== 'string' || !SCOPE_ID.test(scope) || !connector.scopes.includes(scope))
+    || new Set(value).size !== value.length) throw new ScopeError()
+  return [...value].sort()
 }
 
 /**
@@ -63,7 +78,7 @@ export class GovernedConnectorRunner {
     if (!canonicalActor(request.actor)) throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
     if (!Number.isSafeInteger(request.costCapCents) || request.costCapCents < 1) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
     if (!Number.isSafeInteger(request.requestedItems) || request.requestedItems < 1) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
-    if (request.scopes.length === 0 || request.scopes.some((scope) => !connector.scopes.includes(scope))) throw new ScopeError()
+    const scopes = canonicalScopes(request.scopes, connector)
 
     const run = runClock(this.now)
     const context: ConnectorRunContext = {
@@ -71,7 +86,7 @@ export class GovernedConnectorRunner {
       workspaceId: request.workspaceId,
       actor: request.actor,
       ownerApproved: request.ownerApproved,
-      scopes: [...new Set(request.scopes)].sort(),
+      scopes,
       costCapCents: request.costCapCents,
       requestedItems: request.requestedItems,
       now: run.now,

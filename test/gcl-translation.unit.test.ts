@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { hashAuditEvent, InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
-import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
+import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, QuotaError, ScopeError } from '../src/gcl/errors.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import { InMemoryTranslationArtifactStore, PrismaTranslationArtifactStore, translationArtifactReviewDigest } from '../src/gcl/translation-artifacts.js'
 import { LIVE_DISABLED, SPEECH_TRANSLATION_CONNECTOR_ID, SYNTHETIC_TRANSLATION_ONLY, SyntheticSpeechTranslationConnector, SyntheticTextTranslationConnector, TEXT_TRANSLATION_CONNECTOR_ID, translationConnectorsFromEnvironment, type SpeechTranslationData, type SpeechTranslationInput, type TextTranslationData, type TextTranslationInput, type TranslationConnectorConfig } from '../src/gcl/translation.js'
@@ -149,6 +149,31 @@ test('an invalid run clock fails closed before preflight, audit, or quota reserv
 
   await assert.rejects(() => runner.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: textInput(), ...context }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_RUN_CLOCK_INVALID')
   assert.equal(preflightCalls, 0)
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+})
+
+test('duplicate scopes and an unrepresentable review TTL fail closed before audit, quota, or adapter execution', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([new SyntheticTextTranslationConnector(config)]), audit, quota, now)
+
+  await assert.rejects(() => runner.run({
+    connectorId: TEXT_TRANSLATION_CONNECTOR_ID,
+    input: textInput(),
+    ...context,
+    scopes: ['translation:text', 'translation:text'],
+  }), (error: unknown) => error instanceof ScopeError)
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+
+  const overflow = new GovernedConnectorRunner(
+    new ConnectorRegistry([new SyntheticTextTranslationConnector({ ...config, reviewTtlMs: Number.MAX_SAFE_INTEGER })]),
+    audit,
+    quota,
+    now,
+  )
+  await assert.rejects(() => overflow.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: textInput(), ...context }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'TRANSLATION_REVIEW_TTL_INVALID')
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
 })

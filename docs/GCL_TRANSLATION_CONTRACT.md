@@ -29,6 +29,14 @@ stable `connector_quota_exceeded` code. The adapter is not invoked and no raw
 input is placed in that audit record. Preflight failures remain before the
 first audit entry and quota reservation.
 
+The scope list itself is canonical: it must be nonempty, duplicate-free, and
+contain only recognized scope identifiers. Translation accepts exactly its one
+connector scope (`translation:text` or `translation:speech`). A repeated or
+noncanonical scope is rejected before the run clock, preflight, audit, quota,
+or adapter. `GCL_TRANSLATION_REVIEW_TTL_MS` must also produce a representable
+UTC expiry from that run clock; a date-range overflow is unavailable with
+`TRANSLATION_REVIEW_TTL_INVALID` before any reservation or audit entry.
+
 ## Canonical synthetic run clock
 
 Before connector preflight, the runner takes one valid native `Date` snapshot.
@@ -281,9 +289,10 @@ artifact.
    both artifact storage and audit validation.
 8. One requested run has one terminal outcome, and one successful run can bind
    exactly one artifact; the SHA-256 audit chain replays these transitions.
-9. One canonical run/creation/decision timestamp, maker/checker separation,
-   TTL, and compare-and-set terminal decisions prevent self-approval, stale
-   review, timestamp substitution, and overwrite races.
+9. One canonical, representable run/creation/decision timestamp, a
+   duplicate-free scope envelope, maker/checker separation, TTL, and
+   compare-and-set terminal decisions prevent self-approval, stale review,
+   timestamp substitution, scope ambiguity, and overwrite races.
 10. Each durable mutation shares a transaction with its audit row; no migration,
     publication, send, provider invocation, real-data ingestion, or production
     enablement is authorized by this synthetic contract or its tests.
