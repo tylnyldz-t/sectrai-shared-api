@@ -270,6 +270,7 @@ test('owner, cost, item, personal-data, locale, and synthetic-descriptor failure
 
   await assert.rejects(() => runner.run({ ...request, ownerApproved: false }), (error: unknown) => error instanceof OwnerGateError)
   await assert.rejects(() => runner.run({ ...request, actor: '   ' }), (error: unknown) => error instanceof OwnerGateError && error.message === 'OWNER_ACTOR_REQUIRED')
+  await assert.rejects(() => runner.run({ ...request, actor: ' maker@example.test ' }), (error: unknown) => error instanceof OwnerGateError && error.message === 'OWNER_ACTOR_REQUIRED')
   await assert.rejects(() => runner.run({ ...request, costCapCents: 26 }), (error: unknown) => error instanceof CostCapError)
   await assert.rejects(() => runner.run({ ...request, requestedItems: 2 }), (error: unknown) => error instanceof CostCapError && error.message === 'TRANSLATION_SINGLE_ARTIFACT_REQUIRED')
   await assert.rejects(() => runner.run({ ...request, input: { ...speechInput(), sourceAudio: { ...speechInput().sourceAudio, sourceRef: 'https://provider.example/audio.wav' } } }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_SYNTHETIC_TRANSLATION_AUDIO_DESCRIPTOR')

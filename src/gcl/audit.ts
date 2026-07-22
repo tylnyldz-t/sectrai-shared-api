@@ -187,7 +187,7 @@ function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
   if (!isObject(value) || !hasExactlyKeys(value, ['type', 'connectorId', 'product', 'workspaceId', 'actor', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'])) return false
   if (typeof value.type !== 'string'
     || typeof value.connectorId !== 'string' || !CONNECTOR_ID.test(value.connectorId)
-    || !validGclTenantContext(value)
+    || !validGclTenantContext({ product: value.product, workspaceId: value.workspaceId })
     || !canonicalActor(value.actor)
     || !scopes(value.scopes)
     || !safeInteger(value.costCapCents, 10_000_000)
