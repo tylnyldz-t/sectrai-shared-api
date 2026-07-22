@@ -248,6 +248,24 @@ These snapshots contain the same redacted local metadata as before and add no
 provider, network, GPU, dispatch, credential, migration, send, or publication
 capability.
 
+## D6 — sealed terminal decision snapshots
+
+The public `ownerLikeSyntheticImage` and `ownerRejectSyntheticImage` helpers
+now treat their supplied candidate as untrusted across every async ledger
+boundary. After its complete synthetic shape is validated, the helper makes a
+private deep-frozen copy before it checks issuance, appends a review event, or
+re-reads a terminal receipt. The liked artifact or rejection review is built
+only from that sealed copy and is itself recursively frozen before return.
+
+Consequently, mutating a caller-owned candidate while a candidate/review ledger
+is pending cannot replace the local SVG preview with a provider URI, change
+the candidate scope or maker, extend the owner-review deadline, or alter the
+terminal output after its audit event has been composed. Invalid/accessor
+candidate shapes still fail before a getter runs. This is output-integrity
+hardening only: both terminal forms stay owner-only and
+`publication: blocked`; no provider, network, GPU, dispatch, credential,
+migration, send, or publication path is added.
+
 ## Negative and edge-case guarantees
 
 - Prompt fields accept only the documented four keys. Empty text, a value over
@@ -360,6 +378,11 @@ capability.
   candidate. A caller therefore cannot mutate an already-validated event or
   candidate while a persistence seam yields; an accessor-shaped direct lookup
   candidate fails closed without its accessor being evaluated.
+- Owner-decision helpers independently seal the complete candidate before
+  either ledger call can yield, and recursively freeze their terminal liked or
+  rejected output. A caller-owned copied candidate that changes while a review
+  audit append is pending cannot introduce a provider URI, alter a deadline,
+  or change the returned owner-review snapshot.
 - `creativeWorkerPlan.dispatch` remains exactly
   `{ performed: false, gate: "LIVE_DISABLED", network: "not-attempted" }`.
   This package does not invoke Creative Worker, ComfyUI, Docker, loopback, a
@@ -384,8 +407,9 @@ capability.
    digests, and provenance—never prompt text, preview bytes, provider output,
    endpoint, or credentials.
 7. Candidate-set and candidate fingerprints are recomputed from the exact
-   redacted shape before issuance or terminal review; canonical review
-   deadlines are re-read from durable issuance and bound into terminal proofs.
+   redacted shape before issuance or terminal review; terminal helpers seal
+   that candidate and their frozen output, while canonical review deadlines
+   are re-read from durable issuance and bound into terminal proofs.
 8. A governed run has one bound issuance set, and each candidate has one
    replay-protected terminal outcome in the SHA-256 audit lineage.
 9. Canonical monotonic timestamps, expiry, full scope binding, and

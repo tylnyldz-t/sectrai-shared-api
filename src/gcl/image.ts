@@ -599,6 +599,29 @@ function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): 
 function isSafeIdentifier(value: unknown): value is string { return typeof value === 'string' && OWNER_ACTOR_PATTERN.test(value) }
 
 /**
+ * A public owner-decision candidate is untrusted even after its first shape
+ * check. Seal the accepted data before any ledger call can yield so the
+ * terminal artifact cannot be assembled from a subsequently changed copy.
+ */
+function freezeData<T>(value: T): T {
+  if (!value || typeof value !== 'object') return value
+  for (const child of Object.values(value)) freezeData(child)
+  return Object.freeze(value)
+}
+
+function sealedSyntheticImageCandidate(value: unknown): SyntheticImageCandidate {
+  try {
+    assertSyntheticImageCandidate(value)
+    const candidate = structuredClone(value)
+    assertSyntheticImageCandidate(candidate)
+    return freezeData(candidate)
+  } catch (error) {
+    if (error instanceof ConnectorInputError) throw error
+    throw new ConnectorInputError('INVALID_IMAGE_REVIEW_CANDIDATE')
+  }
+}
+
+/**
  * Validate the complete shared run envelope before a direct path consumes it.
  * A runner has already enforced these fields, but exported direct entry points
  * must not turn a partial or owner-unapproved context into a bypass.
@@ -775,13 +798,13 @@ function assertOwnerReviewContext(candidate: SyntheticImageCandidate, context: u
 function assertOwnerReviewRequest(candidate: unknown, ownerApproved: boolean, actor: unknown, reviewLedger: unknown, context: ImageOwnerReviewContext): { candidate: SyntheticImageCandidate; actor: string; context: ImageOwnerReviewContext; occurredAt: Date; appendDecision: (...args: unknown[]) => unknown; assertRecorded: (...args: unknown[]) => unknown } {
   if (ownerApproved !== true) throw new OwnerGateError()
   if (!isSafeIdentifier(actor)) throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
-  assertSyntheticImageCandidate(candidate)
-  if (actor === candidate.requestedBy) throw new OwnerGateError('MAKER_CHECKER_SEPARATION_REQUIRED')
+  const sealedCandidate = sealedSyntheticImageCandidate(candidate)
+  if (actor === sealedCandidate.requestedBy) throw new OwnerGateError('MAKER_CHECKER_SEPARATION_REQUIRED')
   const appendDecision = dataMethod(reviewLedger, 'appendDecision')
   const assertRecorded = dataMethod(reviewLedger, 'assertRecorded')
   if (!appendDecision || !assertRecorded) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
-  const review = assertOwnerReviewContext(candidate, context)
-  return { candidate, actor, appendDecision, assertRecorded, ...review }
+  const review = assertOwnerReviewContext(sealedCandidate, context)
+  return { candidate: sealedCandidate, actor, appendDecision, assertRecorded, ...review }
 }
 
 function candidateLedgerAssertion(candidateLedger: unknown): (...args: unknown[]) => unknown {
@@ -854,7 +877,7 @@ export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate
   const auditHash = returnedAuditHash(audit, 'IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
   const proof = await request.assertRecorded.call(reviewLedger, event)
   assertDecisionProof(proof, auditHash, issuance)
-  return {
+  return freezeData({
     artifactId,
     candidateId: request.candidate.candidateId,
     mediaType: request.candidate.mediaType,
@@ -865,7 +888,7 @@ export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate
     auditHash,
     issuanceAuditHash: issuance.issuanceAuditHash,
     runAuditHash: issuance.runAuditHash,
-  }
+  })
 }
 
 /**
@@ -888,7 +911,7 @@ export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandida
   const auditHash = returnedAuditHash(audit, 'IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
   const proof = await request.assertRecorded.call(reviewLedger, event)
   assertDecisionProof(proof, auditHash, issuance)
-  return {
+  return freezeData({
     reviewId,
     candidateId: request.candidate.candidateId,
     ownerReview: { status: 'rejected', visibility: 'owner-only', publication: 'blocked', required: true, reviewExpiresAt: request.candidate.ownerReview.reviewExpiresAt, actor: request.actor, occurredAt: request.occurredAt.toISOString(), reason },
@@ -896,7 +919,7 @@ export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandida
     auditHash,
     issuanceAuditHash: issuance.issuanceAuditHash,
     runAuditHash: issuance.runAuditHash,
-  }
+  })
 }
 
 function imageTtiEnvironmentOverrides(value: unknown): { familySafetyFilter?: FamilySafetyFilter } | null {

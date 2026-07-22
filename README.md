@@ -52,6 +52,14 @@ or terminal decision after validation. This is integrity hardening only:
 `LIVE_DISABLED`, local SVG output, owner-only review, and publication blocking
 remain unchanged.
 
+D6 extends that sealing through the public terminal owner-decision helpers:
+they copy and freeze the complete candidate before any candidate- or
+review-ledger await, then return frozen liked-artifact or rejection snapshots.
+Changing a caller-owned candidate while a ledger write is pending therefore
+cannot turn a local SVG artifact into a provider URI, extend its review
+deadline, or alter a terminal output. It remains synthetic, `LIVE_DISABLED`,
+owner-only, and publication-blocked.
+
 ## Record contract
 
 Every record is scoped by `product`, `workspaceId`, and `moduleId`:

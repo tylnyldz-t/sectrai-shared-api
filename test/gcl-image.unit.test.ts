@@ -677,6 +677,48 @@ test('D5 seals direct ledger snapshots across async seams and rejects accessor c
   await reviews.assertRecorded(expectedDecision)
 })
 
+test('D6 seals terminal owner-decision candidates across an awaited ledger write and freezes both terminal outputs', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const { candidate, candidates } = await governedIssuedRun(audit)
+  const mutableCandidate = structuredClone(candidate)
+  let reviewAppendEntered = false
+  let releaseReviewAppend: (() => void) | undefined
+  const reviewAppendGate = new Promise<void>((resolve) => { releaseReviewAppend = resolve })
+  const delayedReviewAudit = {
+    entries: audit.entries,
+    append: async (event: Parameters<InMemoryHashChainAuditLog['append']>[0]) => {
+      reviewAppendEntered = true
+      await reviewAppendGate
+      return audit.append(event)
+    },
+  }
+  const reviews = new InMemoryImageOwnerReviewLedger(delayedReviewAudit)
+  const pendingLike = ownerLikeSyntheticImage(mutableCandidate, true, 'checker@example.test', reviews, candidates, context)
+  await Promise.resolve()
+  await Promise.resolve()
+  assert.equal(reviewAppendEntered, true)
+
+  mutableCandidate.previewDataUri = 'data:image/svg+xml;base64,FORGED'
+  mutableCandidate.syntheticUri = 'https://provider.example/forged.png'
+  mutableCandidate.ownerReview.reviewExpiresAt = '2026-07-22T12:59:59.999Z'
+  if (!releaseReviewAppend) throw new Error('D6_TEST_REVIEW_GATE_MISSING')
+  releaseReviewAppend()
+  const artifact = await pendingLike
+  assert.equal(artifact.previewDataUri, candidate.previewDataUri)
+  assert.equal(artifact.syntheticUri, candidate.syntheticUri)
+  assert.equal(artifact.ownerReview.reviewExpiresAt, candidate.ownerReview.reviewExpiresAt)
+  assert.equal(Object.isFrozen(artifact), true)
+  assert.equal(Object.isFrozen(artifact.ownerReview), true)
+  assert.equal(audit.entries[3]?.event.detail.candidateId, candidate.candidateId)
+
+  const rejectionAudit = new InMemoryHashChainAuditLog()
+  const rejectedRun = await governedIssuedRun(rejectionAudit)
+  const rejection = await ownerRejectSyntheticImage(rejectedRun.candidate, true, 'checker@example.test', 'NEEDS_REVISION', new InMemoryImageOwnerReviewLedger(rejectionAudit), rejectedRun.candidates, context)
+  assert.equal(rejection.publication, 'blocked')
+  assert.equal(Object.isFrozen(rejection), true)
+  assert.equal(Object.isFrozen(rejection.ownerReview), true)
+})
+
 test('candidate issuance and terminal review cannot be backdated across the governed lineage', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
