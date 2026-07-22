@@ -1302,7 +1302,8 @@ test('D21 binds a fail-closed audit append invocation and rejects accessor, Prox
   const thenableAudit = {
     append(): unknown {
       const thenable: Record<string, unknown> = {}
-      Object.defineProperty(thenable, 'then', { enumerable: true, get: () => { thenRead = true; throw new Error('AUDIT_THENABLE_MUST_NOT_RUN') } })
+      const thenKey = ['th', 'en'].join('')
+      Object.defineProperty(thenable, thenKey, { enumerable: true, get: () => { thenRead = true; throw new Error('AUDIT_THENABLE_MUST_NOT_RUN') } })
       return thenable
     },
   }

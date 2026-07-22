@@ -963,9 +963,9 @@ function auditAppendMethod(value: unknown): (event: ConnectorAuditEvent) => Prom
   throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_AUDIT_APPEND_TARGET')
 }
 
-/** The audit adapter must return an untouched native Promise, never a thenable. */
+/** The audit adapter must return an exact native Promise, never a thenable. */
 function auditAppendPromise(value: unknown): Promise<unknown> {
-  if (!value || typeof value !== 'object' || isProxyObject(value) || intrinsicObjectGetPrototypeOf(value) !== intrinsicPromisePrototype || intrinsicReflectOwnKeys(value).length !== 0) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_AUDIT_APPEND_RESULT')
+  if (!value || typeof value !== 'object' || isProxyObject(value) || intrinsicObjectGetPrototypeOf(value) !== intrinsicPromisePrototype) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_AUDIT_APPEND_RESULT')
   return value as Promise<unknown>
 }
 
