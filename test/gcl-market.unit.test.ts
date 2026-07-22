@@ -991,6 +991,78 @@ test('D9 snapshots every caller-held review-plan branch before semantic reads an
   assert.equal(setup.quota.requests.length, 1)
 })
 
+test('D10 snapshots review context and treats its clock as a narrow fail-closed host seam', async () => {
+  const setup = marketRunner()
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const plan = result.data as SyntheticMarketPlan
+  const base: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
+  const mustRejectContext = (candidate: MarketReviewContext, expected = 'INVALID_MARKET_REVIEW_CONTEXT') => assert.throws(
+    () => validateSyntheticMarketPlanForReview(plan, candidate),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === expected,
+  )
+
+  let scopeAccessorRead = false
+  const accessorScopes = ['market:review']
+  Object.defineProperty(accessorScopes, '0', {
+    enumerable: true,
+    get() { scopeAccessorRead = true; throw new Error('SCOPE_ACCESSOR_MUST_NOT_RUN') },
+  })
+  mustRejectContext({ ...base, scopes: accessorScopes })
+  assert.equal(scopeAccessorRead, false)
+
+  let scopeProxyRead = false
+  const proxyScopes = new Proxy(['market:review'], {
+    get(target, property, receiver) { scopeProxyRead = true; return Reflect.get(target, property, receiver) },
+  })
+  mustRejectContext({ ...base, scopes: proxyScopes })
+  assert.equal(scopeProxyRead, false)
+
+  const sparseScopes = ['market:review']
+  delete sparseScopes[0]
+  mustRejectContext({ ...base, scopes: sparseScopes })
+  mustRejectContext({ ...base, scopes: ['market:review', 'market:discover', 'market:capacity:quote', 'market:review'] })
+
+  let clockApplied = false
+  const proxyClock = new Proxy(now, {
+    apply() { clockApplied = true; return now() },
+  })
+  mustRejectContext({ ...base, now: proxyClock })
+  assert.equal(clockApplied, false)
+
+  let dateProxyRead = false
+  const proxyDate = new Proxy(now(), {
+    get(target, property, receiver) { dateProxyRead = true; return Reflect.get(target, property, receiver) },
+  })
+  mustRejectContext({ ...base, now: () => proxyDate as never }, 'INVALID_MARKET_REVIEW_TIME')
+  assert.equal(dateProxyRead, false)
+
+  let malformedClockCalls = 0
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, {
+      ...base,
+      now: () => { malformedClockCalls += 1; throw new Error('CLOCK_MUST_FAIL_CLOSED') },
+    }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REVIEW_TIME',
+  )
+  assert.equal(malformedClockCalls, 1)
+  assert.equal(setup.reviews.entries.length, 0)
+  assert.equal(setup.audit.entries.length, 2)
+
+  const mutatingClockContext: MarketReviewContext = {
+    product: context.product,
+    workspaceId: context.workspaceId,
+    scopes: ['market:review'],
+    now: () => {
+      mutatingClockContext.workspaceId = 'another-workspace'
+      return now()
+    },
+  }
+  const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, mutatingClockContext)
+  assert.equal(reviewed.execution.state, 'NOT_AUTHORIZED')
+  assert.equal(setup.reviews.entries[0]?.workspaceId, context.workspaceId)
+  assert.equal(setup.audit.entries[2]?.event.workspaceId, context.workspaceId)
+})
+
 test('D3 refuses an injected ledger result whose audit hash is malformed before it can return a receipt', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })

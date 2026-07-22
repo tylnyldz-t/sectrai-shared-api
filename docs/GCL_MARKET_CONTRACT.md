@@ -333,6 +333,32 @@ call, quote, reservation, booking, publication, handoff, sending path,
 durable approval, or authorization capability. Its successful review output
 continues to be exactly `NOT_AUTHORIZED`.
 
+## D10 — strict review-context and clock boundary
+
+D10 snapshots the caller-held review context before its product, workspace,
+scopes, or clock can influence independent review or local evidence
+reconstruction. The context must be an exact own-data
+`{ product, workspaceId, scopes, now }` record. `scopes` must be a bounded,
+dense plain array containing only the three declared market scopes; accessors,
+hidden fields, symbols, sparse entries, prototype-shaped values, and Proxies
+fail closed as `INVALID_MARKET_REVIEW_CONTEXT` without evaluating those
+values.
+
+`now` remains the narrow unavoidable host seam. It must be an own data-function
+that is not Proxy-shaped. Independent review invokes that verified function
+once, only after context validation, and accepts only an intrinsic finite
+`Date`; it copies the epoch value into a new local `Date`. A throwing clock,
+Promise/value of another type, invalid `Date`, or Proxy-shaped `Date` fails
+closed as `INVALID_MARKET_REVIEW_TIME`, before ledger entry or audit append.
+The first context snapshot remains the sole product/workspace/scope binding for
+that independent-review call, so a clock cannot swap caller-held context after
+validation.
+
+D10 adds no source/provider access, credential, API key, route, storage read
+or write, migration, queue, worker, quote, reservation, booking, publication,
+handoff, send, durable approval, signature, authorization, or execution path.
+Every successful result remains fixed at `NOT_AUTHORIZED`.
+
 ## Synthetic-only boundary
 
 There is no URL, `fetch`, SDK, credential field, provider configuration,

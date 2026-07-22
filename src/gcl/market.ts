@@ -38,12 +38,12 @@ export const ADOS_10_MARKET_CONTROLS: readonly AdosMarketControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every plan and review packet is digest-bound to one product and workspace.' },
   { id: 'ADOS-02', control: 'SYNTHETIC_DATA_ONLY', enforcement: 'Only the bounded market request shape is accepted; no market response or provider payload is ingested.' },
   { id: 'ADOS-03', control: 'FAIL_CLOSED_CONFIGURATION', enforcement: 'Only literal GCL_MARKET_LIVE_ENABLED=false permits the synthetic adapter; absent, malformed, and true values deny.' },
-  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, D8 hardens its local ledger seam, D9 admits only deeply own-data caller-held plans and ledger results, and D3/D4/D5/D6/D7 recheck evidence without a write.' },
+  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, D8/D9 harden local ingress, D10 snapshots context and its clock boundary, and D3/D4/D5/D6/D7 recheck evidence without a write.' },
   { id: 'ADOS-05', control: 'UNTRUSTED_CONTENT_IS_DATA', enforcement: 'Request values are labelled data-only and cannot become connector instructions.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'A separate canonical owner actor with market:review is required; the plan maker cannot self-review.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIALS', enforcement: 'No network client, provider URL, credential, API key, scheduler, or automatic sync exists in this connector.' },
-  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory; D5 reconstructs one caller-supplied segment, D6/D7 only minimize and recheck derived evidence, D8 leaves a malformed append undecided, and D9 cannot turn a shaped host result into a receipt.' },
-  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet, review receipt, and D4/D5/D6/D7/D8/D9 evidence permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
+  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory; D5 reconstructs one caller-supplied segment, D6/D7 only minimize and recheck derived evidence, D8 leaves a malformed append undecided, D9 rejects shaped host results, and D10 bounds review context and clock values.' },
+  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet, review receipt, and D4/D5/D6/D7/D8/D9/D10 evidence permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or market-provider integration is part of this connector.' },
 ])
 
@@ -307,6 +307,19 @@ export type SyntheticMarketReviewEvidenceManifest = {
 
 export type MarketReviewContext = Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'scopes' | 'now'>
 
+/**
+ * Internal D10 snapshot. The public context keeps its existing shape, but no
+ * later review step reads caller-owned context data after this bounded copy.
+ * `now` is necessarily an executable host seam; it is retained only as a
+ * verified own data-function and its returned Date is copied before use.
+ */
+type ReviewedMarketContext = {
+  product: string
+  workspaceId: string
+  scopes: readonly (typeof MARKET_SCOPES[number])[]
+  now: () => Date
+}
+
 const OWNER_ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 const MAX_MARKET_REVIEW_DATA_DEPTH = 16
 const MAX_MARKET_REVIEW_DATA_NODES = 256
@@ -414,22 +427,53 @@ function canonicalScopeId(value: unknown): string | null {
   return typeof value === 'string' && SCOPE_ID_PATTERN.test(value) ? value : null
 }
 
-function reviewContext(context: unknown): { product: string; workspaceId: string; scopes: readonly string[] } {
+function reviewScopes(value: unknown): readonly (typeof MARKET_SCOPES[number])[] {
+  if (
+    !Array.isArray(value) || nodeTypes.isProxy(value) || Object.getPrototypeOf(value) !== Array.prototype ||
+    Object.getOwnPropertySymbols(value).length > 0 || !Number.isSafeInteger(value.length) || value.length > MARKET_SCOPES.length
+  ) throw new ConnectorInputError('INVALID_MARKET_REVIEW_CONTEXT')
+  const names = Object.getOwnPropertyNames(value)
+  if (names.length !== value.length + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+    throw new ConnectorInputError('INVALID_MARKET_REVIEW_CONTEXT')
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const scopes: (typeof MARKET_SCOPES[number])[] = []
+  for (let index = 0; index < value.length; index += 1) {
+    const descriptor = descriptors[String(index)]
+    if (!descriptor || !descriptor.enumerable || !('value' in descriptor) || !MARKET_SCOPES.includes(descriptor.value as typeof MARKET_SCOPES[number])) {
+      throw new ConnectorInputError('INVALID_MARKET_REVIEW_CONTEXT')
+    }
+    scopes.push(descriptor.value as typeof MARKET_SCOPES[number])
+  }
+  return scopes
+}
+
+/**
+ * D10 snapshots review context through descriptors before any semantic read.
+ * It never invokes a context getter, an array accessor, or a Proxy trap.
+ */
+function reviewContext(context: unknown): ReviewedMarketContext {
   const candidate = exactMarketObject(context, ['product', 'workspaceId', 'scopes', 'now'], 'INVALID_MARKET_REVIEW_CONTEXT')
   const product = canonicalScopeId(candidate.product)
   const workspaceId = canonicalScopeId(candidate.workspaceId)
-  if (!product || !workspaceId || typeof candidate.now !== 'function' || !Array.isArray(candidate.scopes) || candidate.scopes.some((scope) => typeof scope !== 'string' || !MARKET_SCOPES.includes(scope as typeof MARKET_SCOPES[number]))) {
+  if (!product || !workspaceId || typeof candidate.now !== 'function' || nodeTypes.isProxy(candidate.now)) {
     throw new ConnectorInputError('INVALID_MARKET_REVIEW_CONTEXT')
   }
-  return { product, workspaceId, scopes: candidate.scopes }
+  return { product, workspaceId, scopes: reviewScopes(candidate.scopes), now: candidate.now as () => Date }
 }
 
-function reviewNow(context: unknown): Date {
-  const candidate = exactMarketObject(context, ['product', 'workspaceId', 'scopes', 'now'], 'INVALID_MARKET_REVIEW_TIME')
-  if (typeof candidate.now !== 'function') throw new ConnectorInputError('INVALID_MARKET_REVIEW_TIME')
-  const value = candidate.now()
-  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) throw new ConnectorInputError('INVALID_MARKET_REVIEW_TIME')
-  return value
+/** D10 invokes the verified clock once and copies its intrinsic Date value. */
+function reviewNow(context: ReviewedMarketContext): Date {
+  let value: unknown
+  try {
+    value = context.now()
+  } catch {
+    throw new ConnectorInputError('INVALID_MARKET_REVIEW_TIME')
+  }
+  if (!nodeTypes.isDate(value) || nodeTypes.isProxy(value)) throw new ConnectorInputError('INVALID_MARKET_REVIEW_TIME')
+  const timestamp = Date.prototype.getTime.call(value)
+  if (!Number.isFinite(timestamp)) throw new ConnectorInputError('INVALID_MARKET_REVIEW_TIME')
+  return new Date(timestamp)
 }
 
 function canonicalJson(value: unknown): string {
@@ -743,8 +787,7 @@ function syntheticMarketPlan(binding: MarketPlanBinding, request: SyntheticMarke
  * object. This is deliberately stricter than checking the plan digest alone:
  * source, quote, side-effect, and review-packet fields are all canonical.
  */
-export function validateSyntheticMarketPlanForReview(plan: unknown, context: MarketReviewContext): SyntheticMarketPlan {
-  const reviewedContext = reviewContext(context)
+function validateSyntheticMarketPlanForReviewedContext(plan: unknown, reviewedContext: ReviewedMarketContext): SyntheticMarketPlan {
   const candidate = strictMarketReviewPlan(plan)
   const bindingValue = candidate.binding
   if (!bindingValue || typeof bindingValue !== 'object' || Array.isArray(bindingValue)) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
@@ -779,6 +822,10 @@ export function validateSyntheticMarketPlanForReview(plan: unknown, context: Mar
   const expected = syntheticMarketPlan(binding, request)
   if (!canonicallyEqual(candidate, expected)) throw new ConnectorInputError('MARKET_REVIEW_PLAN_INTEGRITY_INVALID')
   return expected
+}
+
+export function validateSyntheticMarketPlanForReview(plan: unknown, context: MarketReviewContext): SyntheticMarketPlan {
+  return validateSyntheticMarketPlanForReviewedContext(plan, reviewContext(context))
 }
 
 function reviewedMarketPlanForReceipt(value: unknown): { reviewed: ReviewedSyntheticMarketPlanDetails; receipt: unknown } {
@@ -1353,14 +1400,14 @@ export class SyntheticMarketConnector implements Connector<SyntheticMarketInput,
  */
 export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMarketPlan, decision: MarketReviewDecision, ownerApproved: boolean, reviewer: string, reviewLedger: MarketReviewLedger, context: MarketReviewContext): Promise<ReviewedSyntheticMarketPlan> {
   const reviewedContext = reviewContext(context)
-  const reviewedAt = reviewNow(context)
+  const reviewedAt = reviewNow(reviewedContext)
   if (!ownerApproved) throw new OwnerGateError()
   const canonicalReviewer = canonicalActor(reviewer)
   if (!canonicalReviewer) throw new OwnerGateError('MARKET_REVIEWER_REQUIRED')
   if (!reviewedContext.scopes.includes('market:review')) throw new ScopeError('MARKET_REVIEW_SCOPE_REQUIRED')
   if (decision !== 'acknowledged' && decision !== 'rejected') throw new ConnectorInputError('INVALID_MARKET_REVIEW_DECISION')
   const recordTerminalReview = terminalReviewRecorder(reviewLedger)
-  const validatedPlan = validateSyntheticMarketPlanForReview(plan, context)
+  const validatedPlan = validateSyntheticMarketPlanForReviewedContext(plan, reviewedContext)
   if (canonicalReviewer === validatedPlan.binding.requestedBy) throw new MakerCheckerError('MARKET_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
 
   const auditHash = terminalReviewAuditHash(await recordTerminalReview({

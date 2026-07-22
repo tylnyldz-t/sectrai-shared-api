@@ -52,9 +52,12 @@ Every registered connector is governed by these rules:
   only minimize and recheck that same segment; D7 can bind independently
   rebuilt D3 and D6 evidence into a still-smaller no-action manifest. D8
   hardens D2's injected terminal-ledger and audit-append ingress to exact
-  own-data values only; a failed append remains undecided and retryable. None
-  reads audit storage, writes, or approves execution. All resulting evidence
-  remains `NOT_AUTHORIZED`.
+  own-data values only; a failed append remains undecided and retryable. D9
+  snapshots caller-held plan material and validates host-ledger descriptors.
+  D10 snapshots the review context's bounded scope data and invokes its one
+  allowed clock seam only after descriptor validation, copying the returned
+  intrinsic `Date`. None reads audit storage, writes, or approves execution.
+  All resulting evidence remains `NOT_AUTHORIZED`.
 - Fail closed: an unregistered connector, missing owner gate, invalid actor,
   missing limit/quota, wrong scope, or invalid input produces an explicit
   error. There is no local fallback, provider fallback, queue worker, or
@@ -139,7 +142,10 @@ write. D7 can bind independently rebuilt D3 and D6 evidence into a smaller,
 digest-only no-action manifest, also without storage access. D8 admits only
 exact own-data records/results at D2's injected terminal-ledger seam; it is
 still process-local, no-action, and retryable after a failed append.
-D3/D4/D5/D6/D7/D8 are local mutation checks or boundary hardening, never
+D9 snapshots caller-held plan material and checks the injected ledger
+descriptor/result boundary. D10 snapshots review-context data and copies one
+verified intrinsic clock value; shaped context, scope, clock, and date values
+fail closed. D3/D4/D5/D6/D7/D8/D9/D10 are local mutation checks or boundary hardening, never
 signatures, credentials, approval workflows, or execution paths. The specific market
 inputs and output limits are in [the synthetic market contract](GCL_MARKET_CONTRACT.md).
 

@@ -87,4 +87,8 @@ retry, never creating an action or durable approval. D9 snapshots every
 caller-held review-plan branch into bounded own data before semantic review and
 checks host-ledger members/results by descriptor before a receipt can be built;
 shaped plans and ledger results remain fail-closed and cannot authorize any
+action. D10 applies the same descriptor-based boundary to the review context:
+its scope array is copied as bounded own data and its clock is a one-call host
+seam whose intrinsic `Date` value is copied. Shaped context/clock values fail
+closed and cannot change the already-snapshotted review scope or authorize an
 action.
