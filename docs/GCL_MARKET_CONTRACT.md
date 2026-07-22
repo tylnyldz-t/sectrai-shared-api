@@ -99,7 +99,7 @@ the authenticated product host.
 
 A review requires all of the following:
 
-- the existing owner gate is true;
+- the existing owner gate is the primitive boolean `true`;
 - the reviewer has `market:review`;
 - the reviewer is not the plan maker;
 - the decision is exactly `acknowledged` or `rejected`; and
