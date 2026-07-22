@@ -327,6 +327,40 @@ test('privacy preflight rejects separator-, format-, and Unicode-decimal-obfusca
   assert.equal(JSON.stringify(audit.entries).includes('owner@example.test'), false)
 })
 
+test('synthetic text rejects invisible or directional formatting before audit or quota while retaining Arabic-script join controls', async () => {
+  const connector = new SyntheticSpeechTranslationConnector(config)
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+  const request = { connectorId: SPEECH_TRANSLATION_CONNECTOR_ID, input: speechInput(), ...context, scopes: ['translation:speech'] }
+
+  const blockedInputs = [
+    { ...speechInput(), sourceTranscript: 'safe\u202Evisible' },
+    { ...speechInput(), translatedText: 'safe\u2066visible\u2069' },
+    { ...speechInput(), sourceTranscript: 'safe\u00advisible' },
+    { ...speechInput(), translatedText: 'safe\u0007visible' },
+    { ...speechInput(), sourceTranscript: 'safe\ud800visible' },
+  ]
+
+  for (const input of blockedInputs) {
+    await assert.rejects(() => runner.run({ ...request, input }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'TRANSLATION_UNSAFE_TEXT_FORMATTING')
+  }
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+
+  const arabicJoinerInput = {
+    ...speechInput(),
+    sourceTranscript: 'سلام\u200Cدنیا',
+    translatedText: 'Merhaba\u200Cdünya',
+    sourceLocale: 'ar',
+    targetLocale: 'tr',
+  }
+  const accepted = await runner.run({ ...request, input: arabicJoinerInput }) as ConnectorResult<SpeechTranslationData>
+  assert.equal(accepted.data.translatedText, arabicJoinerInput.translatedText)
+  assert.equal(audit.entries.length, 2)
+  assert.equal(quota.requests.length, 1)
+})
+
 test('a connector failure records only a stable error code, never raw fixture content, in the audit chain', async () => {
   const failing: Connector = {
     id: TEXT_TRANSLATION_CONNECTOR_ID,

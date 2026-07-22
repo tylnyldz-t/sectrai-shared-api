@@ -92,6 +92,12 @@ const COMPACT_TURKISH_IBAN_SHAPED_DATA = /TR\d{24}(?!\d)/i
 const DECIMAL_DIGIT = /^\p{Decimal_Number}$/u
 const FORMAT_OR_SPACE = /[\p{Z}\p{Cf}]/gu
 const NUMERIC_IDENTIFIER_SEPARATORS = /[\p{Z}\p{Cf}\p{P}]/gu
+// Directional and non-rendering format controls can make a fixture appear to
+// say something other than the value returned to an owner or checker. Keep
+// ZWNJ/ZWJ available for ordinary Arabic-script text; all other Cf code points
+// are outside this deliberately small synthetic-fixture contract.
+const UNSAFE_SYNTHETIC_TEXT_FORMAT = /[\u00ad\u200b\u200e\u200f\u202a-\u202e\u2060-\u206f\ufeff]/u
+const UNSAFE_SYNTHETIC_TEXT_CODE_UNIT = /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f\ud800-\udfff]/u
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new ConnectorInputError()
@@ -144,10 +150,9 @@ function boundedText(value: unknown, code: string, limit: number): string {
   if (typeof value !== 'string' || !value.trim() || value.trim().length > limit) throw new ConnectorInputError(code)
   const output = value.trim()
   rejectPersonalData(output)
-  if (Array.from(output).some((character) => {
-    const point = character.codePointAt(0)
-    return point !== undefined && point < 32 && character !== '\n' && character !== '\r' && character !== '\t'
-  })) throw new ConnectorInputError(code)
+  if (UNSAFE_SYNTHETIC_TEXT_FORMAT.test(output) || UNSAFE_SYNTHETIC_TEXT_CODE_UNIT.test(output)) {
+    throw new ConnectorInputError('TRANSLATION_UNSAFE_TEXT_FORMATTING')
+  }
   return output
 }
 

@@ -171,6 +171,14 @@ audit, or send the supplied value. Their content is `data-only` under
 `UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`; it is never a command, action,
 message, notification, or publication.
 
+Fixture text also rejects non-rendering or directional Unicode formatting
+before audit or quota. This includes bidi overrides/isolates, zero-width space,
+word joiner, soft hyphen, byte-order mark, C0/C1 controls, and lone UTF-16
+surrogates, which could make the reviewed value visually ambiguous. Newline,
+carriage return, and tab remain the only permitted control whitespace. The
+contract keeps ZWNJ and ZWJ so ordinary Arabic-script text is not rewritten or
+needlessly rejected; they remain part of the personal-data normalization check.
+
 ## Metadata-only checker workflow
 
 Successful runs create a proposal with:
