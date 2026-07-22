@@ -65,6 +65,28 @@ function plainArray(value: unknown): unknown[] | null {
   } catch { return null }
 }
 
+/** Resolve the test audit append capability without invoking an accessor. */
+function dataMethod(value: unknown, name: string): ((...args: unknown[]) => unknown) | null {
+  try {
+    if (!value || (typeof value !== 'object' && typeof value !== 'function')) return null
+    let target: object | null = value
+    const visited = new Set<object>()
+    while (target && target !== Object.prototype && target !== Function.prototype && !visited.has(target)) {
+      visited.add(target)
+      const descriptor = Object.getOwnPropertyDescriptor(target, name)
+      if (descriptor) return !descriptor.get && !descriptor.set && typeof descriptor.value === 'function' ? descriptor.value as (...args: unknown[]) => unknown : null
+      target = Object.getPrototypeOf(target)
+    }
+    return null
+  } catch { return null }
+}
+
+/** A malformed test-seam response is unavailable; never evaluate a hash getter. */
+function returnedAuditHash(value: unknown): string | null {
+  const audit = plainRecord(value)
+  return audit && exactKeys(audit, ['hash']) && typeof audit.hash === 'string' && HASH_PATTERN.test(audit.hash) ? audit.hash : null
+}
+
 function safeIdentifier(value: unknown): value is string { return typeof value === 'string' && IDENTIFIER_PATTERN.test(value) }
 function canonicalTimestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false
@@ -165,20 +187,21 @@ export class InMemoryImageOwnerReviewLedger implements ImageOwnerReviewLedger {
 
   async appendDecision(event: ImageOwnerReviewDecisionEvent): Promise<{ hash: string }> {
     assertImageOwnerReviewEvent(event)
-    if (!this.auditLog || typeof this.auditLog.append !== 'function') throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_AUDIT_UNAVAILABLE')
+    const append = dataMethod(this.auditLog, 'append')
+    if (!append) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_AUDIT_UNAVAILABLE')
     const key = decisionKey(event)
     const state = this.decisions.get(key)
     if (state === 'final') throw new ConnectorInputError('IMAGE_OWNER_REVIEW_ALREADY_DECIDED')
     if (state === 'in-flight') throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_IN_FLIGHT')
     this.decisions.set(key, 'in-flight')
     try {
-      const audit = await this.auditLog.append(event)
-      if (!audit || typeof audit.hash !== 'string' || !HASH_PATTERN.test(audit.hash)) {
+      const auditHash = returnedAuditHash(await append.call(this.auditLog, event))
+      if (!auditHash) {
         this.decisions.set(key, 'final')
         throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_AUDIT_UNAVAILABLE')
       }
       this.decisions.set(key, 'final')
-      return audit
+      return { hash: auditHash }
     } catch (error) {
       if (this.decisions.get(key) === 'in-flight') this.decisions.delete(key)
       throw error

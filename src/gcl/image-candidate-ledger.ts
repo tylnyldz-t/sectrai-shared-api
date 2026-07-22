@@ -91,8 +91,38 @@ function plainArray(value: unknown): unknown[] | null {
   } catch { return null }
 }
 
+/** Resolve a callable audit capability without evaluating an accessor. */
+function dataMethod(value: unknown, name: string): ((...args: unknown[]) => unknown) | null {
+  try {
+    if (!value || (typeof value !== 'object' && typeof value !== 'function')) return null
+    let target: object | null = value
+    const visited = new Set<object>()
+    while (target && target !== Object.prototype && target !== Function.prototype && !visited.has(target)) {
+      visited.add(target)
+      const descriptor = Object.getOwnPropertyDescriptor(target, name)
+      if (descriptor) return !descriptor.get && !descriptor.set && typeof descriptor.value === 'function' ? descriptor.value as (...args: unknown[]) => unknown : null
+      target = Object.getPrototypeOf(target)
+    }
+    return null
+  } catch { return null }
+}
+
+/** The in-memory audit seam must expose its mutable test entries as own data. */
+function auditEntries(value: unknown): readonly unknown[] | null {
+  try {
+    if (!value || (typeof value !== 'object' && typeof value !== 'function')) return null
+    const descriptor = Object.getOwnPropertyDescriptor(value, 'entries')
+    return descriptor && !descriptor.get && !descriptor.set && Array.isArray(descriptor.value) ? descriptor.value : null
+  } catch { return null }
+}
+
 function safeIdentifier(value: unknown): value is string { return typeof value === 'string' && IDENTIFIER_PATTERN.test(value) }
 function safeHash(value: unknown): value is string { return typeof value === 'string' && HASH_PATTERN.test(value) }
+/** Do not read an accessor-backed hash returned by a host-provided test seam. */
+function returnedAuditHash(value: unknown): string | null {
+  const audit = plainRecord(value)
+  return audit && exactKeys(audit, ['hash']) && safeHash(audit.hash) ? audit.hash : null
+}
 function canonicalTimestamp(value: unknown): value is string {
   if (typeof value !== 'string') return false
   const parsed = new Date(value)
@@ -269,22 +299,23 @@ export class InMemoryImageCandidateLedger implements ImageCandidateLedger {
 
   async appendIssuance(event: ImageCandidateIssuanceEvent): Promise<{ hash: string }> {
     assertImageCandidateIssuanceEvent(event)
-    if (!this.auditLog || typeof this.auditLog.append !== 'function') throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
-    if (!Array.isArray(this.auditLog.entries)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
-    assertSourceRunAudit(this.auditLog.entries, event)
+    const append = dataMethod(this.auditLog, 'append')
+    const entries = auditEntries(this.auditLog)
+    if (!append || !entries) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
+    assertSourceRunAudit(entries, event)
     const keys = event.detail.candidates.map((entry) => JSON.stringify([event.product, event.workspaceId, event.correlationId, entry.candidateId]))
     if (keys.some((key) => this.issuanceStates.get(key) === 'final' || this.receipts.has(key))) throw new ConnectorInputError('IMAGE_CANDIDATE_ALREADY_ISSUED')
     if (keys.some((key) => this.issuanceStates.get(key) === 'in-flight')) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_ISSUANCE_IN_FLIGHT')
     for (const key of keys) this.issuanceStates.set(key, 'in-flight')
     try {
-      const audit = await this.auditLog.append(event)
-      if (!audit || !safeHash(audit.hash)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
+      const auditHash = returnedAuditHash(await append.call(this.auditLog, event))
+      if (!auditHash) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
       for (const entry of event.detail.candidates) {
         const key = JSON.stringify([event.product, event.workspaceId, event.correlationId, entry.candidateId])
-        this.receipts.set(key, receiptFor(event, entry, audit.hash))
+        this.receipts.set(key, receiptFor(event, entry, auditHash))
         this.issuanceStates.set(key, 'final')
       }
-      return audit
+      return { hash: auditHash }
     } catch (error) {
       for (const key of keys) {
         if (this.issuanceStates.get(key) === 'in-flight') this.issuanceStates.delete(key)
@@ -298,8 +329,9 @@ export class InMemoryImageCandidateLedger implements ImageCandidateLedger {
     const key = JSON.stringify([candidate.scope.product, candidate.scope.workspaceId, expected.correlationId, expected.candidateId])
     const receipt = this.receipts.get(key)
     if (!receipt || receipt.fingerprint !== expected.fingerprint || receipt.publication !== 'blocked') throw new ConnectorInputError('IMAGE_CANDIDATE_NOT_ISSUED')
-    if (!Array.isArray(this.auditLog.entries)) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
-    assertReceiptAudit(this.auditLog.entries, receipt)
+    const entries = auditEntries(this.auditLog)
+    if (!entries) throw new ConnectorUnavailableError('IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
+    assertReceiptAudit(entries, receipt)
     return proofFor(receipt)
   }
 }

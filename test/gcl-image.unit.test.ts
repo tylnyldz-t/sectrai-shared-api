@@ -416,6 +416,63 @@ test('direct image contexts and ledger capability boundaries reject accessors wi
   assert.equal(audit.entries.length, 3)
 })
 
+test('test-only image ledgers fail closed on accessor-backed audit seams and responses', async () => {
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
+  const result = await runner.run({ connectorId: 'image-tti', input: { prompt: 'A child-friendly solar system poster' }, ...context }) as ConnectorResult<TextToImageData>
+
+  const inheritedDescriptor = Object.getOwnPropertyDescriptor(Object.prototype, 'appendIssuance')
+  let inheritedAppendCalled = false
+  Object.defineProperty(Object.prototype, 'appendIssuance', { configurable: true, value: async () => { inheritedAppendCalled = true; return { hash: '0'.repeat(64) } } })
+  try {
+    await assert.rejects(() => issueSyntheticImageCandidates(result, {} as never, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_CANDIDATE_LEDGER_UNAVAILABLE')
+  } finally {
+    if (inheritedDescriptor) Object.defineProperty(Object.prototype, 'appendIssuance', inheritedDescriptor)
+    else delete (Object.prototype as { appendIssuance?: unknown }).appendIssuance
+  }
+  assert.equal(inheritedAppendCalled, false)
+
+  let entriesGetterRead = false
+  let candidateAppendCalled = false
+  const entriesAccessorAudit = {
+    append: async () => { candidateAppendCalled = true; return { hash: '0'.repeat(64) } },
+  }
+  Object.defineProperty(entriesAccessorAudit, 'entries', { enumerable: true, get: () => { entriesGetterRead = true; return audit.entries } })
+  await assert.rejects(() => issueSyntheticImageCandidates(result, new InMemoryImageCandidateLedger(entriesAccessorAudit as never), context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
+  assert.equal(entriesGetterRead, false)
+  assert.equal(candidateAppendCalled, false)
+
+  let appendGetterRead = false
+  const appendAccessorAudit = { entries: audit.entries }
+  Object.defineProperty(appendAccessorAudit, 'append', { enumerable: true, get: () => { appendGetterRead = true; return async () => ({ hash: '0'.repeat(64) }) } })
+  await assert.rejects(() => issueSyntheticImageCandidates(result, new InMemoryImageCandidateLedger(appendAccessorAudit as never), context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
+  assert.equal(appendGetterRead, false)
+
+  let hashGetterRead = false
+  const hashAccessorAudit = {
+    entries: audit.entries,
+    append: async () => {
+      const response = {}
+      Object.defineProperty(response, 'hash', { enumerable: true, get: () => { hashGetterRead = true; return '0'.repeat(64) } })
+      return response
+    },
+  }
+  await assert.rejects(() => issueSyntheticImageCandidates(result, new InMemoryImageCandidateLedger(hashAccessorAudit as never), context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_CANDIDATE_AUDIT_UNAVAILABLE')
+  assert.equal(hashGetterRead, false)
+  assert.equal(audit.entries.length, 2)
+
+  const candidates = new InMemoryImageCandidateLedger(audit)
+  await issueSyntheticImageCandidates(result, candidates, context)
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  let reviewAppendGetterRead = false
+  const reviewAudit = {}
+  Object.defineProperty(reviewAudit, 'append', { enumerable: true, get: () => { reviewAppendGetterRead = true; return async () => ({ hash: '0'.repeat(64) }) } })
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', new InMemoryImageOwnerReviewLedger(reviewAudit as never), candidates, context), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'IMAGE_OWNER_REVIEW_AUDIT_UNAVAILABLE')
+  assert.equal(reviewAppendGetterRead, false)
+  assert.equal(audit.entries.length, 3)
+})
+
 test('image ledger event scopes reject accessor arrays before reading a scope value', async () => {
   let candidateScopeGetterRead = false
   const candidateScopes: unknown[] = []

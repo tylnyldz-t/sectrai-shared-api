@@ -256,7 +256,7 @@ function dataMethod(value: unknown, name: string): ((...args: unknown[]) => unkn
     if (!value || (typeof value !== 'object' && typeof value !== 'function')) return null
     let target: object | null = value
     const visited = new Set<object>()
-    while (target && !visited.has(target)) {
+    while (target && target !== Object.prototype && target !== Function.prototype && !visited.has(target)) {
       visited.add(target)
       const descriptor = Object.getOwnPropertyDescriptor(target, name)
       if (descriptor) return !descriptor.get && !descriptor.set && typeof descriptor.value === 'function' ? descriptor.value as (...args: unknown[]) => unknown : null

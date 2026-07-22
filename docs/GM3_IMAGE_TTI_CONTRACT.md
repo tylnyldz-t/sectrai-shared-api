@@ -184,11 +184,17 @@ decision and must be implemented behind its own bounded approval path.
   malformed scope arrays, or malformed clocks fail before identity, scope, or
   time values are read.
   Ledger operations are resolved only from data-method descriptors (including
-  ordinary class methods); accessor-backed `appendIssuance`, `assertIssued`,
-  and `appendDecision` capabilities are never invoked. Ledger response hashes
-  must likewise be a closed `{ hash }` envelope. This keeps host integration
-  seams fail-closed without adding an HTTP route, credential, or dispatch
-  capability.
+  ordinary class methods, but never intrinsic `Object`/`Function` prototypes);
+  accessor-backed `appendIssuance`, `assertIssued`, and `appendDecision`
+  capabilities are never invoked. Ledger response hashes must likewise be a
+  closed `{ hash }` envelope. This keeps host integration seams fail-closed
+  without adding an HTTP route, credential, or dispatch capability.
+- The in-memory audit log used by the ledger test seams follows the same rule:
+  `append` must be a data-method, its mutable `entries` test array must be an
+  own data property, and an append response must be a closed `{ hash }`
+  envelope. Accessor-backed audit capabilities, entries, or hash responses are
+  rejected without evaluating their getters; this test-only seam cannot become
+  an alternate dispatch or persistence path.
 - `creativeWorkerPlan.dispatch` remains exactly
   `{ performed: false, gate: "LIVE_DISABLED", network: "not-attempted" }`.
   This package does not invoke Creative Worker, ComfyUI, Docker, loopback, a
