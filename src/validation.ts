@@ -53,7 +53,10 @@ function plainObject(value: unknown, error: string, limit = 48 * 1024): Record<s
 
 function stringArray(value: unknown, error: string, limit: number, itemLimit = 120): string[] {
   if (!Array.isArray(value) || value.length < 1 || value.length > limit) throw Object.assign(new Error(error), { status: 422 })
-  const output = value.map((item) => typeof item === 'string' && item.trim() && item.trim().length <= itemLimit ? item.trim() : null)
+  // Scopes carry authority into the audit chain. Do not rewrite a caller's
+  // scope string at the HTTP boundary: a padded value must be rejected, not
+  // silently converted into a different accepted authority envelope.
+  const output = value.map((item) => typeof item === 'string' && item.trim() === item && Boolean(item) && item.length <= itemLimit ? item : null)
   if (output.some((item) => item === null) || new Set(output).size !== output.length) throw Object.assign(new Error(error), { status: 422 })
   return output as string[]
 }

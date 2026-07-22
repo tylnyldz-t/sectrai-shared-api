@@ -8,6 +8,7 @@ import { ConnectorUnavailableError } from '../src/gcl/errors.js'
 import type { RunConnectorRequest } from '../src/gcl/registry.js'
 import { InMemoryTranslationArtifactStore, PrismaTranslationArtifactStore, translationArtifactReviewDigest } from '../src/gcl/translation-artifacts.js'
 import type { ConnectorAuditEvent, ConnectorResult } from '../src/gcl/types.js'
+import { connectorRunFrom } from '../src/validation.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
 const product = 'sectrai-translation-http-test'
@@ -171,6 +172,41 @@ test('HTTP connector route rejects a blank owner actor before the runner, artifa
     })
     assert.equal(response.status, 422)
     assert.equal((await response.json() as { error: string }).error, 'INVALID_OWNER_ACTOR')
+    assert.equal(service.runnerCalls(), 0)
+    assert.equal(service.audit.entries.length, 0)
+  } finally {
+    await close(service.server)
+    if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+    else process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = oldProductKey
+  }
+})
+
+test('HTTP connector route rejects a whitespace-padded scope instead of rewriting its authority envelope', async (context) => {
+  assert.throws(() => connectorRunFrom({
+    input: { synthetic: true }, scopes: [' translation:text '], costCapCents: 25, requestedItems: 1,
+  }), /INVALID_CONNECTOR_SCOPES/)
+
+  const oldProductKey = process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+  process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = productKey
+  const service = await running()
+  if (!service) {
+    if (oldProductKey === undefined) delete process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST
+    else process.env.SHARED_API_KEY_TRANSLATION_HTTP_TEST = oldProductKey
+    return context.skip('sandbox disallows loopback listeners')
+  }
+  try {
+    const response = await fetch(`${service.base}/connectors/translation-text-synthetic/runs`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-sectrai-product-key': productKey,
+        'x-sectrai-owner-token': ownerToken,
+        'x-sectrai-owner-actor': 'maker@example.test',
+      },
+      body: JSON.stringify({ input: { synthetic: true }, scopes: [' translation:text '], costCapCents: 25, requestedItems: 1 }),
+    })
+    assert.equal(response.status, 422)
+    assert.equal((await response.json() as { error: string }).error, 'INVALID_CONNECTOR_SCOPES')
     assert.equal(service.runnerCalls(), 0)
     assert.equal(service.audit.entries.length, 0)
   } finally {

@@ -37,6 +37,11 @@ or adapter. `GCL_TRANSLATION_REVIEW_TTL_MS` must also produce a representable
 UTC expiry from that run clock; a date-range overflow is unavailable with
 `TRANSLATION_REVIEW_TTL_INVALID` before any reservation or audit entry.
 
+The HTTP boundary applies the same rule to the exact JSON scope strings. It
+does not trim or otherwise rewrite a padded scope into an accepted authority;
+such a request returns `INVALID_CONNECTOR_SCOPES` before the runner, artifact
+store, audit log, or quota can observe it.
+
 ## Canonical synthetic run clock
 
 Before connector preflight, the runner takes one valid native `Date` snapshot.
