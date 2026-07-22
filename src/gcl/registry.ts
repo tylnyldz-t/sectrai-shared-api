@@ -28,6 +28,10 @@ const GOVERNED_CONNECTOR_RESULT_FIELDS = ['data', 'provenance', 'confidence'] as
 const GOVERNED_CONNECTOR_PROVENANCE_FIELDS = ['connectorId', 'source', 'retrievedAt', 'liveStatus', 'synthetic', 'untrustedContent'] as const
 const GOVERNED_UNTRUSTED_CONTENT_FIELDS = ['source', 'value', 'handling', 'instructionPolicy'] as const
 const SYNTHETIC_SOURCE_PATTERN = /^[a-z0-9][a-z0-9:_-]{0,199}$/
+const MAX_GOVERNED_INPUT_DEPTH = 8
+const MAX_GOVERNED_INPUT_KEYS = 48
+const MAX_GOVERNED_INPUT_ARRAY_ITEMS = 48
+const MAX_GOVERNED_INPUT_STRING_LENGTH = 4096
 
 /**
  * D12's runner boundary accepts only a dense, ordinary array of own enumerable
@@ -58,10 +62,70 @@ function governedRunScopes(value: unknown): string[] {
 }
 
 /**
- * D12 seals direct library calls at the governed-run envelope before the
+ * D21 admits generic connector input only as bounded own-data JSON and gives
+ * collaborators a deep immutable copy. It deliberately does not interpret
+ * input fields: the selected adapter remains responsible for its contract.
+ * The copy merely prevents a caller or preflight hook from changing what a
+ * later run observes after the runner has admitted it.
+ */
+function governedInputSnapshot(value: unknown, depth = 0, ancestors = new Set<object>()): unknown {
+  if (value === null || typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    if (value.length > MAX_GOVERNED_INPUT_STRING_LENGTH) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
+    return value
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
+    return value
+  }
+  if (!value || typeof value !== 'object' || nodeTypes.isProxy(value) || depth >= MAX_GOVERNED_INPUT_DEPTH || ancestors.has(value)) {
+    throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
+  }
+
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype || Object.getOwnPropertySymbols(value).length > 0) {
+      throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
+    }
+    const names = Object.getOwnPropertyNames(value)
+    const descriptors = Object.getOwnPropertyDescriptors(value)
+    const length = descriptors.length
+    if (!length || !('value' in length) || !Number.isSafeInteger(length.value) || length.value > MAX_GOVERNED_INPUT_ARRAY_ITEMS ||
+      names.length !== length.value + 1 || !names.includes('length') || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))) {
+      throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
+    }
+    const nextAncestors = new Set(ancestors).add(value)
+    const snapshot: unknown[] = []
+    for (let index = 0; index < length.value; index += 1) {
+      const descriptor = descriptors[String(index)]
+      if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
+      snapshot.push(governedInputSnapshot(descriptor.value, depth + 1, nextAncestors))
+    }
+    return Object.freeze(snapshot)
+  }
+
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
+  const names = Object.getOwnPropertyNames(value)
+  if (names.length > MAX_GOVERNED_INPUT_KEYS || Object.getOwnPropertySymbols(value).length > 0) {
+    throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const nextAncestors = new Set(ancestors).add(value)
+  const snapshot = Object.create(null) as Record<string, unknown>
+  for (const name of names) {
+    const descriptor = descriptors[name]
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new ConnectorInputError('INVALID_GOVERNED_CONNECTOR_INPUT')
+    snapshot[name] = governedInputSnapshot(descriptor.value, depth + 1, nextAncestors)
+  }
+  return Object.freeze(snapshot)
+}
+
+/**
+ * D12/D21 seal direct library calls at the governed-run envelope before the
  * runner can consult its clock, registry, audit, quota, or adapter. Every
- * field must be an allowlisted own enumerable data property; descriptors are
- * copied before use so getters and Proxy traps are never evaluated.
+ * envelope field must be an allowlisted own enumerable data property; D21
+ * also snapshots opaque input before use so getters and Proxy traps are never
+ * evaluated and later collaborators cannot retarget it.
  */
 function governedRunRequest(value: unknown): RunConnectorRequest {
   if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) {
@@ -88,7 +152,7 @@ function governedRunRequest(value: unknown): RunConnectorRequest {
 
   return {
     connectorId,
-    input,
+    input: governedInputSnapshot(input),
     product,
     workspaceId,
     requestedBy,

@@ -1153,6 +1153,122 @@ test('D20 rejects an uncaught connector context mutation before request audit or
   assert.equal(setup.audit.entries[0]?.event.workspaceId, runContext.workspaceId)
 })
 
+test('D21 snapshots governed connector input so caller or preflight mutation cannot retarget a later camera run', async () => {
+  const callerInput = structuredClone(loadingDockInput)
+  const connector = enabledConnector()
+  let admittedInput: unknown
+  let rejectedMutationAttempts = 0
+  let releasePreflight: (() => void) | undefined
+  const preflightPaused = new Promise<void>((resolve) => { releasePreflight = resolve })
+
+  connector.preflight = async (candidate) => {
+    admittedInput = candidate
+    const frozenCandidate = candidate as typeof callerInput
+    assert.equal(Object.isFrozen(frozenCandidate), true)
+    assert.equal(Object.isFrozen(frozenCandidate.consent), true)
+    assert.notStrictEqual(frozenCandidate, callerInput)
+    assert.notStrictEqual(frozenCandidate.consent, callerInput.consent)
+    for (const mutate of [
+      () => { frozenCandidate.cameraFixtureId = 'synthetic-fire-drill-001' },
+      () => { frozenCandidate.consent.receiptRef = 'synthetic-consent-safety-002' },
+      () => { Object.defineProperty(frozenCandidate, 'snapshot', { value: 'data:image/png;base64,not-accepted' }) },
+    ]) {
+      try { mutate() } catch { rejectedMutationAttempts += 1 }
+    }
+    await preflightPaused
+  }
+
+  const setup = runnerFor(connector)
+  const pending = setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: callerInput, ...runContext }) as Promise<ConnectorResult<CameraObservationResult>>
+  callerInput.cameraFixtureId = 'synthetic-fire-drill-001'
+  callerInput.consent.receiptRef = 'synthetic-consent-safety-002'
+  releasePreflight?.()
+  const result = await pending
+
+  assert.equal(rejectedMutationAttempts, 3)
+  assert.ok(admittedInput)
+  assert.equal(result.data.cameraFixtureId, 'synthetic-loading-dock-001')
+  assert.equal(result.data.observation.findingCode, 'PPE_DRILL_INDICATOR')
+  assert.equal(callerInput.cameraFixtureId, 'synthetic-fire-drill-001')
+  assert.deepEqual(setup.audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.succeeded'])
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+})
+
+test('D21 rejects shaped, sparse, cyclic, and over-deep governed input before the clock, adapter, audit, or quota', async () => {
+  const hidden = structuredClone(loadingDockInput)
+  Object.defineProperty(hidden, 'snapshot', { value: 'data:image/png;base64,not-accepted', enumerable: false })
+
+  const symbolShaped = structuredClone(loadingDockInput)
+  Object.defineProperty(symbolShaped, Symbol('device-address'), { value: 'rtsp://not-accepted.example.test/stream', enumerable: true })
+
+  const accessorShaped = structuredClone(loadingDockInput)
+  let accessorRead = false
+  Object.defineProperty(accessorShaped, 'cameraFixtureId', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('GOVERNED_INPUT_ACCESSOR_MUST_NOT_RUN') },
+  })
+
+  let proxyTrapRead = false
+  const proxyShaped = new Proxy(structuredClone(loadingDockInput), {
+    get() { proxyTrapRead = true; throw new Error('GOVERNED_INPUT_PROXY_MUST_NOT_RUN') },
+  })
+
+  const sparse: unknown[] = []
+  sparse[1] = 'synthetic-only'
+
+  const cyclic: Record<string, unknown> = { ...loadingDockInput }
+  cyclic.consent = cyclic
+
+  const overDeep: Record<string, unknown> = Object.create(null)
+  let nested = overDeep
+  for (let index = 0; index < 8; index += 1) {
+    const next = Object.create(null) as Record<string, unknown>
+    nested.next = next
+    nested = next
+  }
+
+  for (const input of [hidden, symbolShaped, accessorShaped, proxyShaped, sparse, cyclic, overDeep]) {
+    const audit = new InMemoryHashChainAuditLog()
+    const quota = new TestQuota()
+    let clockCalls = 0
+    let adapterCalls = 0
+    const connector = enabledConnector()
+    connector.preflight = () => { adapterCalls += 1 }
+    const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, () => {
+      clockCalls += 1
+      return now()
+    })
+
+    await assert.rejects(
+      () => runner.run({ connectorId: CAMERA_CONNECTOR_ID, input, ...runContext }),
+      (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_GOVERNED_CONNECTOR_INPUT',
+    )
+    assert.equal(clockCalls, 0)
+    assert.equal(adapterCalls, 0)
+    assert.equal(audit.entries.length, 0)
+    assert.equal(quota.requests.length, 0)
+  }
+  assert.equal(accessorRead, false)
+  assert.equal(proxyTrapRead, false)
+})
+
+test('D21 rejects an uncaught preflight input mutation before request audit or quota reservation', async () => {
+  const connector = enabledConnector()
+  connector.preflight = (candidate) => {
+    ;(candidate as { purpose: string }).purpose = 'site-security'
+  }
+  const setup = runnerFor(connector)
+
+  await assert.rejects(
+    () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
+    (error: unknown) => error instanceof TypeError,
+  )
+  assert.deepEqual(setup.audit.entries.map((entry) => entry.event.type), ['connector.run.denied'])
+  assert.equal((setup.quota as TestQuota).requests.length, 0)
+  assert.equal(setup.audit.entries[0]?.event.product, runContext.product)
+  assert.equal(setup.audit.entries[0]?.event.workspaceId, runContext.workspaceId)
+})
+
 test('D15 seals audit events before append: shaped or cyclic events never reach the audit collaborator', async () => {
   const received: ConnectorAuditEvent[] = []
   const audit: AuditLog = {
