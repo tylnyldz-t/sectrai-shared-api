@@ -1510,3 +1510,74 @@ proposal-only/no-action; no JARVIS/JNC job launches; and synthetic evidence is
 never deployment or live-enable authority. The D18 audit loaded no credential,
 contacted no provider or network, used no device or production database, sent
 nothing, and made no `main`/production write.
+
+## D19 — next immutable direct-successor package
+
+D19 pins the immediate child of each D18 package: RA OCR `eb36d81`, RA image
+`9b6917c`, RA 3D/game `4723124`, RA market `3b88237`, RFID `c536f84`,
+translation `946871b`, language education `2b402f7`, and camera `76f2aed`.
+Each must have its named D18 revision as its direct parent. The fixture reads
+only `git show <revision>:src/gcl/...` objects and pins the connector, runner,
+and changed local-closure files; sibling worktree edits, including uncommitted
+ones, are not evidence. RA voice still has no successor beyond D1.
+
+D19 is source-only and remains fail closed. It does not import target runtime
+code, load an environment file or credential, open a socket, call a provider,
+use a device/database, launch JARVIS/JNC, migrate, publish, send, or write
+`main`/production.
+
+| Connector | D19 source-only evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D19 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Moves the `syntheticFields` Proxy check before `Array.isArray`, so a revoked Proxy reaches the closed `ConnectorInputError` path instead of throwing during inspection | `requested` only | Pass | Nonconformant; truthy-owner and quota-audit gaps remain |
+| RA image | Copies only an exact built-in `Date` from the injected clock and uses own-property names so hidden unexpected fields cannot bypass the input boundary | `requested`, `failed` | Pass | Conformant |
+| RA 3D/game | Direct successor changes only JNC-contract documentation/unit evidence; connector, runner, and pinned result boundary are byte-identical to D18 | `requested` only | Pass | Nonconformant; quota gap remains |
+| RA market | Copies/freeze-binds only known scalar constructor configuration; Proxy, shaped, unknown, and credential-like fields leave the connector unavailable before governed-run side effects | `requested` only | Pass | Nonconformant; quota gap remains |
+| RFID | Makes the pre-existing exception/waiver type shell executable only as a fixed PSMS-SIM proposal with no waiver, override, pilot, egress, credential restoration, or action | `requested`, `failed` | Pass | Nonconformant; truthy-owner gap remains |
+| Translation | Direct successor changes application validation and contract/unit evidence; pinned GCL connector and runner are byte-identical to D18 | `requested`, `failed` | Pass | Nonconformant; truthy-owner gap remains |
+| Language education | Direct successor changes contract/unit evidence only; pinned reflection connector, runner, and local type boundary are byte-identical to D18 | `requested`, `failed` | Pass | Conformant |
+| Camera | Seals and recursively copies a bounded audit event before append, rejecting Proxy, accessor, cyclic, shaped, and mutable event data; a malformed event remains terminal | `requested`, `failed` | Pass | Conformant |
+
+`Conformant` again means only that the immutable source meets this IV synthetic
+governance envelope. It is never authority to configure a key/provider, make
+egress, capture media or RFID/camera data, use hardware, write a database,
+migrate, start JARVIS/JNC, reserve/book/publish/handoff, send output, or enable
+a live operation.
+
+### D19 negative and edge evidence
+
+- The direct-parent assertion is retained for all eight D19 commits. A skipped,
+  rebased, or later descendant fails before source classification.
+- The OCR probe requires `isProxyObject(value.syntheticFields)` in the same
+  short-circuit guard before `Array.isArray`, closing D18's revoked-Proxy array
+  gap. Its independent truthy-owner and quota-failure gaps remain visible.
+- The image probe requires an exact `Date.prototype`, intrinsic `getTime`, and
+  `Object.getOwnPropertyNames`; a subclassed clock or hidden unexpected input
+  field therefore fails closed. The market probe requires a frozen constructor
+  snapshot that rejects a Proxy and every non-allowlisted configuration field.
+- The RFID probe requires `NOT_ACCEPTED`, `FORBIDDEN`, `false`, and
+  `SYNTHETIC_EXCEPTION_WAIVER_BOUNDARY_REVIEW_PROPOSAL_ONLY_NOT_EXECUTED`
+  together: it records no exception grant or operational control.
+- The camera probe requires a sealed event before `auditLog.append`, rejects
+  cycles and Proxy data, freezes copied values, and stops on `AuditEventError`
+  rather than inventing a follow-up failure event.
+- The inherited closure scan still rejects egress/endpoints, credential-like
+  environment access, subprocess/worker launch, dynamic/runtime escape,
+  automatic publication, and unapproved non-local imports. Market, translation,
+  language education, and camera hard-deny live opt-in; the remaining
+  connectors expose no live-enable surface.
+
+### D19 test evidence and ADOS boundary
+
+`npm run test:conformance` passes with the D1–D19 immutable fixture. The suite
+uses only local Git objects and in-process TypeScript parsing to verify blob
+pins, direct-parent lineage, local source closures, disabled mode, no-egress
+safety, owner/quota classifications, and the D19 negative edges. It does not
+execute a target connector or integration test.
+
+All ten ADOS rules remain active: product/workspace boundaries are retained;
+data is minimal and synthetic; malformed/missing gates deny; maker–checker
+constraints remain; gaps are reported rather than waived; no migration is
+introduced; output is proposal-only/no-action; no JARVIS/JNC job launches; and
+synthetic evidence is never deployment or live-enable authority. D19 loaded no
+credential, contacted no provider/network, used no device or production
+database, sent nothing, and made no `main`/production write.
