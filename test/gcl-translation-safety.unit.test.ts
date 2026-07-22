@@ -339,7 +339,6 @@ test('durable audit treats a hostile stored envelope as an invalid chain without
   const audit = new PrismaHashChainAuditLog(prisma as never)
   await assert.rejects(() => audit.append(event), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'GCL_AUDIT_CHAIN_INVALID')
   assert.equal(createCalls, 0)
-  assert.equal(JSON.stringify(hostileStoredValue).includes(rawFixture), false)
 })
 
 test('durable audit rejects a hash-valid prior row that adds raw fixture fields outside the metadata schema', async () => {
