@@ -25,9 +25,78 @@ const PROPOSAL_KEYS = ['kind', 'contentHash', 'mediaType', 'source', 'synthetic'
 const TEXT_TRANSLATION_SCOPES = ['translation:text'] as const
 const SPEECH_TRANSLATION_SCOPES = ['translation:speech'] as const
 const ARTIFACT_APPROVAL_SCOPES = ['translation:artifact:approve'] as const
+const MAX_AUDIT_SNAPSHOT_DEPTH = 8
+const MAX_AUDIT_SNAPSHOT_NODES = 96
+const MAX_AUDIT_SNAPSHOT_STRING_LENGTH = 512
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+type AuditSnapshotState = {
+  nodes: number
+}
+
+/**
+ * The audit boundary can be reached by programmatic callers as well as the
+ * runner. Capture one ordinary JSON-data snapshot before validation, hashing,
+ * or persistence so an accessor or stateful Proxy cannot pass schema checks
+ * and then change the event that is hashed or stored. The accepted audit
+ * schema is deliberately small, so bounded depth/node/string limits are also
+ * a fail-closed resource boundary.
+ */
+function snapshotAuditData(value: unknown, state: AuditSnapshotState, depth = 0): unknown {
+  if (depth > MAX_AUDIT_SNAPSHOT_DEPTH || ++state.nodes > MAX_AUDIT_SNAPSHOT_NODES) throw new TypeError('audit snapshot limit')
+  if (value === null || typeof value === 'boolean') return value
+  if (typeof value === 'string') {
+    if (value.length > MAX_AUDIT_SNAPSHOT_STRING_LENGTH) throw new TypeError('audit snapshot string limit')
+    return value
+  }
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) throw new TypeError('audit snapshot number')
+    return value
+  }
+  if (!value || typeof value !== 'object') throw new TypeError('audit snapshot primitive')
+
+  if (Array.isArray(value)) {
+    if (Object.getPrototypeOf(value) !== Array.prototype) throw new TypeError('audit snapshot array prototype')
+    const lengthDescriptor = Object.getOwnPropertyDescriptor(value, 'length')
+    if (!lengthDescriptor || !Object.hasOwn(lengthDescriptor, 'value') || !Number.isSafeInteger(lengthDescriptor.value) || lengthDescriptor.value < 0) {
+      throw new TypeError('audit snapshot array length')
+    }
+    const length = lengthDescriptor.value
+    const keys = Reflect.ownKeys(value)
+    if (keys.length !== length + 1 || !keys.includes('length')) throw new TypeError('audit snapshot array shape')
+    const snapshot: unknown[] = []
+    for (let index = 0; index < length; index += 1) {
+      const key = String(index)
+      const descriptor = Object.getOwnPropertyDescriptor(value, key)
+      if (!descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) throw new TypeError('audit snapshot array item')
+      snapshot.push(snapshotAuditData(descriptor.value, state, depth + 1))
+    }
+    return snapshot
+  }
+
+  if (Object.getPrototypeOf(value) !== Object.prototype) throw new TypeError('audit snapshot object prototype')
+  const keys = Reflect.ownKeys(value)
+  const snapshot: Record<string, unknown> = {}
+  for (const key of keys) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, key)
+    if (typeof key !== 'string' || !descriptor || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+      throw new TypeError('audit snapshot object field')
+    }
+    Object.defineProperty(snapshot, key, { value: snapshotAuditData(descriptor.value, state, depth + 1), enumerable: true })
+  }
+  return snapshot
+}
+
+function snapshotAuditEvent(value: unknown): ConnectorAuditEvent | null {
+  try {
+    const snapshot = snapshotAuditData(value, { nodes: 0 })
+    return isObject(snapshot) ? snapshot as ConnectorAuditEvent : null
+  } catch {
+    return null
+  }
 }
 
 function hasExactlyKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
