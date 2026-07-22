@@ -157,8 +157,15 @@ returns sound bytes:
 }
 ```
 
-Both inputs reject basic TCKN, Turkish mobile-phone, and email-shaped data.
-Their content is `data-only` under
+Both inputs reject personal-data-shaped fixtures before any audit or quota
+reservation. The guard covers TCKN-shaped values, Turkish mobile-phone values,
+Turkish IBAN-shaped values, and email-shaped data. Detection uses NFKC plus a
+separator/zero-width-character-insensitive comparison, so formatting an
+identifier with spaces, punctuation, or Unicode format characters does not
+turn it into an acceptable fixture. The same check applies to the synthetic
+audio `sourceRef` and `targetVoice` identifiers: they are metadata, not a path
+for personal data. Rejections do not redact, rewrite, persist, audit, or send
+the supplied value. Their content is `data-only` under
 `UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS`; it is never a command, action,
 message, notification, or publication.
 

@@ -299,6 +299,28 @@ test('owner, cost, item, personal-data, locale, and synthetic-descriptor failure
   assert.equal(quota.requests.length, 0)
 })
 
+test('privacy preflight rejects separator- or Unicode-obfuscated identifiers in text and synthetic speech metadata', async () => {
+  const connector = new SyntheticSpeechTranslationConnector(config)
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+  const request = { connectorId: SPEECH_TRANSLATION_CONNECTOR_ID, input: speechInput(), ...context, scopes: ['translation:speech'] }
+
+  const blockedInputs = [
+    { ...speechInput(), sourceTranscript: 'fixture TCKN 111\u200b222\u200b333\u200b44' },
+    { ...speechInput(), translatedText: 'fixture IBAN TR00 0000 0000 0000 0000 0000 00' },
+    { ...speechInput(), sourceAudio: { ...speechInput().sourceAudio, sourceRef: 'synthetic://translation/audio/5550000000' } },
+    { ...speechInput(), targetVoice: 'synthetic-5550000000' },
+  ]
+
+  for (const input of blockedInputs) {
+    await assert.rejects(() => runner.run({ ...request, input }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'TRANSLATION_PERSONAL_DATA_NOT_ALLOWED')
+  }
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+  assert.equal(JSON.stringify(audit.entries).includes('5550000000'), false)
+})
+
 test('a connector failure records only a stable error code, never raw fixture content, in the audit chain', async () => {
   const failing: Connector = {
     id: TEXT_TRANSLATION_CONNECTOR_ID,
