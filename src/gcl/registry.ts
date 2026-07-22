@@ -1,4 +1,4 @@
-import { CostCapError, ConnectorUnavailableError, GclError, OwnerGateError, ScopeError } from './errors.js'
+import { ConnectorInputError, CostCapError, ConnectorUnavailableError, GclError, OwnerGateError, ScopeError } from './errors.js'
 import { requireGclTenantContext } from './context.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
@@ -7,6 +7,12 @@ const SCOPE_ID = /^[a-z][a-z0-9:-]{0,79}$/
 
 function canonicalActor(value: unknown): value is string {
   return typeof value === 'string' && value.trim() === value && Boolean(value) && ACTOR_ID.test(value)
+}
+
+function visionActor(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim()
+  return trimmed && ACTOR_ID.test(value) ? trimmed : null
 }
 
 /**
@@ -28,19 +34,21 @@ function canonicalScopes(value: unknown, connector: Connector): readonly string[
  * ambient clock: an unstable or hostile clock could otherwise make the audit
  * outcome, provenance, and review expiry describe different runs.
  */
-function runClock(now: () => Date): { occurredAt: string; now: () => Date } {
+function runClock(now: () => Date, connector: Connector): { occurredAt: string; now: () => Date } {
   try {
     const candidate = now()
-    if (!(candidate instanceof Date)) throw new TypeError('not a date')
+    if (connector.kind !== 'document-analysis' && !(candidate instanceof Date)) throw new TypeError('not a date')
+    if (!candidate || typeof candidate !== 'object') throw new TypeError('not a date')
     const milliseconds = Date.prototype.getTime.call(candidate)
-    if (!Number.isFinite(milliseconds)) throw new TypeError('invalid date')
+    if (!Number.isFinite(milliseconds)
+      || (connector.kind === 'document-analysis' && (Object.getPrototypeOf(candidate) !== Date.prototype || Reflect.ownKeys(candidate).length !== 0))) throw new TypeError('invalid date')
     const occurredAt = new Date(milliseconds).toISOString()
     return { occurredAt, now: () => new Date(milliseconds) }
   } catch {
+    if (connector.kind === 'document-analysis') throw new ConnectorInputError('INVALID_CONNECTOR_TIME')
     throw new ConnectorUnavailableError('CONNECTOR_RUN_CLOCK_INVALID')
   }
 }
-
 export type RunConnectorRequest = {
   connectorId: string
   input: unknown
@@ -70,23 +78,36 @@ export class ConnectorRegistry {
   }
 }
 
+  /**
+   * Common GCL order: owner/scope/cost validation, pure preflight, audit
+   * reservation, quota reservation, then the adapter.
+   */
 export class GovernedConnectorRunner {
   constructor(private readonly registry: ConnectorRegistry, private readonly auditLog: AuditLog, private readonly quota: ConnectorQuota, private readonly now: () => Date = () => new Date()) {}
 
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
     const connector = this.registry.get(request.connectorId)
-    requireGclTenantContext(request)
-    if (!request.ownerApproved) throw new OwnerGateError()
-    if (!canonicalActor(request.actor)) throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
+    if (request.ownerApproved !== true) throw new OwnerGateError()
+    try {
+      requireGclTenantContext(request)
+    } catch (error) {
+      if (connector.kind === 'document-analysis') throw new ConnectorInputError('INVALID_CONNECTOR_CONTEXT')
+      throw error
+    }
+    const actor = connector.kind === 'document-analysis' ? visionActor(request.actor) : (canonicalActor(request.actor) ? request.actor : null)
+    if (!actor) {
+      if (connector.kind === 'document-analysis') throw new ConnectorInputError('INVALID_CONNECTOR_CONTEXT')
+      throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
+    }
     if (!Number.isSafeInteger(request.costCapCents) || request.costCapCents < 1) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
     if (!Number.isSafeInteger(request.requestedItems) || request.requestedItems < 1) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
     const scopes = canonicalScopes(request.scopes, connector)
 
-    const run = runClock(this.now)
+    const run = runClock(this.now, connector)
     const context: ConnectorRunContext = {
       product: request.product,
       workspaceId: request.workspaceId,
-      actor: request.actor,
+      actor,
       ownerApproved: request.ownerApproved,
       scopes,
       costCapCents: request.costCapCents,

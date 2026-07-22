@@ -22,7 +22,7 @@ async function running(): Promise<{ prisma: PrismaClient; server: Server; base: 
 async function close(server: Server, prisma: PrismaClient): Promise<void> { await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); await prisma.$disconnect() }
 const headers = { 'content-type': 'application/json', 'x-sectrai-product-key': key }
 
-test('real Neon CRUD persists across a new Prisma connection and rejects missing product keys', { skip: !databaseUrl && 'DATABASE_URL is required for the optional real Neon integration test' }, async () => {
+test('real Neon CRUD persists across a new Prisma connection and rejects missing product keys', { skip: databaseUrl ? undefined : 'DATABASE_URL is required for real Neon integration tests' }, async () => {
   const first = await running()
   let recordId = ''
   try {

@@ -1,4 +1,5 @@
-export type ConnectorKind = 'text-translation' | 'speech-translation'
+/** Connector input is always treated as data, never as executable instructions. */
+export type ConnectorKind = 'text-translation' | 'speech-translation' | 'document-analysis'
 export type ConnectorAuthKind = 'owner-token'
 
 export type IsolatedContent = {
@@ -75,9 +76,8 @@ type BaseAuditEvent = {
 }
 
 export type ConnectorAuditEvent = BaseAuditEvent & {
-  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'translation.artifact.created' | 'translation.artifact.approved' | 'translation.artifact.rejected'
+  type: 'connector.run.requested' | 'connector.run.succeeded' | 'connector.run.failed' | 'translation.artifact.created' | 'translation.artifact.approved' | 'translation.artifact.rejected' | 'connector.document.owner_reviewed'
 }
-
 export interface AuditLog {
   append(event: ConnectorAuditEvent): Promise<{ hash: string }>
 }

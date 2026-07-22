@@ -16,7 +16,8 @@ type AuditRecordValue = {
 
 const SHA256 = /^[a-f0-9]{64}$/
 const CONTENT_HASH = /^sha256:[a-f0-9]{64}$/
-const CONNECTOR_ID = /^translation-(?:text|speech)-synthetic$/
+const TRANSLATION_CONNECTOR_ID = /^translation-(?:text|speech)-synthetic$/
+const VISION_DOCUMENT_CONNECTOR_ID = 'vision-document-field-extraction'
 const ACTOR_ID = /^[a-zA-Z0-9:_@. -]{1,160}$/
 const SCOPE_ID = /^[a-z][a-z0-9:-]{0,79}$/
 const ERROR_CODE = /^[a-z][a-z0-9_]{0,79}$/
@@ -25,6 +26,8 @@ const PROPOSAL_KEYS = ['kind', 'contentHash', 'mediaType', 'source', 'synthetic'
 const TEXT_TRANSLATION_SCOPES = ['translation:text'] as const
 const SPEECH_TRANSLATION_SCOPES = ['translation:speech'] as const
 const ARTIFACT_APPROVAL_SCOPES = ['translation:artifact:approve'] as const
+const VISION_DOCUMENT_SCOPES = ['vision:document-field-extraction'] as const
+const VISION_DOCUMENT_PROPOSAL_ID = /^synthetic-document-[a-f0-9]{24}$/
 const MAX_AUDIT_SNAPSHOT_DEPTH = 8
 const MAX_AUDIT_SNAPSHOT_NODES = 96
 const MAX_AUDIT_SNAPSHOT_STRING_LENGTH = 512
@@ -138,6 +141,26 @@ function exactScopes(value: unknown, expected: readonly string[]): boolean {
 function connectorRunScopes(connectorId: unknown, value: unknown): boolean {
   return (connectorId === 'translation-text-synthetic' && exactScopes(value, TEXT_TRANSLATION_SCOPES))
     || (connectorId === 'translation-speech-synthetic' && exactScopes(value, SPEECH_TRANSLATION_SCOPES))
+    || (connectorId === VISION_DOCUMENT_CONNECTOR_ID && exactScopes(value, VISION_DOCUMENT_SCOPES))
+}
+
+function validVisionDocumentReviewEvent(value: Record<string, unknown>): boolean {
+  if (value.connectorId !== VISION_DOCUMENT_CONNECTOR_ID
+    || !exactScopes(value.scopes, VISION_DOCUMENT_SCOPES)
+    || value.costCapCents !== 0
+    || value.requestedItems !== 1
+    || !isObject(value.detail)
+    || !hasExactlyKeys(value.detail, ['proposalId', 'decision', 'fieldsDigest', 'reviewPacketIntegrityDigest', 'mesaEvidenceHandoff', 'rawContentIncluded'])) return false
+
+  return typeof value.detail.proposalId === 'string'
+    && VISION_DOCUMENT_PROPOSAL_ID.test(value.detail.proposalId)
+    && (value.detail.decision === 'approved' || value.detail.decision === 'rejected')
+    && typeof value.detail.fieldsDigest === 'string'
+    && SHA256.test(value.detail.fieldsDigest)
+    && typeof value.detail.reviewPacketIntegrityDigest === 'string'
+    && SHA256.test(value.detail.reviewPacketIntegrityDigest)
+    && value.detail.mesaEvidenceHandoff === 'NOT_SENT_SEPARATE_OWNER_ACTION_REQUIRED'
+    && value.detail.rawContentIncluded === false
 }
 
 function validArtifactBinding(connectorId: unknown, value: Record<string, unknown>): boolean {
@@ -255,7 +278,7 @@ function artifactDetailMatchesProposal(detail: Record<string, unknown>, proposal
 function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
   if (!isObject(value) || !hasExactlyKeys(value, ['type', 'connectorId', 'product', 'workspaceId', 'actor', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'])) return false
   if (typeof value.type !== 'string'
-    || typeof value.connectorId !== 'string' || !CONNECTOR_ID.test(value.connectorId)
+    || typeof value.connectorId !== 'string' || (!TRANSLATION_CONNECTOR_ID.test(value.connectorId) && value.connectorId !== VISION_DOCUMENT_CONNECTOR_ID)
     || !validGclTenantContext({ product: value.product, workspaceId: value.workspaceId })
     || !canonicalActor(value.actor)
     || !scopes(value.scopes)
@@ -278,9 +301,9 @@ function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
   if (value.type === 'translation.artifact.created') return connectorRunScopes(value.connectorId, value.scopes) && isObject(value.detail) && artifactDetail(value.detail, 'pending-checker-approval') && reviewDigestMatchesArtifactDetail(value.connectorId, value.detail) && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents >= 1 && value.requestedItems === 1
   if (value.type === 'translation.artifact.approved') return exactScopes(value.scopes, ARTIFACT_APPROVAL_SCOPES) && isObject(value.detail) && artifactDetail(value.detail, 'approved') && reviewDigestMatchesArtifactDetail(value.connectorId, value.detail) && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
   if (value.type === 'translation.artifact.rejected') return exactScopes(value.scopes, ARTIFACT_APPROVAL_SCOPES) && isObject(value.detail) && artifactDetail(value.detail, 'rejected') && reviewDigestMatchesArtifactDetail(value.connectorId, value.detail) && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
+  if (value.type === 'connector.document.owner_reviewed') return validVisionDocumentReviewEvent(value)
   return false
 }
-
 function normalize(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(normalize)
   if (value && typeof value === 'object') {
@@ -426,6 +449,36 @@ function validArtifactDecisionTransition(entries: readonly AuditRecordValue[], e
 }
 
 /**
+ * The review event deliberately carries hashes and a proposal identifier only,
+ * never document fields. It can therefore prove an independent checker and a
+ * prior governed vision run in the same tenant chain, while the review packet
+ * itself supplies the exact proposal/scope integrity binding.
+ */
+function validVisionDocumentReviewTransition(entries: readonly AuditRecordValue[], event: ConnectorAuditEvent): boolean {
+  const proposalId = event.detail.proposalId
+  if (typeof proposalId !== 'string' || entries.some((entry) =>
+    entry.event.type === 'connector.document.owner_reviewed'
+      && entry.event.detail.proposalId === proposalId)) return false
+
+  const governedRuns = entries.filter((entry) => {
+    const prior = entry.event
+    return prior.type === 'connector.run.succeeded'
+      && prior.connectorId === VISION_DOCUMENT_CONNECTOR_ID
+      && prior.product === event.product
+      && prior.workspaceId === event.workspaceId
+      && sameScopes(prior.scopes, VISION_DOCUMENT_SCOPES)
+      && prior.requestedItems === 1
+      && atOrBefore(prior.occurredAt, event.occurredAt)
+  })
+  // The vision adapter's public review API also accepts a fully integrity-bound
+  // proposal produced directly by the synthetic connector, without a governed
+  // runner. Preserve that standalone audit contract. When governed provenance
+  // is present, at least one matching maker must still be independent.
+  return governedRuns.length === 0
+    || governedRuns.some((entry) => entry.event.actor.toLowerCase() !== event.actor.toLowerCase())
+}
+
+/**
  * A valid event schema and hash are not enough: each link must attach to its
  * only permitted predecessor. Replaying this at append time prevents orphaned
  * outcomes and terminal decisions from becoming durable audit history.
@@ -435,6 +488,7 @@ function validAuditTransition(entries: readonly AuditRecordValue[], event: Conne
   if (event.type === 'connector.run.succeeded' || event.type === 'connector.run.failed') return validRunOutcomeTransition(entries, event)
   if (event.type === 'translation.artifact.created') return validArtifactCreationTransition(entries, event)
   if (event.type === 'translation.artifact.approved' || event.type === 'translation.artifact.rejected') return validArtifactDecisionTransition(entries, event)
+  if (event.type === 'connector.document.owner_reviewed') return validVisionDocumentReviewTransition(entries, event)
   return false
 }
 

@@ -51,3 +51,7 @@ export class ArtifactReviewBindingError extends GclError {
 export class ArtifactReviewExpiredError extends GclError {
   constructor(message = 'TRANSLATION_ARTIFACT_REVIEW_EXPIRED') { super(message, 409, 'translation_artifact_review_expired') }
 }
+
+export class ConsentError extends GclError {
+  constructor(message = 'DOCUMENT_CONSENT_REQUIRED') { super(message, 403, 'document_consent_required') }
+}
