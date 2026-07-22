@@ -449,7 +449,8 @@ function reviewPacketFor(
 function normalizedInput(value: unknown, now: Date): SyntheticDocumentScanInput {
   if (!isRecord(value)) throw new ConnectorInputError('INVALID_VISION_DOCUMENT_REQUEST')
   exactKeys(value, ['evidence', 'consent', 'syntheticFields'], 'UNEXPECTED_VISION_DOCUMENT_FIELD')
-  if (!isRecord(value.evidence) || !isRecord(value.consent) || !Array.isArray(value.syntheticFields)) throw new ConnectorInputError('INVALID_VISION_DOCUMENT_REQUEST')
+  if (!isRecord(value.evidence) || !isRecord(value.consent)) throw new ConnectorInputError('INVALID_VISION_DOCUMENT_REQUEST')
+  if (isProxyObject(value.syntheticFields) || !Array.isArray(value.syntheticFields)) throw new ConnectorInputError('INVALID_SYNTHETIC_DOCUMENT_FIELDS')
 
   const evidence = value.evidence
   exactKeys(evidence, ['source', 'evidenceId', 'sha256', 'mediaType', 'byteLength', 'capturedAt'], 'UNEXPECTED_DOCUMENT_EVIDENCE_FIELD')

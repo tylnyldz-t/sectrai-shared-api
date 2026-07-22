@@ -728,11 +728,11 @@ test('D13 rejects Proxy-wrapped synthetic input and review-graph members before 
   const quota = new TestQuota()
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
   const trapProxy = <T extends object>(target: T, trap: () => void): T => new Proxy(target, {
-    get: trap,
-    getPrototypeOf: trap,
-    getOwnPropertyDescriptor: trap,
-    has: trap,
-    ownKeys: trap,
+    get() { trap(); throw new Error('PROXY_TRAP_MUST_NOT_RUN') },
+    getPrototypeOf() { trap(); throw new Error('PROXY_TRAP_MUST_NOT_RUN') },
+    getOwnPropertyDescriptor() { trap(); throw new Error('PROXY_TRAP_MUST_NOT_RUN') },
+    has() { trap(); throw new Error('PROXY_TRAP_MUST_NOT_RUN') },
+    ownKeys() { trap(); throw new Error('PROXY_TRAP_MUST_NOT_RUN') },
   })
 
   let inputTraps = 0
