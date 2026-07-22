@@ -1,6 +1,6 @@
 import { types as nodeTypes } from 'node:util'
 import { appendVerifiedAuditEvent } from './audit.js'
-import { AuditEventError, AuditReceiptError, ConnectorInputError, ConnectorResultError, CostCapError, GclError, MakerCheckerError, OwnerGateError, ScopeError, ConnectorUnavailableError } from './errors.js'
+import { AuditChainError, AuditEventError, AuditReceiptError, ConnectorInputError, ConnectorResultError, CostCapError, GclError, MakerCheckerError, OwnerGateError, ScopeError, ConnectorUnavailableError } from './errors.js'
 import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export type RunConnectorRequest = {
@@ -276,7 +276,7 @@ export class GovernedConnectorRunner {
     } catch (error) {
       // A malformed receipt can mean the preceding append partially persisted.
       // Do not manufacture a second, unactionable transition after it.
-      if (error instanceof AuditReceiptError || error instanceof AuditEventError) throw error
+      if (error instanceof AuditReceiptError || error instanceof AuditEventError || error instanceof AuditChainError) throw error
       await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.failed', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash, ...auditFailureDetail(error, 'execution') }))
       throw error
     }

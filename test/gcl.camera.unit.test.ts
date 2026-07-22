@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
-import { InMemoryHashChainAuditLog, appendVerifiedAuditEvent, hashAuditEvent } from '../src/gcl/audit.js'
-import { AuditEventError, AuditReceiptError, CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
+import { InMemoryHashChainAuditLog, PrismaHashChainAuditLog, appendVerifiedAuditEvent, hashAuditEvent, validateAuditChainHead } from '../src/gcl/audit.js'
+import { AuditChainError, AuditEventError, AuditReceiptError, CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
 import { ownerTokenMatches } from '../src/gcl/owner.js'
 import { cameraDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
@@ -1091,6 +1091,64 @@ test('D15 gives audit collaborators an immutable event snapshot that cannot gain
   assert.equal(quota.requests.length, 1)
 })
 
+test('D16 verifies only an exact immediate audit head and prevents a malformed durable head from accepting a successor', async () => {
+  const event = d15AuditEvent()
+  const validHead = { event, previousHash: null, hash: hashAuditEvent(event, null) }
+  const verified = validateAuditChainHead(validHead)
+  assert.equal(verified.hash, validHead.hash)
+  assert.equal(Object.isFrozen(verified), true)
+  assert.equal(Object.isFrozen(verified.event), true)
+
+  const chainedHead = { event, previousHash: 'a'.repeat(64), hash: hashAuditEvent(event, 'a'.repeat(64)) }
+  assert.equal(validateAuditChainHead(chainedHead).previousHash, chainedHead.previousHash)
+
+  const mismatchedHash = structuredClone(validHead)
+  mismatchedHash.hash = '0'.repeat(64)
+  const upperCasePredecessor = structuredClone(chainedHead)
+  upperCasePredecessor.previousHash = upperCasePredecessor.previousHash.toUpperCase()
+  const hiddenMedia = structuredClone(validHead) as typeof validHead & { snapshot?: string }
+  Object.defineProperty(hiddenMedia, 'snapshot', { value: 'data:image/png;base64,not-accepted', enumerable: false })
+  const accessorHead = structuredClone(validHead)
+  let accessorRead = false
+  Object.defineProperty(accessorHead, 'hash', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('AUDIT_HEAD_ACCESSOR_MUST_NOT_RUN') },
+  })
+  let proxyTrapRead = false
+  const proxyHead = new Proxy(structuredClone(validHead), {
+    get() { proxyTrapRead = true; throw new Error('AUDIT_HEAD_PROXY_MUST_NOT_RUN') },
+  })
+  const shapedEvent = structuredClone(validHead)
+  Object.defineProperty(shapedEvent.event.detail, 'deviceAddress', { value: 'rtsp://not-accepted.example.test/stream', enumerable: false })
+
+  for (const malformed of [mismatchedHash, upperCasePredecessor, hiddenMedia, accessorHead, proxyHead, shapedEvent]) {
+    assert.throws(
+      () => validateAuditChainHead(malformed),
+      (error: unknown) => error instanceof AuditChainError && error.message === 'INVALID_AUDIT_CHAIN_HEAD',
+    )
+  }
+  assert.equal(accessorRead, false)
+  assert.equal(proxyTrapRead, false)
+
+  let writes = 0
+  const transaction = {
+    async $executeRaw(..._args: unknown[]): Promise<number> { return 0 },
+    record: {
+      async findFirst() { return { values: mismatchedHash } },
+      async create() { writes += 1; return {} },
+    },
+  }
+  const prisma = {
+    async $transaction(callback: (value: typeof transaction) => Promise<unknown>): Promise<unknown> { return callback(transaction) },
+  }
+  const durableAudit = new PrismaHashChainAuditLog(prisma as never)
+  await assert.rejects(
+    () => durableAudit.append(d15AuditEvent()),
+    (error: unknown) => error instanceof AuditChainError && error.message === 'INVALID_AUDIT_CHAIN_HEAD',
+  )
+  assert.equal(writes, 0)
+})
+
 test('D14 rejects malformed requested audit receipts before quota or adapter execution without reading shaped fields', async () => {
   const validHash = 'a'.repeat(64)
   let proxyTrapRead = false
@@ -1242,8 +1300,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14 audit append receipts, and D15 audit events/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14.*D15/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14 audit append receipts, D15 audit events, and D16 durable audit heads/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14.*D15.*D16/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 

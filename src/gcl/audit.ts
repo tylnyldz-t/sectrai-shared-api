@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto'
 import { types as nodeTypes } from 'node:util'
-import { AuditEventError, AuditReceiptError } from './errors.js'
+import { AuditChainError, AuditEventError, AuditReceiptError } from './errors.js'
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import type { AuditLog, ConnectorAuditEvent } from './types.js'
 
@@ -11,6 +11,7 @@ const AUDIT_EVENT_FIELDS = [
   'type', 'connectorId', 'product', 'workspaceId', 'requestedBy', 'checkedBy', 'correlationId',
   'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail',
 ] as const
+const AUDIT_RECORD_FIELDS = ['event', 'previousHash', 'hash'] as const
 const AUDIT_EVENT_TYPES: readonly ConnectorAuditEvent['type'][] = [
   'connector.run.requested', 'connector.run.succeeded', 'connector.run.failed', 'connector.run.denied', 'connector.camera.owner_reviewed',
 ]
@@ -199,16 +200,48 @@ export function sealAuditAppendEvent(value: unknown): ConnectorAuditEvent {
   })
 }
 
+/**
+ * D16 checks the one durable head that the existing Prisma append already
+ * reads. It deliberately verifies only that self-contained record; it does
+ * not add a history scan, lookup route, signature, or authorization surface.
+ */
+export function validateAuditChainHead(value: unknown): Readonly<AuditRecordValue> {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || nodeTypes.isProxy(value)) {
+    throw new AuditChainError()
+  }
+  const prototype = Object.getPrototypeOf(value)
+  if (prototype !== Object.prototype && prototype !== null) throw new AuditChainError()
+  const names = Object.getOwnPropertyNames(value)
+  if (Object.getOwnPropertySymbols(value).length > 0 || names.length !== AUDIT_RECORD_FIELDS.length || names.some((name) => !AUDIT_RECORD_FIELDS.includes(name as typeof AUDIT_RECORD_FIELDS[number]))) {
+    throw new AuditChainError()
+  }
+  const descriptors = Object.getOwnPropertyDescriptors(value)
+  const normalized = Object.create(null) as Record<string, unknown>
+  for (const field of AUDIT_RECORD_FIELDS) {
+    const descriptor = descriptors[field]
+    if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw new AuditChainError()
+    normalized[field] = descriptor.value
+  }
+
+  const previousHash = normalized.previousHash
+  const hash = normalized.hash
+  if ((previousHash !== null && (typeof previousHash !== 'string' || !SHA256_PATTERN.test(previousHash))) || typeof hash !== 'string' || !SHA256_PATTERN.test(hash)) {
+    throw new AuditChainError()
+  }
+
+  let event: ConnectorAuditEvent
+  try {
+    event = sealAuditAppendEvent(normalized.event)
+  } catch {
+    throw new AuditChainError()
+  }
+  if (hash !== hashAuditEvent(event, previousHash)) throw new AuditChainError()
+  return Object.freeze({ event, previousHash, hash })
+}
+
 /** D14/D15 append one immutable local event, then copy the sole safe receipt field before use. */
 export async function appendVerifiedAuditEvent(auditLog: AuditLog, event: ConnectorAuditEvent): Promise<{ hash: string }> {
   return validateAuditAppendReceipt(await auditLog.append(sealAuditAppendEvent(event)))
-}
-
-function auditValue(value: unknown): AuditRecordValue | null {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
-  const candidate = value as Partial<AuditRecordValue>
-  if (!candidate.event || typeof candidate.hash !== 'string' || (candidate.previousHash !== null && typeof candidate.previousHash !== 'string')) return null
-  return candidate as AuditRecordValue
 }
 
 /** A per-product/workspace append-only SHA-256 chain that contains no raw media. */
@@ -222,7 +255,7 @@ export class PrismaHashChainAuditLog implements AuditLog {
         where: { product: event.product, workspaceId: event.workspaceId, moduleId: GCL_AUDIT_MODULE_ID },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       })
-      const previousHash = previous ? auditValue(previous.values)?.hash ?? null : null
+      const previousHash = previous ? validateAuditChainHead(previous.values).hash : null
       const hash = hashAuditEvent(event, previousHash)
       await transaction.record.create({
         data: {

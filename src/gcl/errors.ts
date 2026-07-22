@@ -51,3 +51,8 @@ export class AuditReceiptError extends GclError {
 export class AuditEventError extends GclError {
   constructor(message = 'INVALID_AUDIT_APPEND_EVENT') { super(message, 503, 'audit_log_unavailable') }
 }
+
+/** The existing durable audit-chain head was malformed or did not verify. */
+export class AuditChainError extends GclError {
+  constructor(message = 'INVALID_AUDIT_CHAIN_HEAD') { super(message, 503, 'audit_chain_invalid') }
+}
