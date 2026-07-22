@@ -346,8 +346,9 @@ values.
 
 `now` remains the narrow unavoidable host seam. It must be an own data-function
 that is not Proxy-shaped. Independent review invokes that verified function
-once, only after context validation, and accepts only an intrinsic finite
-`Date`; it copies the epoch value into a new local `Date`. A throwing clock,
+once, only after the static owner, maker-checker, ledger, and plan gates, and
+accepts only an intrinsic finite `Date`; it copies the epoch value into a new
+local `Date`. A throwing clock,
 Promise/value of another type, invalid `Date`, or Proxy-shaped `Date` fails
 closed as `INVALID_MARKET_REVIEW_TIME`, before ledger entry or audit append.
 The first context snapshot remains the sole product/workspace/scope binding for
@@ -423,7 +424,7 @@ GCL_MARKET_DAILY_RUN_QUOTA=10
 GCL_MARKET_DAILY_ITEM_QUOTA=20
 ~~~
 
-## D1/D2/D3/D4/D5/D6/D7/D8/D9 test evidence and ADOS 10-rule conformance
+## D1/D2/D3/D4/D5/D6/D7/D8/D9/D10 test evidence and ADOS 10-rule conformance
 
 `test/gcl-market.unit.test.ts` covers the normal synthetic packet, D1 packet
 integrity, D2 terminal-ledger paths, D3 local receipt reconstruction, and D4
@@ -433,7 +434,9 @@ context-bound rendering of that exact segment, and D7's compact binding of
 independently rebuilt D3 and D6 evidence, plus D8's exact-data terminal-ledger
 and audit-append boundary. D9 snapshots every caller-held review-plan branch
 before semantic reads and validates the injected ledger's member/result
-descriptors before any review receipt can be returned.
+descriptors before any review receipt can be returned. D10 snapshots every
+review context and limits its clock to one verified host call whose intrinsic
+`Date` value is copied before a terminal ledger operation.
 Negative tests reject inherited/prototype-shaped input, injected or hidden
 provider-shaped fields, sparse arrays, source-state drift, invented quote data,
 action-flag drift, cross-workspace use, whitespace-based maker/reviewer bypass
@@ -456,7 +459,10 @@ ledger members, and accessor/Proxy-shaped injected ledger results without
 evaluating those values. D3/D4/D5/D6/D7 rejection produces no extra review
 event, quota item, or local terminal entry. A D9 plan or ledger-member failure
 occurs before the ledger call; a host-owned ledger that is invoked and returns
-invalid data remains unable to create a local receipt.
+invalid data remains unable to create a local receipt. D10 additionally rejects
+scope accessors/Proxies/sparse arrays/oversized arrays, Proxy-shaped clocks,
+and throwing or Proxy-shaped date results without evaluating a shaped value;
+these failures occur before terminal-ledger entry or audit append.
 
 1. Every plan and packet is bound to exactly one product/workspace data plane.
 2. Only the bounded synthetic request is accepted; no provider response is
@@ -473,7 +479,8 @@ invalid data remains unable to create a local receipt.
    rebuilt D3/D6 evidence into a still-smaller no-action manifest; D8 admits
    only exact own-data ledger/audit ingress and leaves a malformed append
    undecided; D9 snapshots all caller-held plan material and rejects shaped
-   host-ledger results before a receipt can be formed.
+   host-ledger results before a receipt can be formed; D10 snapshots bounded
+   review context and copies one verified intrinsic clock value.
 5. Request content is explicitly data-only, never an instruction.
 6. Owner gate, `market:review`, and maker–checker separation are mandatory.
 7. The module has no network client, provider URL, credential/API-key field,
@@ -483,7 +490,7 @@ invalid data remains unable to create a local receipt.
    segment, a minimized rendering, and a further compact binding of it; D8
    only hardens D2's in-process append seam and D9 only validates in-process
    review inputs/results.
-9. A review and its D3/D4/D5/D6/D7/D8/D9 evidence cannot quote, reserve, book,
+9. A review and its D3/D4/D5/D6/D7/D8/D9/D10 evidence cannot quote, reserve, book,
    publish, hand off, notify, send, or trigger an automatic action.
 10. This package has no production migration, `main`/production write, live
     launch, or market-provider integration.
@@ -493,4 +500,4 @@ invalid data remains unable to create a local receipt.
 There is no real credential/API key, live/provider call, sending, capacity
 lookup, quote, reservation, booking, publication, handoff, background worker,
 durable review store, production migration, live launch, or write to
-`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9.
+`main`/production in D1/D2/D3/D4/D5/D6/D7/D8/D9/D10.

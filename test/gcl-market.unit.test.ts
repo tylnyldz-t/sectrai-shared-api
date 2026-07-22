@@ -1033,8 +1033,21 @@ test('D10 snapshots review context and treats its clock as a narrow fail-closed 
   const proxyDate = new Proxy(now(), {
     get(target, property, receiver) { dateProxyRead = true; return Reflect.get(target, property, receiver) },
   })
-  mustRejectContext({ ...base, now: () => proxyDate as never }, 'INVALID_MARKET_REVIEW_TIME')
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, { ...base, now: () => proxyDate as never }),
+    (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_REVIEW_TIME',
+  )
   assert.equal(dateProxyRead, false)
+
+  let deniedClockCalls = 0
+  await assert.rejects(
+    () => independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', false, 'checker@example.test', setup.reviews, {
+      ...base,
+      now: () => { deniedClockCalls += 1; return now() },
+    }),
+    (error: unknown) => error instanceof OwnerGateError,
+  )
+  assert.equal(deniedClockCalls, 0)
 
   let malformedClockCalls = 0
   await assert.rejects(

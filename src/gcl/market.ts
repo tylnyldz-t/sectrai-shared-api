@@ -1400,7 +1400,6 @@ export class SyntheticMarketConnector implements Connector<SyntheticMarketInput,
  */
 export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMarketPlan, decision: MarketReviewDecision, ownerApproved: boolean, reviewer: string, reviewLedger: MarketReviewLedger, context: MarketReviewContext): Promise<ReviewedSyntheticMarketPlan> {
   const reviewedContext = reviewContext(context)
-  const reviewedAt = reviewNow(reviewedContext)
   if (!ownerApproved) throw new OwnerGateError()
   const canonicalReviewer = canonicalActor(reviewer)
   if (!canonicalReviewer) throw new OwnerGateError('MARKET_REVIEWER_REQUIRED')
@@ -1409,6 +1408,9 @@ export async function independentlyReviewSyntheticMarketPlan(plan: SyntheticMark
   const recordTerminalReview = terminalReviewRecorder(reviewLedger)
   const validatedPlan = validateSyntheticMarketPlanForReviewedContext(plan, reviewedContext)
   if (canonicalReviewer === validatedPlan.binding.requestedBy) throw new MakerCheckerError('MARKET_REVIEW_REQUIRES_INDEPENDENT_CHECKER')
+  // Invoke the only executable context seam after every static review gate.
+  // Its copied value cannot alter the already-snapshotted context or plan.
+  const reviewedAt = reviewNow(reviewedContext)
 
   const auditHash = terminalReviewAuditHash(await recordTerminalReview({
     product: reviewedContext.product,
