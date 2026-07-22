@@ -7,6 +7,7 @@ import { types as nodeTypes } from 'node:util'
  * this module was initialized from retargeting those local checks.
  */
 export const intrinsicArrayIsArray = Array.isArray
+export const intrinsicArrayIncludes = Array.prototype.includes
 export const intrinsicArrayMap = Array.prototype.map
 export const intrinsicArrayPrototype = Array.prototype
 export const intrinsicArraySort = Array.prototype.sort
