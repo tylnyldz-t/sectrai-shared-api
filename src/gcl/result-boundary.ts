@@ -309,6 +309,7 @@ function validUnrealPilotHandoff(value: unknown): boolean {
 function validThreeDArtifact(value: unknown, connectorId: string, payload: DataRecord, binding: SyntheticResultReviewBinding): boolean {
   const artifact = ownDataRecord(value)
   const scope = ownDataRecord(payload.scope)
+  const input = ownDataRecord(payload.input)
   const expectedArtifactId = scope && exactKeys(scope, ['product', 'workspaceId']) && typeof scope.product === 'string' && typeof scope.workspaceId === 'string'
     ? `synthetic-3d-${connectorId}-${syntheticPlanSha256({
       connectorKind: connectorId,
@@ -321,10 +322,11 @@ function validThreeDArtifact(value: unknown, connectorId: string, payload: DataR
       requestedItems: binding.governance.requestedItems,
     }).slice(0, 24)}`
     : null
-  return Boolean(artifact && exactKeys(artifact, ['artifactId', 'syntheticUri', 'generation', 'outputFormat', 'lifecycle', 'reviewState', 'publicationState']) &&
+  return Boolean(artifact && input && (input.outputFormat === 'glb' || input.outputFormat === 'obj') &&
+    exactKeys(artifact, ['artifactId', 'syntheticUri', 'generation', 'outputFormat', 'lifecycle', 'reviewState', 'publicationState']) &&
     typeof artifact.artifactId === 'string' && artifact.artifactId === expectedArtifactId &&
     artifact.syntheticUri === `synthetic://gcl-3d/${connectorId}/${artifact.artifactId}` && artifact.generation === 'SYNTHETIC_PROPOSAL_ONLY' &&
-    (artifact.outputFormat === 'glb' || artifact.outputFormat === 'obj') && artifact.lifecycle === 'GENERATED_CANDIDATE_NOT_A_FILE' &&
+    artifact.outputFormat === input.outputFormat && artifact.lifecycle === 'GENERATED_CANDIDATE_NOT_A_FILE' &&
     artifact.reviewState === 'OWNER_REVIEW_REQUIRED' && artifact.publicationState === 'NOT_PUBLISHED')
 }
 
