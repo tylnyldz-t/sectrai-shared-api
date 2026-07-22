@@ -257,6 +257,9 @@ test('governed image runs accept only a closed request envelope without reading 
   assert.equal(getterRead, false)
 
   await assert.rejects(() => runner.run({ ...governedRunRequest({ prompt: 'A child-friendly solar system poster' }), unexpected: privateValue } as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CONNECTOR_RUN_REQUEST')
+  const hiddenRequest = governedRunRequest({ prompt: 'A child-friendly solar system poster' }) as Record<string, unknown>
+  Object.defineProperty(hiddenRequest, 'providerCredential', { enumerable: false, value: privateValue })
+  await assert.rejects(() => runner.run(hiddenRequest as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CONNECTOR_RUN_REQUEST')
   await assert.rejects(() => runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' }, { ownerApproved: 'true' as never })), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CONNECTOR_RUN_REQUEST')
   const sparseScopes: string[] = []
   sparseScopes[1] = 'image:generate'
@@ -309,6 +312,23 @@ test('post-reservation runner failures redact error text and reject accessor-sha
   assert.equal(failureAudit.entries[1]?.event.type, 'connector.run.failed')
   assert.equal(failureAudit.entries[1]?.event.detail.error, 'CONNECTOR_RUN_FAILED')
   assert.equal(JSON.stringify(failureAudit.entries).includes(privateError), false)
+
+  const hiddenProvenanceConnector = {
+    id: 'synthetic-image-hidden-provenance', kind: 'media-generation' as const, authKind: 'owner-token' as const, scopes: ['image:generate'],
+    run: async () => {
+      const provenance = {
+        connectorId: 'synthetic-image-hidden-provenance', source: 'synthetic-image-tti', retrievedAt: now().toISOString(),
+        untrustedContent: { source: 'owner-supplied-tti-prompt', value: {}, handling: 'data-only' as const, instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS' as const },
+      }
+      Object.defineProperty(provenance, 'providerEndpoint', { enumerable: false, value: privateError })
+      return { data: {}, provenance, confidence: 0 }
+    },
+  }
+  const hiddenProvenanceAudit = new InMemoryHashChainAuditLog()
+  const hiddenProvenanceRunner = new GovernedConnectorRunner(new ConnectorRegistry([hiddenProvenanceConnector]), hiddenProvenanceAudit, new TestQuota(), now)
+  await assert.rejects(() => hiddenProvenanceRunner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' }, { connectorId: hiddenProvenanceConnector.id })), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'INVALID_CONNECTOR_RESULT')
+  assert.equal(hiddenProvenanceAudit.entries.length, 2)
+  assert.equal(JSON.stringify(hiddenProvenanceAudit.entries).includes(privateError), false)
 
   let provenanceGetterRead = false
   const malformedConnector = {
@@ -640,6 +660,62 @@ test('candidate issuance rejects accessor-shaped candidate sets before it reads 
   await assert.rejects(() => issueSyntheticImageCandidates(forged, new InMemoryImageCandidateLedger(audit), context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_CANDIDATE_ISSUANCE_RESULT')
   assert.equal(getterRead, false)
   assert.equal(audit.entries.length, 2)
+})
+
+test('hidden own fields cannot bypass image, candidate, review, or audit envelopes', async () => {
+  const privateValue = 'PRIVATE-HIDDEN-OWN-FIELD'
+  const hiddenInput = { prompt: 'A child-friendly solar system poster' }
+  Object.defineProperty(hiddenInput, 'providerCredential', { enumerable: false, value: privateValue })
+  await assert.rejects(() => configuredConnector().run(hiddenInput as never, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_IMAGE_TTI_FIELD')
+
+  const audit = new InMemoryHashChainAuditLog()
+  const { candidate, candidates } = await governedIssuedRun(audit)
+  const hiddenCandidate = structuredClone(candidate) as Record<string, unknown>
+  Object.defineProperty(hiddenCandidate, 'rawPrompt', { enumerable: false, value: privateValue })
+  await assert.rejects(() => ownerLikeSyntheticImage(hiddenCandidate as never, true, 'checker@example.test', new InMemoryImageOwnerReviewLedger(audit), candidates, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_REVIEW_CANDIDATE')
+
+  const issuance = audit.entries[2]
+  assert.ok(issuance)
+  assert.equal(issuance.event.type, 'connector.artifact.candidates_issued')
+  const hiddenIssuance = structuredClone(issuance.event)
+  Object.defineProperty(hiddenIssuance, 'providerEndpoint', { enumerable: false, value: privateValue })
+  await assert.rejects(() => new InMemoryImageCandidateLedger(audit).appendIssuance(hiddenIssuance as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_CANDIDATE_ISSUANCE_EVENT')
+
+  const hiddenDecision = {
+    type: 'connector.artifact.owner_liked' as const,
+    connectorId: 'image-tti', product: context.product, workspaceId: context.workspaceId, actor: 'checker@example.test', correlationId: context.correlationId,
+    scopes: ['image:generate'], costCapCents: 0, requestedItems: 1, occurredAt: now().toISOString(),
+    detail: { candidateId: candidate.candidateId, maker: context.actor, publication: 'blocked' as const, issuanceAuditHash: issuance.hash, runAuditHash: issuance.event.detail.runAuditHash, artifactId: `owner-liked-${candidate.candidateId}`, ownerReview: 'liked' as const },
+  }
+  Object.defineProperty(hiddenDecision.detail, 'rawPrompt', { enumerable: false, value: privateValue })
+  await assert.rejects(() => new InMemoryImageOwnerReviewLedger(audit).appendDecision(hiddenDecision as never), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_OWNER_REVIEW_EVENT')
+  assert.equal(audit.entries.length, 3)
+  assert.equal(JSON.stringify(audit.entries).includes(privateValue), false)
+})
+
+test('injected image clocks reject Date subclasses without evaluating overridden methods', async () => {
+  class PoisonedDate extends Date {}
+  let getterRead = false
+  Object.defineProperty(PoisonedDate.prototype, 'getTime', { get: () => { getterRead = true; throw new Error('clock getter must not run') } })
+  const poisonedNow = () => new PoisonedDate('2026-07-22T12:00:00.000Z')
+
+  await assert.rejects(() => configuredConnector().run({ prompt: 'A child-friendly solar system poster' }, { ...context, now: poisonedNow }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_TTI_CONTEXT')
+  assert.equal(getterRead, false)
+
+  const audit = new InMemoryHashChainAuditLog()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector()]), audit, new TestQuota(), now)
+  const result = await runner.run(governedRunRequest({ prompt: 'A child-friendly solar system poster' })) as ConnectorResult<TextToImageData>
+  await assert.rejects(() => issueSyntheticImageCandidates(result, new InMemoryImageCandidateLedger(audit), { ...context, now: poisonedNow }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_CANDIDATE_ISSUANCE_CONTEXT')
+  assert.equal(getterRead, false)
+  assert.equal(audit.entries.length, 2)
+
+  const candidates = new InMemoryImageCandidateLedger(audit)
+  await issueSyntheticImageCandidates(result, candidates, context)
+  const candidate = result.data.candidates[0]
+  assert.ok(candidate)
+  await assert.rejects(() => ownerLikeSyntheticImage(candidate, true, 'checker@example.test', new InMemoryImageOwnerReviewLedger(audit), candidates, { ...context, now: poisonedNow }), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_IMAGE_OWNER_REVIEW_CONTEXT')
+  assert.equal(getterRead, false)
+  assert.equal(audit.entries.length, 3)
 })
 
 test('the candidate ledger rejects accessor-shaped issuance entries before it reads an entry', async () => {
