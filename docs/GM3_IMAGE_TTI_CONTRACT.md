@@ -19,10 +19,11 @@ only accepted mode.
    item count. Its public run request is an exact own-data envelope with only
    `connectorId`, `input`, `product`, `workspaceId`, `actor`, `correlationId`,
    `ownerApproved`, `scopes`, `costCapCents`, and `requestedItems`. Scope
-   arrays must be dense, unique, bounded identifiers; extra fields, accessors,
-   a truthy non-boolean owner flag, or a caller-supplied clock are rejected
-   before connector lookup, audit, or quota activity. The runner copies and
-   validates its injected clock; it never takes audit time from a request.
+   arrays must be dense, unique, bounded identifiers; extra fields (including
+   non-enumerable own fields), accessors, a truthy non-boolean owner flag, or
+   a caller-supplied clock are rejected before connector lookup, audit, or
+   quota activity. The runner copies and validates its injected clock; it
+   never takes audit time from a request.
 2. `SyntheticImageTtiConnector` requires `GCL_IMAGE_LIVE_MODE=LIVE_DISABLED`,
    `GCL_IMAGE_MAX_COST_CENTS`, `GCL_IMAGE_MAX_ITEMS`, and
    `GCL_IMAGE_OWNER_REVIEW_TTL_SECONDS`; missing or malformed limits reject the
@@ -152,8 +153,9 @@ decision and must be implemented behind its own bounded approval path.
 ## Negative and edge-case guarantees
 
 - Prompt fields accept only the documented four keys. Empty text, a value over
-  1,000 characters, ASCII/Unicode control or formatting characters, and every
-  size other than `512` or `1024` fail closed.
+  1,000 characters, ASCII/Unicode control or formatting characters, hidden
+  non-enumerable own fields, and every size other than `512` or `1024` fail
+  closed.
 - The governed-run boundary accepts only its documented own-data fields and a
   dense, unique scope array. Request accessors, unknown fields, sparse scope
   arrays, non-boolean owner approval, accessor-backed connector/audit/quota
@@ -215,8 +217,12 @@ decision and must be implemented behind its own bounded approval path.
 - Direct adapter, issuance, and owner-review contexts are closed, copied
   data envelopes. Each accepts only its documented envelope or the complete
   shared `ConnectorRunContext`; arbitrary extra fields, accessor fields,
-  malformed scope arrays, or malformed clocks fail before identity, scope, or
-  time values are read.
+  hidden non-enumerable own fields, malformed scope arrays, or malformed
+  clocks fail before identity, scope, or time values are read. An injected
+  direct-path clock must return an ordinary built-in `Date`; subclasses and
+  overridden date methods are rejected without calling those methods, and a
+  validated clock value is copied before it can set a candidate, issuance, or
+  review timestamp.
   Ledger operations are resolved only from data-method descriptors (including
   ordinary class methods, but never intrinsic `Object`/`Function` prototypes);
   accessor-backed `appendIssuance`, `assertIssued`, and `appendDecision`
