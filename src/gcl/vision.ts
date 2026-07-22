@@ -15,7 +15,7 @@ const SHA256_PATTERN = /^[a-f0-9]{64}$/
 const PROPOSAL_ID_PATTERN = /^synthetic-document-[a-f0-9]{24}$/
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DOCUMENT_MEDIA_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp'])
-const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v10' as const
+const SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION = 'synthetic-document-review-packet-v11' as const
 const SYNTHETIC_DOCUMENT_DATA_BOUNDARY = {
   evidenceSource: 'synthetic-fixture',
   inputShape: 'plain-own-data-only',
@@ -34,6 +34,11 @@ const SYNTHETIC_DOCUMENT_STRING_BOUNDARY = {
   valueEncoding: 'well-formed-unicode-utf8',
   controlCharactersAccepted: false,
   unpairedSurrogateCodeUnitsAccepted: false,
+} as const
+const SYNTHETIC_DOCUMENT_TIME_BOUNDARY = {
+  clockValue: 'utc-epoch-milliseconds',
+  clockObject: 'exact-date-prototype-no-own-properties',
+  issuedAtSource: 'governed-run-context-clock',
 } as const
 /** A synthetic packet must never remain reviewable indefinitely. */
 const MAX_SYNTHETIC_REVIEW_WINDOW_SECONDS = 24 * 60 * 60
@@ -133,6 +138,12 @@ export type SyntheticDocumentReviewPacket = {
     valueEncoding: typeof SYNTHETIC_DOCUMENT_STRING_BOUNDARY.valueEncoding
     controlCharactersAccepted: typeof SYNTHETIC_DOCUMENT_STRING_BOUNDARY.controlCharactersAccepted
     unpairedSurrogateCodeUnitsAccepted: typeof SYNTHETIC_DOCUMENT_STRING_BOUNDARY.unpairedSurrogateCodeUnitsAccepted
+  }
+  /** The caller clock is copied from a plain built-in Date before packet timing. */
+  timeBoundaryBinding: {
+    clockValue: typeof SYNTHETIC_DOCUMENT_TIME_BOUNDARY.clockValue
+    clockObject: typeof SYNTHETIC_DOCUMENT_TIME_BOUNDARY.clockObject
+    issuedAtSource: typeof SYNTHETIC_DOCUMENT_TIME_BOUNDARY.issuedAtSource
   }
   /** Metadata-only freshness limit for the synthetic evidence reference. */
   evidenceBinding: {
@@ -268,6 +279,22 @@ function parsedDate(value: unknown, error: string): Date {
   if (!Number.isFinite(parsed.getTime()) || parsed.toISOString() !== value) throw new ConnectorInputError(error)
   return parsed
 }
+/**
+ * A caller-controlled clock must not supply overridden Date methods or extra
+ * state to the review path. Copy only the intrinsic epoch value into a fresh
+ * built-in Date before it can affect packet timing or an audit decision.
+ */
+function exactClockDate(value: unknown, error: string): Date {
+  if (!(value instanceof Date) || Object.getPrototypeOf(value) !== Date.prototype || Reflect.ownKeys(value).length !== 0) throw new ConnectorInputError(error)
+  let milliseconds: number
+  try {
+    milliseconds = Date.prototype.getTime.call(value)
+  } catch {
+    throw new ConnectorInputError(error)
+  }
+  if (!Number.isFinite(milliseconds)) throw new ConnectorInputError(error)
+  return new Date(milliseconds)
+}
 function isFieldName(value: unknown): value is DocumentFieldName { return typeof value === 'string' && (fieldNames as readonly string[]).includes(value) }
 function isSensitive(field: DocumentFieldName): boolean {
   return field === 'note' || field === 'senderName' || field === 'senderAddress' || field === 'recipientName' || field === 'recipientAddress' || field === 'loadingAddress' || field === 'deliveryAddress' || field === 'identityNumber'
@@ -287,6 +314,7 @@ function reviewPacketIntegrityMaterial(
   makerCheckerBinding: SyntheticDocumentReviewPacket['makerCheckerBinding'],
   collectionBoundaryBinding: SyntheticDocumentReviewPacket['collectionBoundaryBinding'],
   stringBoundaryBinding: SyntheticDocumentReviewPacket['stringBoundaryBinding'],
+  timeBoundaryBinding: SyntheticDocumentReviewPacket['timeBoundaryBinding'],
   evidenceBinding: SyntheticDocumentReviewPacket['evidenceBinding'],
   reviewWindow: SyntheticDocumentReviewPacket['reviewWindow'],
 ): Record<string, unknown> {
@@ -308,6 +336,7 @@ function reviewPacketIntegrityMaterial(
     makerCheckerBinding,
     collectionBoundaryBinding,
     stringBoundaryBinding,
+    timeBoundaryBinding,
     evidenceBinding,
     reviewWindow,
   }
@@ -353,11 +382,12 @@ function reviewPacketFor(
   const makerCheckerBinding = { ...SYNTHETIC_DOCUMENT_MAKER_CHECKER_BOUNDARY }
   const collectionBoundaryBinding = { ...SYNTHETIC_DOCUMENT_COLLECTION_BOUNDARY }
   const stringBoundaryBinding = { ...SYNTHETIC_DOCUMENT_STRING_BOUNDARY }
+  const timeBoundaryBinding = { ...SYNTHETIC_DOCUMENT_TIME_BOUNDARY }
   const evidenceBinding = evidenceBindingFor(proposal.evidence, issuedAt, maxEvidenceAgeSeconds)
   const reviewWindow = { issuedAt: issuedAt.toISOString(), reviewBy: reviewByFor(issuedAt, consent.expiresAt, evidenceBinding.expiresAt, maxReviewAgeSeconds).toISOString() }
   return {
     version: SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION,
-    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, evidenceBinding, reviewWindow))),
+    integrityDigest: digest(JSON.stringify(reviewPacketIntegrityMaterial(proposal, scopeBinding, consentBinding, governanceBinding, dataBoundaryBinding, makerCheckerBinding, collectionBoundaryBinding, stringBoundaryBinding, timeBoundaryBinding, evidenceBinding, reviewWindow))),
     scopeBinding,
     consentBinding,
     governanceBinding,
@@ -365,6 +395,7 @@ function reviewPacketFor(
     makerCheckerBinding,
     collectionBoundaryBinding,
     stringBoundaryBinding,
+    timeBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -432,9 +463,7 @@ function reviewContext(context: Pick<ConnectorRunContext, 'product' | 'workspace
 
 function reviewNow(context: Pick<ConnectorRunContext, 'now'>): Date {
   if (typeof context.now !== 'function') throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_TIME')
-  const value = context.now()
-  if (!(value instanceof Date) || !Number.isFinite(value.getTime())) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_TIME')
-  return value
+  return exactClockDate(context.now(), 'INVALID_DOCUMENT_REVIEW_TIME')
 }
 
 function reviewActor(reviewer: unknown): string {
@@ -535,6 +564,13 @@ function reviewedStringBoundaryBinding(value: unknown): SyntheticDocumentReviewP
   return { ...SYNTHETIC_DOCUMENT_STRING_BOUNDARY }
 }
 
+function reviewedTimeBoundaryBinding(value: unknown): SyntheticDocumentReviewPacket['timeBoundaryBinding'] {
+  if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_TIME_BOUNDARY_BINDING')
+  exactKeys(value, ['clockValue', 'clockObject', 'issuedAtSource'], 'UNEXPECTED_DOCUMENT_REVIEW_TIME_BOUNDARY_BINDING_FIELD')
+  if (value.clockValue !== SYNTHETIC_DOCUMENT_TIME_BOUNDARY.clockValue || value.clockObject !== SYNTHETIC_DOCUMENT_TIME_BOUNDARY.clockObject || value.issuedAtSource !== SYNTHETIC_DOCUMENT_TIME_BOUNDARY.issuedAtSource) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_TIME_BOUNDARY_BINDING')
+  return { ...SYNTHETIC_DOCUMENT_TIME_BOUNDARY }
+}
+
 function reviewedEvidenceBinding(
   value: unknown,
   evidence: SyntheticDocumentProposal['evidence'],
@@ -618,7 +654,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const mesaEvidenceHandoff: SyntheticDocumentProposal['mesaEvidenceHandoff'] = { state: 'BLOCKED_PENDING_INDEPENDENT_OWNER_REVIEW', referenceOnly: true, rawContentIncluded: false, sent: false }
 
   if (!isRecord(proposal.reviewPacket)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET')
-  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'makerCheckerBinding', 'collectionBoundaryBinding', 'stringBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
+  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'makerCheckerBinding', 'collectionBoundaryBinding', 'stringBoundaryBinding', 'timeBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
   if (proposal.reviewPacket.version !== SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
   if (!isRecord(proposal.reviewPacket.scopeBinding)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_SCOPE')
   exactKeys(proposal.reviewPacket.scopeBinding, ['productDigest', 'workspaceDigest'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_SCOPE_FIELD')
@@ -632,6 +668,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const makerCheckerBinding = reviewedMakerCheckerBinding(proposal.reviewPacket.makerCheckerBinding)
   const collectionBoundaryBinding = reviewedCollectionBoundaryBinding(proposal.reviewPacket.collectionBoundaryBinding)
   const stringBoundaryBinding = reviewedStringBoundaryBinding(proposal.reviewPacket.stringBoundaryBinding)
+  const timeBoundaryBinding = reviewedTimeBoundaryBinding(proposal.reviewPacket.timeBoundaryBinding)
   const evidenceBinding = reviewedEvidenceBinding(proposal.reviewPacket.evidenceBinding, evidence, governanceBinding, reviewedAt)
   const reviewWindow = reviewedReviewWindow(proposal.reviewPacket.reviewWindow, reviewedAt)
   validateReviewPacketTimeline(consentBinding, governanceBinding, evidenceBinding, reviewWindow)
@@ -645,6 +682,7 @@ function validateSyntheticDocumentProposalForReviewAt(
     makerCheckerBinding,
     collectionBoundaryBinding,
     stringBoundaryBinding,
+    timeBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -654,7 +692,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   }
   if (proposal.reviewPacket.state !== reviewPacket.state || proposal.reviewPacket.rawDocumentContentIncluded !== false || proposal.reviewPacket.automaticApply !== false || proposal.reviewPacket.automaticPublication !== false || productDigest !== digest(scoped.product) || workspaceDigest !== digest(scoped.workspaceId)) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_SCOPE_MISMATCH')
   const normalized: SyntheticDocumentProposal = { proposalId, syntheticUri: proposal.syntheticUri, preparedBy, mode: LIVE_DISABLED, extraction: 'SYNTHETIC_PROPOSAL_ONLY_NOT_OCR', evidence, fields, fieldsDigest, ownerReview, reviewPacket, mesaEvidenceHandoff }
-  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.makerCheckerBinding, reviewPacket.collectionBoundaryBinding, reviewPacket.stringBoundaryBinding, reviewPacket.evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.makerCheckerBinding, reviewPacket.collectionBoundaryBinding, reviewPacket.stringBoundaryBinding, reviewPacket.timeBoundaryBinding, reviewPacket.evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
   return normalized
 }
 

@@ -19,6 +19,19 @@ const ACTOR_PATTERN = /^[a-zA-Z0-9:_@. -]{1,160}$/
 
 function isSafePositiveInteger(value: unknown): value is number { return typeof value === 'number' && Number.isSafeInteger(value) && value > 0 }
 function isSafeActor(value: unknown): value is string { return typeof value === 'string' && !!value.trim() && ACTOR_PATTERN.test(value) }
+/** Copy an intrinsic Date once so an injected/subclassed clock cannot affect audit timing. */
+function governedNow(clock: () => Date): Date {
+  const value = clock()
+  if (!(value instanceof Date) || Object.getPrototypeOf(value) !== Date.prototype || Reflect.ownKeys(value).length !== 0) throw new ConnectorInputError('INVALID_CONNECTOR_TIME')
+  let milliseconds: number
+  try {
+    milliseconds = Date.prototype.getTime.call(value)
+  } catch {
+    throw new ConnectorInputError('INVALID_CONNECTOR_TIME')
+  }
+  if (!Number.isFinite(milliseconds)) throw new ConnectorInputError('INVALID_CONNECTOR_TIME')
+  return new Date(milliseconds)
+}
 
 export class ConnectorRegistry {
   private readonly connectors = new Map<string, Connector>()
@@ -53,7 +66,7 @@ export class GovernedConnectorRunner {
     if (!isSafePositiveInteger(request.requestedItems)) throw new CostCapError('CONNECTOR_REQUESTED_ITEMS_REQUIRED')
     if (request.scopes.length === 0 || request.scopes.some((scope) => !SCOPE_PATTERN.test(scope) || !connector.scopes.includes(scope))) throw new ScopeError()
 
-    const occurredAt = this.now()
+    const occurredAt = governedNow(this.now)
     const context: ConnectorRunContext = {
       product: request.product,
       workspaceId: request.workspaceId,
@@ -62,7 +75,7 @@ export class GovernedConnectorRunner {
       scopes: [...new Set(request.scopes)].sort(),
       costCapCents: request.costCapCents,
       requestedItems: request.requestedItems,
-      now: this.now,
+      now: () => new Date(occurredAt.getTime()),
     }
     await connector.preflight?.(request.input, context)
     const requestedAudit = await this.auditLog.append({
@@ -74,13 +87,13 @@ export class GovernedConnectorRunner {
       const result = await connector.run(request.input, context)
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
-        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(), detail: { requestedAuditHash: requestedAudit.hash },
+        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(), detail: { requestedAuditHash: requestedAudit.hash },
       })
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
     } catch (error) {
       await this.auditLog.append({
         type: 'connector.run.failed', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
-        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: this.now().toISOString(),
+        scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: occurredAt.toISOString(),
         detail: { requestedAuditHash: requestedAudit.hash, error: error instanceof Error ? error.message : 'UNKNOWN_ERROR' },
       })
       throw error
