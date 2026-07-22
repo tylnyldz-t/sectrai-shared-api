@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { posix as path } from 'node:path'
 import test from 'node:test'
+import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 
 type AuditBatch = 'D1' | 'D2' | 'D3' | 'D4' | 'D5' | 'D6' | 'D7' | 'D8' | 'D9' | 'D10' | 'D11' | 'D12' | 'D13' | 'D14' | 'D15' | 'D16' | 'D17' | 'D18' | 'D19' | 'D20' | 'D21' | 'D22'
@@ -44,7 +45,13 @@ type Snapshot = {
   pinnedSupplementalBlobs?: readonly PinnedSupplementalBlob[]
 }
 
-const AUDIT_WORKTREE_ROOT = '/home/tayla/projects/_wt'
+/**
+ * Historical connector worktrees are intentionally short-lived: curation may
+ * remove a sibling worktree after its commit has entered the shared local Git
+ * object database.  Resolve every immutable snapshot through this audit
+ * repository instead of requiring those mutable filesystem paths to survive.
+ */
+const AUDIT_REPOSITORY_ROOT = fileURLToPath(new URL('../', import.meta.url))
 const GCL_ROOT = 'src/gcl/'
 /** `node:util` is limited to in-process Proxy detection in Camera and RA market. */
 const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
@@ -55,8 +62,10 @@ const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
  * These are immutable local Git snapshots from the D1 through D21 audit batches.
  * Every source read below is `git show <revision>:<path>`, never the mutable
  * worktree file. This fixture does not import target runtime code, load an
- * env file, open a socket, or make a network request. A missing worktree,
- * revision, blob, or local GCL dependency is an audit failure.
+ * env file, open a socket, or make a network request. A missing revision,
+ * blob, or local GCL dependency is an audit failure. Historical sibling
+ * worktrees are not inputs: they may be curated away while the pinned local
+ * Git objects remain available in this repository's object database.
  */
 const snapshots: readonly Snapshot[] = [
   { batch: 'D1', name: 'RA voice', revision: '80a1cc6', directory: 'night-ra-voice', connectorPath: 'src/gcl/voice.ts', connectorBlob: '1c232082a4bf8f6595afb2f6410f9f4d6c75fda0', registryBlob: 'bde353ad8e3896800b3d3d5da4660480719c5aea', hardDeniesLiveOptIn: false, quotaFailureAudited: false },
@@ -238,7 +247,7 @@ const snapshots: readonly Snapshot[] = [
 function repositoryFor(snapshot: Snapshot): string {
   if (!/^[a-z0-9-]+$/.test(snapshot.directory)) throw new Error(`GCL_AUDIT_INVALID_WORKTREE:${snapshot.batch}:${snapshot.name}`)
   if (!/^[a-f0-9]{7,40}$/.test(snapshot.revision)) throw new Error(`GCL_AUDIT_INVALID_REVISION:${snapshot.batch}:${snapshot.name}`)
-  return path.join(AUDIT_WORKTREE_ROOT, snapshot.directory)
+  return AUDIT_REPOSITORY_ROOT
 }
 
 function gitAt(snapshot: Snapshot, args: readonly string[]): string {
