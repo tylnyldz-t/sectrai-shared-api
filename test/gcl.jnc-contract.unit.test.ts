@@ -496,6 +496,20 @@ test('runner isolates submitted input and context across preflight/run, then bin
   assert.equal(mismatchedRun.quota.reservations.length, 1)
   assert.equal(mismatchedRun.audit.entries[1]?.event.type, 'connector.run.failed')
   assert.equal(mismatchedRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+
+  const requestedGame = premiumUnreal
+  const differentGame = await new SyntheticGameEngineConnector({ liveMode: LIVE_DISABLED, maxCostCapCents: 100, maxGpuMinutes: 30 }).run(
+    { ...requestedGame, brief: 'A different but internally valid premium game plan.' },
+    directContext({ scopes: ['game:project:build'], costCapCents: 100, requestedItems: 12 }),
+  )
+  const mismatchedGameConnector: Connector = {
+    id: 'game-engine', kind: 'game-engine', authKind: 'owner-approval', scopes: ['game:project:build'],
+    async run() { return differentGame },
+  }
+  const mismatchedGameRun = runner(mismatchedGameConnector)
+  await assert.rejects(mismatchedGameRun.run.run(gameRequest(requestedGame)), SyntheticResultIntegrityError)
+  assert.equal(mismatchedGameRun.quota.reservations.length, 1)
+  assert.equal(mismatchedGameRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
 })
 
 test('registry admission seals connector metadata and rejects accessor-backed runner methods', () => {

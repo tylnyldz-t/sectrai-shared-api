@@ -226,8 +226,9 @@ when it occurs in preflight; a later failure remains conservatively accounted
 for by the existing audit/quota rule.
 
 The copied submission has a SHA-256 correlation value embedded in the
-integrity-bound review snapshot. At the final egress boundary the runner recomputes the same
-value from the frozen submission and requires an exact match. A connector
+integrity-bound review snapshot. At the final egress boundary the runner
+recomputes the same value from the frozen submission and requires an exact
+match. A connector
 cannot return a different, otherwise valid and re-hashed synthetic plan for a
 requested run. This digest identifies only data submitted to this synthetic
 connector; it is not a secret, an approval, a credential, or an execution
