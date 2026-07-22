@@ -77,5 +77,6 @@ or `*_LIVE_ENABLED` setting.
 - Audit events are copied once from a bounded ordinary data envelope before validation, hashing, or persistence. Accessors, hidden/symbol fields, custom prototypes, non-finite values, and throwing proxies fail closed; a stateful proxy cannot alter the captured event or inject raw fixture content after validation.
 - Only explicit request-validation and GCL errors are exposed by HTTP. Unexpected adapter, storage, or runtime exceptions return stable `INTERNAL_ERROR`, never raw synthetic fixture content, credentials, or provider detail.
 - Connector governance configuration is captured once from a canonical, allowlisted data-only envelope. Later caller mutation, getters/Proxies, hidden or inherited fields, and undeclared provider-like settings fail closed or cannot alter a governed run.
+- A translation connector's immutable, canonical preflight fixture is the exact object the governed runner later gives its adapter; mutating the caller's retained input while audit/quota awaits cannot swap reviewed synthetic content.
 
 See [the interpreter contract](docs/GCL_TRANSLATION_CONTRACT.md) for the exact shapes and safety boundary.

@@ -195,6 +195,21 @@ field read, audit, quota reservation, or adapter result; this prevents a
 programmatic caller from changing a checked fixture through inheritance or a
 getter after preflight.
 
+## Checked-fixture handoff
+
+The governed runner uses a connector's non-`undefined` preflight return as
+the exact input for the later adapter call. The translation connectors return
+a freshly copied, immutable, canonical text or speech fixture (including the
+synthetic audio descriptor). Therefore a programmatic caller that retains and
+mutates its original input while requested-audit or quota work is awaiting
+cannot swap in different text, a personal-data-shaped value, or different
+audio metadata after preflight. The adapter revalidates that prepared fixture
+and the audit remains metadata-only. This is an in-process integrity boundary:
+it does not retain raw input, initiate a provider request, or alter permanent
+`LIVE_DISABLED` behavior. Connectors that have no canonical prepared value
+continue to return `undefined` and are validate-only; this translation module
+does not use that fallback.
+
 ## Canonical connector configuration
 
 Programmatic configuration is also a governance boundary. At connector

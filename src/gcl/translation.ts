@@ -319,18 +319,18 @@ function audioDescriptor(value: unknown, maxAudioDurationMs: number): SyntheticA
   if (audio.mimeType !== 'audio/wav' && audio.mimeType !== 'audio/mpeg' && audio.mimeType !== 'audio/ogg') throw new ConnectorInputError('INVALID_SYNTHETIC_TRANSLATION_AUDIO_MIME_TYPE')
   const durationMs = positiveInteger(audio.durationMs, 'INVALID_SYNTHETIC_TRANSLATION_AUDIO_DURATION')
   if (durationMs > maxAudioDurationMs) throw new ConnectorInputError('TRANSLATION_AUDIO_DURATION_LIMIT_EXCEEDED')
-  return { synthetic: true, sourceRef: audio.sourceRef, contentHash: audio.contentHash, mimeType: audio.mimeType, durationMs }
+  return Object.freeze({ synthetic: true, sourceRef: audio.sourceRef, contentHash: audio.contentHash, mimeType: audio.mimeType, durationMs })
 }
 
 function textInput(value: unknown, maxInputCharacters: number): TextTranslationInput {
   const input = exact(value, ['synthetic', 'sourceText', 'translatedText', 'sourceLocale', 'targetLocale'])
   if (input.synthetic !== true) throw new ConnectorInputError('TRANSLATION_SYNTHETIC_MARKER_REQUIRED')
-  return {
+  return Object.freeze({
     synthetic: true,
     sourceText: boundedText(input.sourceText, 'INVALID_SYNTHETIC_SOURCE_TEXT', maxInputCharacters),
     translatedText: boundedText(input.translatedText, 'INVALID_SYNTHETIC_TRANSLATED_TEXT', maxInputCharacters),
     ...locales(input.sourceLocale, input.targetLocale),
-  }
+  })
 }
 
 function speechInput(value: unknown, maxInputCharacters: number, maxAudioDurationMs: number): SpeechTranslationInput {
@@ -339,14 +339,14 @@ function speechInput(value: unknown, maxInputCharacters: number, maxAudioDuratio
   if (typeof input.targetVoice !== 'string') throw new ConnectorInputError('INVALID_SYNTHETIC_TRANSLATION_VOICE')
   rejectPersonalData(input.targetVoice)
   if (!SYNTHETIC_VOICE.test(input.targetVoice)) throw new ConnectorInputError('INVALID_SYNTHETIC_TRANSLATION_VOICE')
-  return {
+  return Object.freeze({
     synthetic: true,
     sourceAudio: audioDescriptor(input.sourceAudio, maxAudioDurationMs),
     sourceTranscript: boundedText(input.sourceTranscript, 'INVALID_SYNTHETIC_SOURCE_TRANSCRIPT', maxInputCharacters),
     translatedText: boundedText(input.translatedText, 'INVALID_SYNTHETIC_TRANSLATED_TEXT', maxInputCharacters),
     ...locales(input.sourceLocale, input.targetLocale),
     targetVoice: input.targetVoice,
-  }
+  })
 }
 
 function translationReview(): TranslationReview {
@@ -374,9 +374,9 @@ export class SyntheticTextTranslationConnector implements Connector<TextTranslat
     this.configurationInvalid = snapshot.invalid
   }
 
-  preflight(input: TextTranslationInput, ctx: ConnectorRunContext): void {
+  preflight(input: TextTranslationInput, ctx: ConnectorRunContext): TextTranslationInput {
     const limits = configured(this.config, this.configurationInvalid, ctx)
-    textInput(input, limits.maxInputCharacters)
+    return textInput(input, limits.maxInputCharacters)
   }
 
   async run(input: TextTranslationInput, ctx: ConnectorRunContext): Promise<ConnectorResult<TextTranslationData>> {
@@ -429,9 +429,9 @@ export class SyntheticSpeechTranslationConnector implements Connector<SpeechTran
     this.configurationInvalid = snapshot.invalid
   }
 
-  preflight(input: SpeechTranslationInput, ctx: ConnectorRunContext): void {
+  preflight(input: SpeechTranslationInput, ctx: ConnectorRunContext): SpeechTranslationInput {
     const limits = configured(this.config, this.configurationInvalid, ctx)
-    speechInput(input, limits.maxInputCharacters, limits.maxAudioDurationMs)
+    return speechInput(input, limits.maxInputCharacters, limits.maxAudioDurationMs)
   }
 
   async run(input: SpeechTranslationInput, ctx: ConnectorRunContext): Promise<ConnectorResult<SpeechTranslationData>> {

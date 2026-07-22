@@ -93,7 +93,13 @@ export class GovernedConnectorRunner {
       requestedItems: request.requestedItems,
       now: run.now,
     }
-    await connector.preflight?.(request.input, context)
+    // A connector that returns a canonical preflight value commits the exact
+    // input that will reach its adapter. This prevents a caller retaining the
+    // original object (or a stateful Proxy) from changing a reviewed fixture
+    // while the requested audit/quota awaits. Older validate-only connectors
+    // still return undefined and retain their existing contract.
+    const preparedInput = await connector.preflight?.(request.input, context)
+    const adapterInput = preparedInput === undefined ? request.input : preparedInput
     const requestedAudit = await this.auditLog.append({
       type: 'connector.run.requested', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
       scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: run.occurredAt, detail: {},
@@ -104,7 +110,7 @@ export class GovernedConnectorRunner {
       // without an outcome. Preflight remains outside this boundary because
       // malformed input must not create an audit or quota record at all.
       await this.quota.consume({ ...context, connectorId: connector.id, occurredAt: new Date(run.occurredAt) })
-      const result = await connector.run(request.input, context)
+      const result = await connector.run(adapterInput, context)
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId, actor: context.actor,
         scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems, occurredAt: run.occurredAt,

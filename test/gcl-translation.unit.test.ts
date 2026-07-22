@@ -254,6 +254,34 @@ test('governed text translation returns only the owner-supplied fixture, reserve
   assert.equal(JSON.stringify(audit.entries).includes('There are pending approvals.'), false)
 })
 
+test('the governed runner hands the adapter its immutable checked fixture snapshot after the requested audit', async () => {
+  const connector = new SyntheticTextTranslationConnector(config)
+  const persistedAudit = new InMemoryHashChainAuditLog()
+  const mutableInput = textInput()
+  const audit = {
+    async append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
+      const appended = await persistedAudit.append(event)
+      if (event.type === 'connector.run.requested') {
+        // This simulates a programmatic caller changing its retained request
+        // while the asynchronous governance boundary is in progress.
+        mutableInput.translatedText = 'TC 12345678901'
+      }
+      return appended
+    },
+  }
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+
+  const result = await runner.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: mutableInput, ...context }) as ConnectorResult<TextTranslationData>
+
+  assert.equal(mutableInput.translatedText, 'TC 12345678901')
+  assert.equal(result.data.translatedText, 'There are pending approvals.')
+  assert.equal(persistedAudit.entries.length, 2)
+  assert.equal(persistedAudit.entries[1]?.event.type, 'connector.run.succeeded')
+  assert.equal(quota.requests.length, 1)
+  assert.equal(JSON.stringify(persistedAudit.entries).includes('TC 12345678901'), false)
+})
+
 test('a governed run snapshots one valid clock for audit, quota, provenance, and review expiry', async () => {
   const connector = new SyntheticTextTranslationConnector(config)
   const audit = new InMemoryHashChainAuditLog()

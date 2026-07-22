@@ -52,8 +52,13 @@ export interface Connector<TInput = unknown, TData = unknown> {
   kind: ConnectorKind
   authKind: ConnectorAuthKind
   scopes: readonly string[]
-  /** Runs before audit/quota reservation so an unavailable adapter consumes neither. */
-  preflight?(input: TInput, ctx: ConnectorRunContext): Promise<void> | void
+  /**
+   * Runs before audit/quota reservation so an unavailable adapter consumes
+   * neither. A connector may return the canonical input snapshot that the
+   * runner must later hand to `run`; `undefined` preserves the legacy
+   * validate-only preflight shape.
+   */
+  preflight?(input: TInput, ctx: ConnectorRunContext): Promise<TInput | void> | TInput | void
   run(input: TInput, ctx: ConnectorRunContext): Promise<ConnectorResult<TData>>
 }
 
