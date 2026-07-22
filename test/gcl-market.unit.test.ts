@@ -1232,6 +1232,7 @@ test('ADOS 10 controls are complete and explicitly prohibit egress and productio
   assert.deepEqual(ADOS_10_MARKET_CONTROLS.map((control) => control.id), [
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D12 snapshots the runner envelope/i)
   assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
   assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
