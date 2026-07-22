@@ -704,6 +704,31 @@ test('runner captures one valid clock instant for audit, quota, and synthetic pr
   assert.equal(result.provenance.retrievedAt, capturedAt)
 })
 
+test('final egress binds provenance time to the runner audit instant and rejects a stale synthetic result', async () => {
+  const staleAt = '2026-07-22T10:14:59.999Z'
+  const governedAt = '2026-07-22T10:15:00.000Z'
+  const staleResult = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
+    { prompt: 'A provenance-time-bound synthetic proposal' },
+    directContext({ now: () => new Date(staleAt) }),
+  )
+  const staleConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return staleResult },
+  }
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new InMemoryDailyConnectorQuota({ dailyRuns: 6, dailyItems: 60 })
+  const governed = new GovernedConnectorRunner(
+    new ConnectorRegistry([staleConnector]), audit, quota, () => new Date(governedAt),
+  )
+
+  await assert.rejects(governed.run(request({ input: { prompt: 'A provenance-time-bound synthetic proposal' } })), SyntheticResultIntegrityError)
+  assert.equal(quota.reservations.length, 1)
+  assert.equal(quota.reservations[0]?.occurredAt.toISOString(), governedAt)
+  assert.deepEqual(audit.entries.map((entry) => entry.event.occurredAt), [governedAt, governedAt])
+  assert.equal(audit.entries[1]?.event.type, 'connector.run.failed')
+  assert.equal(audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+})
+
 test('a prospective terminal event that predates its request is rejected before audit storage', async () => {
   const audit = new InMemoryHashChainAuditLog()
   const requested = {
@@ -877,8 +902,13 @@ test('GM5/GM6 proxy-backed boundaries fail closed before reflection, reservation
 
   const bindingTraps = { count: 0 }
   const proxyContext = trapCountingProxy(directContext(), bindingTraps)
-  assert.throws(() => syntheticResultReviewBinding(proxyContext), SyntheticResultIntegrityError)
+  assert.throws(() => syntheticResultReviewBinding(proxyContext, fixedNow().toISOString()), SyntheticResultIntegrityError)
   assert.equal(bindingTraps.count, 0)
+
+  assert.throws(
+    () => syntheticResultReviewBinding(directContext(), 'not-an-iso-instant'),
+    (error: unknown) => error instanceof SyntheticResultIntegrityError && error.message === 'SYNTHETIC_RESULT_REVIEW_BINDING_INVALID',
+  )
 
   const requestTraps = { count: 0 }
   const proxyRequest = trapCountingProxy(request(), requestTraps)

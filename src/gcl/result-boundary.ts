@@ -24,6 +24,8 @@ export type SyntheticResultReviewBinding = {
   scope: { product: string; workspaceId: string }
   actor: string
   governance: { scopes: readonly string[]; costCapCents: number; requestedItems: number }
+  /** Exact locally captured governance instant; never a caller-supplied label. */
+  retrievedAt: string
 }
 
 /**
@@ -83,10 +85,13 @@ function strictStringArray(value: unknown): string[] | null {
  * allowed to represent. This is data only; it neither reserves quota nor
  * authorises any execution, transport, artifact write, or publication.
  */
-export function syntheticResultReviewBinding(context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'actor' | 'scopes' | 'costCapCents' | 'requestedItems'>): SyntheticResultReviewBinding {
+export function syntheticResultReviewBinding(
+  context: Pick<ConnectorRunContext, 'product' | 'workspaceId' | 'actor' | 'scopes' | 'costCapCents' | 'requestedItems'>,
+  retrievedAt: string,
+): SyntheticResultReviewBinding {
   const source = ownDataRecord(context)
   const scopes = source ? strictStringArray(source.scopes) : null
-  const binding = source && scopes ? normalizedReviewBinding({
+  const binding = source && scopes && validIsoTimestamp(retrievedAt) ? normalizedReviewBinding({
     scope: { product: source.product, workspaceId: source.workspaceId },
     actor: source.actor,
     governance: {
@@ -94,6 +99,7 @@ export function syntheticResultReviewBinding(context: Pick<ConnectorRunContext, 
       costCapCents: source.costCapCents,
       requestedItems: source.requestedItems,
     },
+    retrievedAt,
   }) : null
   if (!binding) throw new SyntheticResultIntegrityError('SYNTHETIC_RESULT_REVIEW_BINDING_INVALID')
   return deepFreeze(binding)
@@ -101,7 +107,7 @@ export function syntheticResultReviewBinding(context: Pick<ConnectorRunContext, 
 
 function normalizedReviewBinding(value: unknown): SyntheticResultReviewBinding | null {
   const binding = ownDataRecord(value)
-  if (!binding || !exactKeys(binding, ['scope', 'actor', 'governance'])) return null
+  if (!binding || !exactKeys(binding, ['scope', 'actor', 'governance', 'retrievedAt'])) return null
   const scope = ownDataRecord(binding.scope)
   const governance = ownDataRecord(binding.governance)
   if (!scope || !exactKeys(scope, ['product', 'workspaceId']) || typeof scope.product !== 'string' || !PRODUCT_PATTERN.test(scope.product) ||
@@ -109,12 +115,14 @@ function normalizedReviewBinding(value: unknown): SyntheticResultReviewBinding |
     typeof binding.actor !== 'string' || !ACTOR_PATTERN.test(binding.actor) ||
     !governance || !exactKeys(governance, ['scopes', 'costCapCents', 'requestedItems']) ||
     typeof governance.costCapCents !== 'number' || !Number.isSafeInteger(governance.costCapCents) || governance.costCapCents < 1 ||
-    typeof governance.requestedItems !== 'number' || !Number.isSafeInteger(governance.requestedItems) || governance.requestedItems < 1) return null
+    typeof governance.requestedItems !== 'number' || !Number.isSafeInteger(governance.requestedItems) || governance.requestedItems < 1 ||
+    !validIsoTimestamp(binding.retrievedAt)) return null
   const scopes = strictStringArray(governance.scopes)
   return scopes === null ? null : {
     scope: { product: scope.product, workspaceId: scope.workspaceId },
     actor: binding.actor,
     governance: { scopes, costCapCents: governance.costCapCents, requestedItems: governance.requestedItems },
+    retrievedAt: binding.retrievedAt,
   }
 }
 
@@ -472,11 +480,17 @@ function safeProvenance(value: unknown, connectorId: string): ConnectorResult['p
  * Bind its normalized input copy to the verified snapshot so a self-consistent
  * plan cannot be relabelled as having come from another adapter.
  */
-function provenanceMatchesSnapshot(data: unknown, provenance: ConnectorResult['provenance'], connectorId: string): boolean {
+function provenanceMatchesSnapshot(
+  data: unknown,
+  provenance: ConnectorResult['provenance'],
+  connectorId: string,
+  binding: SyntheticResultReviewBinding,
+): boolean {
   const dataRecord = ownDataRecord(data)
   const snapshot = dataRecord ? ownDataRecord(dataRecord.reviewSnapshot) : null
   const payload = snapshot ? ownDataRecord(snapshot.payload) : null
-  if (!payload || !Object.hasOwn(payload, 'input') || !sameCanonicalData(provenance.untrustedContent.value, payload.input)) return false
+  if (!payload || !Object.hasOwn(payload, 'input') || provenance.retrievedAt !== binding.retrievedAt ||
+    !sameCanonicalData(provenance.untrustedContent.value, payload.input)) return false
   if (connectorId === 'text-to-3d' || connectorId === 'image-text-to-3d') {
     const source = `synthetic-3d:${connectorId}`
     return provenance.source === source && provenance.untrustedContent.source === source && !Object.hasOwn(provenance, 'runId')
@@ -501,6 +515,6 @@ export function validatedSyntheticConnectorResult<TData = unknown>(value: unknow
     throw new SyntheticResultIntegrityError()
   }
   const provenance = safeProvenance(result.provenance, connectorId)
-  if (!provenance || !provenanceMatchesSnapshot(result.data, provenance, connectorId)) throw new SyntheticResultIntegrityError()
+  if (!provenance || !provenanceMatchesSnapshot(result.data, provenance, connectorId, reviewBinding)) throw new SyntheticResultIntegrityError()
   return deepFreeze({ data: result.data as TData, provenance, confidence: 0 })
 }

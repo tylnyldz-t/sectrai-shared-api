@@ -234,7 +234,7 @@ export class GovernedConnectorRunner {
     })
     await this.quota.consume({ ...context, connectorId: connector.id, occurredAt: runTime.occurredAt })
     try {
-      const result = validatedSyntheticConnectorResult(await connector.run(input, context), connector.id, input, syntheticResultReviewBinding(context))
+      const result = validatedSyntheticConnectorResult(await connector.run(input, context), connector.id, input, syntheticResultReviewBinding(context, runTime.iso))
       const succeededAudit = await this.auditLog.append({
         type: 'connector.run.succeeded', connectorId: connector.id, product: context.product, workspaceId: context.workspaceId,
         actor: context.actor, scopes: context.scopes, costCapCents: context.costCapCents, requestedItems: context.requestedItems,

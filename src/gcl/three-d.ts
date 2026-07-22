@@ -288,7 +288,7 @@ abstract class SyntheticThreeDConnector<TInput> implements Connector<TInput, Syn
       data,
       provenance: { connectorId: this.id, source, retrievedAt, untrustedContent: isolatedContent(source, validated) },
       confidence: 0,
-    }, this.id, rawInput, syntheticResultReviewBinding(validatedContext))
+    }, this.id, rawInput, syntheticResultReviewBinding(validatedContext, retrievedAt))
   }
 }
 
