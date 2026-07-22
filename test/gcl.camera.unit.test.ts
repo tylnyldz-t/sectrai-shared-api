@@ -91,6 +91,12 @@ function connectorReturning(result: unknown): Connector {
   }
 }
 
+function cameraConnectorReturning(result: unknown): SyntheticCameraConnector {
+  const connector = enabledConnector()
+  connector.run = async () => result as ConnectorResult<CameraObservationResult>
+  return connector
+}
+
 test('camera connector defaults closed and a live opt-in remains closed', async () => {
   await assert.rejects(
     () => new SyntheticCameraConnector().run(loadingDockInput, context),
@@ -1038,6 +1044,63 @@ test('D13 governed runner rejects shaped, stale, injected, mismatched, non-synth
   assert.equal(provenanceAccessorRead, false)
 })
 
+test('D19 reconstructs the camera data plane and rejects smuggled media/device shapes before a success audit', async () => {
+  const valid = await enabledConnector().run(loadingDockInput, context)
+
+  const rawData = structuredClone(valid)
+  ;(rawData.data as CameraObservationResult & { snapshot?: string }).snapshot = 'data:image/png;base64,not-accepted'
+
+  const hiddenDeviceObservation = structuredClone(valid)
+  Object.defineProperty(hiddenDeviceObservation.data.observation, 'deviceAddress', {
+    value: 'rtsp://not-accepted.example.test/stream', enumerable: false,
+  })
+
+  const isolatedRawMedia = structuredClone(valid)
+  isolatedRawMedia.provenance.untrustedContent.value = {
+    ...valid.data.observation,
+    snapshot: 'data:image/png;base64,not-accepted',
+  }
+
+  const mismatchedIsolatedObservation = structuredClone(valid)
+  mismatchedIsolatedObservation.provenance.untrustedContent.value = {
+    ...valid.data.observation,
+    findingCode: 'MISMATCHED_SYNTHETIC_FINDING',
+  }
+
+  const wrongFixtureSource = structuredClone(valid)
+  wrongFixtureSource.provenance.source = 'synthetic-camera-fixture:synthetic-perimeter-001'
+
+  const nonzeroConfidence = structuredClone(valid)
+  nonzeroConfidence.confidence = 0.1
+
+  const accessorObservation = structuredClone(valid)
+  let accessorRead = false
+  Object.defineProperty(accessorObservation.data.observation, 'summary', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('CAMERA_RESULT_ACCESSOR_MUST_NOT_RUN') },
+  })
+
+  for (const malformed of [rawData, hiddenDeviceObservation, isolatedRawMedia, mismatchedIsolatedObservation, wrongFixtureSource, nonzeroConfidence, accessorObservation]) {
+    const setup = runnerFor(cameraConnectorReturning(malformed))
+    await assert.rejects(
+      () => setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
+      (error: unknown) => error instanceof ConnectorResultError && error.message === 'INVALID_GOVERNED_CONNECTOR_RESULT',
+    )
+    assert.deepEqual(setup.audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.failed'])
+    assert.equal((setup.quota as TestQuota).requests.length, 1)
+    assert.equal(setup.audit.entries[1]?.event.detail.errorCode, 'invalid_connector_result')
+    assert.equal(JSON.stringify(setup.audit.entries).includes('not-accepted'), false)
+  }
+  assert.equal(accessorRead, false)
+
+  const accepted = runnerFor(cameraConnectorReturning(structuredClone(valid)))
+  const result = await accepted.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
+  assert.deepEqual(result.provenance.untrustedContent.value, result.data.observation)
+  assert.equal(result.provenance.source, `synthetic-camera-fixture:${result.data.cameraFixtureId}`)
+  assert.equal(result.confidence, 0)
+  assert.deepEqual(accepted.audit.entries.map((entry) => entry.event.type), ['connector.run.requested', 'connector.run.succeeded'])
+})
+
 test('D15 seals audit events before append: shaped or cyclic events never reach the audit collaborator', async () => {
   const received: ConnectorAuditEvent[] = []
   const audit: AuditLog = {
@@ -1402,8 +1465,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14\/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, and D18 SHA-256 operations/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14\/D17.*D15.*D16.*D18/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, D14\/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, D18 SHA-256 operations, and D19 camera result data\/provenance values/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14\/D17.*D15.*D16.*D18.*D19/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 

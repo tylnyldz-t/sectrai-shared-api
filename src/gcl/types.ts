@@ -45,6 +45,13 @@ export interface Connector<TInput = unknown, TData = unknown> {
   /** Runs before audit/quota reservation so invalid synthetic work costs nothing. */
   preflight?(input: TInput, ctx: ConnectorRunContext): Promise<void> | void
   run(input: TInput, ctx: ConnectorRunContext): Promise<ConnectorResult<TData>>
+  /**
+   * Optional connector-owned data-plane reconstruction. The governed runner
+   * has already checked the generic result envelope when this runs; a
+   * connector may now reject or replace its opaque data with a bounded local
+   * copy before a success audit is appended.
+   */
+  validateResult?(result: ConnectorResult<TData>, ctx: ConnectorRunContext): ConnectorResult<TData>
 }
 
 export type ConnectorAuditEvent = {

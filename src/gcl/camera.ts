@@ -1,7 +1,7 @@
 import { createHash, Hash } from 'node:crypto'
 import { types as nodeTypes } from 'node:util'
 import { appendVerifiedAuditEvent, hashAuditEvent } from './audit.js'
-import { CameraConsentError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError } from './errors.js'
+import { CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError } from './errors.js'
 import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export const CAMERA_CONNECTOR_ID = 'camera-observation'
@@ -28,12 +28,12 @@ export const ADOS_10_CAMERA_CONTROLS: readonly AdosCameraControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every audit and review packet is bound to one product and workspace digest.' },
   { id: 'ADOS-02', control: 'MINIMIZED_SYNTHETIC_FIXTURE', enforcement: 'Only an allowlisted synthetic fixture ID and fixed finding are resolved.' },
   { id: 'ADOS-03', control: 'DEFAULT_DENY_LIVE_DISABLED', enforcement: 'Synthetic enablement and positive limits are required; a live flag is rejected.' },
-  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown, hidden, symbol, proxy, or accessor-shaped input, evidence, D8 caller-context fields, D10 execution-context/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result/provenance control plane, D14/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, and D18 SHA-256 operations—plus media, device identifiers, identity resolution, and biometric inference—are denied.' },
+  { id: 'ADOS-04', control: 'NO_MEDIA_OR_BIOMETRICS', enforcement: 'Unknown, hidden, symbol, proxy, or accessor-shaped input, evidence, D8 caller-context fields, D10 execution-context/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result/provenance control plane, D14/D17 audit append receipts and link witnesses, D15 audit events, D16 durable audit heads, D18 SHA-256 operations, and D19 camera result data/provenance values—plus media, device identifiers, identity resolution, and biometric inference—are denied.' },
   { id: 'ADOS-05', control: 'PURPOSE_BOUND_CONSENT', enforcement: 'A granted synthetic KVKK consent assertion must match the selected fixture and purpose.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'The governed run requires owner approval and separate request/check actors; review rejects the original maker.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIAL_INTERFACE', enforcement: 'The adapter has no camera SDK, network client, stream URL, credential, or provider configuration surface.' },
-  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment, D6/D7 only render minimized evidence, D8/D9 protect review context and its local clock, D10 rejects shaped execution context or an invalid provenance clock before a fixture result, D11 freezes one safe runner timestamp, D12 rejects shaped governed-run envelopes before any collaborator is used, D13 rejects malformed result/provenance control planes before a success audit, D14 accepts only an exact audit receipt shape, D15 seals the immutable audit event before its collaborator receives it, D16 verifies the existing durable head before a successor can bind to it, D17 re-hashes the sealed event against its receipt predecessor while pinning the runner-known requested predecessor, and D18 uses module-captured SHA-256 operations.' },
-  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6/D7 witnesses record only an approved or rejected decision; D8/D9 validate review context and its local clock, D10 validates only synthetic result provenance, D11 validates only local runner time, D12 validates only the request envelope, D13 permits only a fixed synthetic/no-egress result control plane, D14/D17 validate and bind the review append receipt without granting a handoff, D15 prevents the audit collaborator from mutating the review event, D16 rejects a malformed durable head without starting a review transition, and D18 keeps late SHA-256 prototype hooks outside review integrity; action, notification, publication, and handoff remain not sent.' },
+  { id: 'ADOS-08', control: 'QUOTA_AND_HASH_AUDIT', enforcement: 'Preflight precedes quota reservation and all governance decisions are appended to the scoped SHA-256 chain; D5 only read-checks a caller-supplied three-event segment, D6/D7 only render minimized evidence, D8/D9 protect review context and its local clock, D10 rejects shaped execution context or an invalid provenance clock before a fixture result, D11 freezes one safe runner timestamp, D12 rejects shaped governed-run envelopes before any collaborator is used, D13 rejects malformed result/provenance control planes before a success audit, D14 accepts only an exact audit receipt shape, D15 seals the immutable audit event before its collaborator receives it, D16 verifies the existing durable head before a successor can bind to it, D17 re-hashes the sealed event against its receipt predecessor while pinning the runner-known requested predecessor, D18 uses module-captured SHA-256 operations, and D19 reconstructs the camera result data plane before success.' },
+  { id: 'ADOS-09', control: 'OWNER_REVIEW_WITHOUT_HANDOFF', enforcement: 'Review, its receipts, and D4/D5/D6/D7 witnesses record only an approved or rejected decision; D8/D9 validate review context and its local clock, D10 validates only synthetic result provenance, D11 validates only local runner time, D12 validates only the request envelope, D13 permits only a fixed synthetic/no-egress result control plane, D14/D17 validate and bind the review append receipt without granting a handoff, D15 prevents the audit collaborator from mutating the review event, D16 rejects a malformed durable head without starting a review transition, D18 keeps late SHA-256 prototype hooks outside review integrity, and D19 rejects camera data or isolated-content values that are not the fixed no-media observation; action, notification, publication, and handoff remain not sent.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or camera connection is part of this connector.' },
 ])
 
@@ -1187,6 +1187,46 @@ export class SyntheticCameraConnector implements Connector<unknown, CameraObserv
     this.configured(executionContext)
     localCameraOccurredAt(executionContext.now, 'INVALID_CAMERA_PROVENANCE_CLOCK')
     fixtureFor(inputFrom(input))
+  }
+
+  /**
+   * D19 reconstructs the camera-owned data plane after D13 has accepted the
+   * generic envelope but before the runner can append a success audit. This
+   * keeps a substituted adapter from smuggling raw/device-shaped data through
+   * either `data` or `untrustedContent.value` under a valid-looking wrapper.
+   */
+  validateResult(result: ConnectorResult<CameraObservationResult>, ctx: ConnectorRunContext): ConnectorResult<CameraObservationResult> {
+    const data = validateCameraObservationForReview(result.data, ctx)
+    const provenance = result.provenance
+    const isolated = provenance.untrustedContent
+    let isolatedObservation: CameraObservationResult['observation']
+    try {
+      isolatedObservation = cameraObservationForReview(isolated.value)
+    } catch {
+      throw new ConnectorResultError('INVALID_CAMERA_RESULT_DATA_PLANE')
+    }
+    if (result.confidence !== 0 || provenance.source !== `synthetic-camera-fixture:${data.cameraFixtureId}` ||
+      isolated.source !== 'synthetic-camera-observation' ||
+      JSON.stringify(isolatedObservation) !== JSON.stringify(data.observation)) {
+      throw new ConnectorResultError('INVALID_CAMERA_RESULT_DATA_PLANE')
+    }
+    return {
+      data,
+      confidence: 0,
+      provenance: {
+        connectorId: CAMERA_CONNECTOR_ID,
+        source: `synthetic-camera-fixture:${data.cameraFixtureId}`,
+        retrievedAt: provenance.retrievedAt,
+        liveStatus: CAMERA_LIVE_STATUS,
+        synthetic: true,
+        untrustedContent: {
+          source: 'synthetic-camera-observation',
+          value: isolatedObservation,
+          handling: 'data-only',
+          instructionPolicy: 'UNTRUSTED_CONTENT_IS_DATA_NOT_INSTRUCTIONS',
+        },
+      },
+    }
   }
 
   async run(input: unknown, ctx: ConnectorRunContext): Promise<ConnectorResult<CameraObservationResult>> {

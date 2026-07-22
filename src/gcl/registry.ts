@@ -167,6 +167,23 @@ function governedConnectorResult(value: unknown, connectorId: string, occurredAt
 }
 
 /**
+ * D19 lets a synthetic connector close the generic D13 data-plane gap before
+ * success is audited. The generic runner deliberately keeps `data` and the
+ * isolated value opaque; a connector that opts in must reconstruct both and
+ * then pass the same control-plane boundary a second time. A verifier failure
+ * is always a result failure, never an adapter/input failure.
+ */
+function governedVerifiedConnectorResult(value: unknown, connector: Connector, context: ConnectorRunContext, occurredAt: Date): ConnectorResult {
+  const result = governedConnectorResult(value, connector.id, occurredAt)
+  if (!connector.validateResult) return result
+  try {
+    return governedConnectorResult(connector.validateResult(result, context), connector.id, occurredAt)
+  } catch {
+    throw new ConnectorResultError('INVALID_GOVERNED_CONNECTOR_RESULT')
+  }
+}
+
+/**
  * D11 freezes one trusted local timestamp for an entire governed run. The
  * runner's clock is internal infrastructure, never a provider or network time
  * source, but it still must not be a Proxy, a forged date, or a mutable
@@ -270,7 +287,7 @@ export class GovernedConnectorRunner {
     const requestedAudit = await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.requested', connector.id, context, occurredAt, {}))
     try {
       await this.quota.consume({ ...context, connectorId: connector.id, occurredAt: snapshotClock(occurredAt)() })
-      const result = governedConnectorResult(await connector.run(normalizedRequest.input, context), connector.id, occurredAt)
+      const result = governedVerifiedConnectorResult(await connector.run(normalizedRequest.input, context), connector, context, occurredAt)
       const succeededAudit = await appendVerifiedAuditEvent(this.auditLog, this.event('connector.run.succeeded', connector.id, context, occurredAt, { requestedAuditHash: requestedAudit.hash }), requestedAudit.hash)
       return { ...result, provenance: { ...result.provenance, auditHash: succeededAudit.hash } }
     } catch (error) {
