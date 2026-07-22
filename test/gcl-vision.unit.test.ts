@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
 import { Hash } from 'node:crypto'
+import { types as nodeUtilTypes } from 'node:util'
 import test from 'node:test'
 import { InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
 import { ConnectorInputError, ConnectorUnavailableError, ConsentError, CostCapError, MakerCheckerError, OwnerGateError, ScopeError } from '../src/gcl/errors.js'
@@ -94,7 +95,7 @@ test('GM2 run requires owner gate, scope, cost cap, quota, consent, and creates 
   assert.equal(proposal.evidence.rawContentStored, false)
   assert.equal(proposal.ownerReview.status, 'pending')
   assert.equal(proposal.ownerReview.automaticApply, false)
-  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v18')
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v19')
   assert.match(proposal.reviewPacket.integrityDigest, /^[a-f0-9]{64}$/)
   assert.equal(proposal.reviewPacket.scopeBinding.productDigest.length, 64)
   assert.equal(proposal.reviewPacket.consentBinding.purpose, 'document-field-extraction')
@@ -112,6 +113,7 @@ test('GM2 run requires owner gate, scope, cost cap, quota, consent, and creates 
   assert.deepEqual(proposal.reviewPacket.integrityEncodingBoundaryBinding, { encoding: 'canonical-json-utf8', objectKeyOrder: 'utf16-code-unit-ascending', toJsonHooksAccepted: false, inheritedSerializationAccepted: false })
   assert.deepEqual(proposal.reviewPacket.hashBoundaryBinding, { algorithm: 'sha256', digestEncoding: 'hex-lowercase', implementation: 'module-captured-node-crypto-hash-methods', latePatchedHashMethodsAccepted: false })
   assert.deepEqual(proposal.reviewPacket.patternBoundaryBinding, { validation: 'module-captured-regexp-exec', latePatchedRegExpMethodsAccepted: false, patternMatcherHooksAccepted: false })
+  assert.deepEqual(proposal.reviewPacket.proxyInspectionBoundaryBinding, { inspection: 'module-captured-node-util-types-isProxy', latePatchedInspectorAccepted: false, inspectionFailureAccepted: false })
   assert.equal(proposal.reviewPacket.evidenceBinding.capturedAt, input.evidence.capturedAt)
   assert.equal(proposal.reviewPacket.evidenceBinding.expiresAt, '2026-07-22T12:04:00.000Z')
   assert.equal(proposal.reviewPacket.reviewWindow.issuedAt, now().toISOString())
