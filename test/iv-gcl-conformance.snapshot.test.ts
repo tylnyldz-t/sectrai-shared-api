@@ -40,7 +40,7 @@ type Snapshot = {
 
 const AUDIT_WORKTREE_ROOT = '/home/tayla/projects/_wt'
 const GCL_ROOT = 'src/gcl/'
-/** `node:util` is limited to Camera's in-process proxy detection. */
+/** `node:util` is limited to in-process Proxy detection in Camera and RA market. */
 const ALLOWED_NONLOCAL_GCL_IMPORTS = new Set(['node:crypto', 'node:util'])
 /** Prisma is permitted only as an erased TypeScript type import in the local persistence seam. */
 const ALLOWED_TYPE_ONLY_GCL_IMPORTS = new Set(['@prisma/client'])
