@@ -1160,3 +1160,88 @@ reported rather than hidden; no migration; proposal-only/no-action output; no
 JARVIS/JNC start; and synthetic evidence is never deployment or live-enable
 authority. D14 used no credential, provider, external network, device,
 database, migration, send, publication, `main` write, or production write.
+
+## D15 — first immutable successor package
+
+D15 pins the **direct committed child** of every D14 snapshot, rather than a
+mutable sibling-worktree tip: RA OCR `f8a4a85`, RA image `d0016de`, RA
+3D/game `8ec75f6`, RA market `d1b4b97`, RFID `c793243`, translation
+`9144977`, language education `77b805a`, and camera `3a127ae`. RA voice still
+has no committed successor after D1. The fixture resolves each local commit,
+re-derives connector and runner Git blob IDs, and reads only the local GCL
+closure with `git show <revision>:<path>`. It does not import target runtime
+code or consult target worktree files, environment files, credentials,
+providers, sockets, devices, databases, migrations, or production targets.
+
+D15 additionally pins the changed image terminal-review ledger, 3D result
+boundary and game-engine companion, and camera error boundary. Translation and
+language-education D15 commits are documentation/unit-test successors: their
+audited connector and runner blobs intentionally remain identical to D14.
+Missing repositories, commits, closure objects, or any blob mismatch are
+audit failures.
+
+| Connector | D15 source-only evidence | Quota-rejection lifecycle | Strict `LIVE_DISABLED` | D15 result |
+| --- | --- | --- | --- | --- |
+| RA OCR | Field proposal records are exact-key/descriptor checked before field values are read; the packet integrity binding records that boundary | `requested` only | Pass | Nonconformant |
+| RA image | A terminal owner decision must re-read its receipt and prove the scoped succeeded-run → candidate-issuance → terminal-decision hash lineage; no media or publication path is added | `requested` only | Pass | Nonconformant |
+| RA 3D/game | Governance scopes are canonicalized before synthetic plan/result-review binding; JNC remains a no-transport, no-launch contract only | `requested` only | Pass | Nonconformant |
+| RA market | The exact own-data request envelope preserves the raw owner value until the owner gate; shaped envelopes still deny before preflight, audit, or quota | `requested` only | Pass | Nonconformant |
+| RFID | Adds a fixed program-halt-boundary review fixture that accepts no program state, violation signal, trigger, command, notification, live/pilot setting, or production bypass | `requested`, `failed` | Pass | Conformant |
+| Translation | D15 is a documentation/safety-unit successor: durable-proposal tests require a creation-audit instant bound to the mutation clock before a transaction | `requested`, `failed` | Pass | Conformant |
+| Language education | D15 unit evidence covers an owner-reviewed synthetic resource pointer only; content, links, recommendations, assignments, learner data, and egress shapes deny | `requested`, `failed` | Pass | Conformant |
+| Camera | The runner validates a fixed synthetic result/provenance control plane before success audit; the selected proxy test has a separate unit regression below | `requested`, `failed` | Pass | Source-conformant; unit regression |
+
+`Conformant` remains limited to the pinned IV synthetic governance envelope.
+It does not authorize a provider, credential/API key, network egress, real
+OCR/media/RFID/camera input, device, database, migration, JARVIS/JNC launch,
+delivery, handoff, publication, production write, or live enablement.
+
+### D15 negative and edge evidence
+
+- The audit scanner now parses TypeScript expression structure before allowing
+  `Reflect` or host-capability recovery methods to be used. Immediate
+  reflection on an ordinary fixture object remains allowed, but retaining a
+  `Reflect` method or `Object.getOwnPropertyDescriptor(s)`/
+  `Object.getPrototypeOf` through an array, object literal, sequence
+  expression, or computed member fails closed. This closes the D14
+  text-pattern gap without granting a new runtime capability.
+- D15 preserves all earlier rejection paths: dynamic load/evaluation,
+  global/browser/runtime recovery, endpoint/egress/client identifiers,
+  credential-shaped environment reads, subprocess/worker launch, automatic
+  publication, non-local runtime imports, and a relative import outside
+  `src/gcl` remain audit failures.
+- Owner denial is still statically required before connector preflight,
+  requested-audit reservation, or quota use. Quota classification remains
+  conservative: OCR, image, 3D/game, and market reserve before the protected
+  failed-audit lifecycle; RFID, translation, language education, and camera
+  reserve within the lifecycle linked to `requestedAuditHash`.
+- `npm run test:conformance` passes the entire D1–D15 immutable-pin,
+  local-closure, disabled-mode, owner-ordering, quota-classification, and
+  negative-source suite. The run uses local Git objects and in-process
+  TypeScript parsing only.
+
+### D15 selected exact-commit unit evidence and ADOS boundary
+
+The following selected **synthetic unit files** passed from temporary local
+Git archives at the D15 commits with an empty environment except `PATH`:
+3D/game JNC contract, market, translation safety, and language education.
+Database integration files were deliberately excluded; no database connection,
+migration, credential, network/device call, provider call, send, or
+publication was attempted.
+
+Camera's selected D15 unit file has 22 passing tests and one failing negative
+case. Its proxy result fixture throws `RESULT_PROXY_MUST_NOT_RUN` while the
+test connector's own `async` return is assimilating the proxy, before the
+governed runner can inspect the result envelope. The expected
+`INVALID_GOVERNED_CONNECTOR_RESULT` therefore is not reached. This is recorded
+as a unit regression, not converted into a pass or a live permission; the
+source-only D15 classification remains fail closed.
+
+All ten ADOS rules remain intact: no product data-plane join; default-deny and
+`LIVE_DISABLED`; immutable source/blob evidence only; no inferred owner
+decision; maker–checker where applicable; unresolved audit gaps and unit
+failures remain visible; no migration; proposal-only/no-action output; no
+JARVIS/JNC start; and synthetic evidence is never deployment or live-enable
+authority. D15 loaded no credential, contacted no provider or network,
+accessed no device or production database, sent nothing, and made no `main` or
+production write.
