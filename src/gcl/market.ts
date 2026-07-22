@@ -15,7 +15,7 @@ export const MARKET_REVIEW_AUDIT_WITNESS_VERSION = 'synthetic-market-review-audi
 export const MARKET_REVIEW_AUDIT_TRAIL_WITNESS_VERSION = 'synthetic-market-review-audit-trail-witness-v1'
 export const MARKET_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION = 'synthetic-market-review-audit-trail-receipt-v1'
 export const MARKET_REVIEW_EVIDENCE_MANIFEST_VERSION = 'synthetic-market-review-evidence-manifest-v1'
-const MARKET_SCOPES = ['market:discover', 'market:capacity:quote', 'market:review'] as const
+const MARKET_SCOPES = Object.freeze(['market:discover', 'market:capacity:quote', 'market:review'] as const)
 const SCOPE_ID_PATTERN = /^[a-zA-Z0-9:_-]{1,120}$/
 const DIGEST_PATTERN = /^[a-f0-9]{64}$/
 const MARKET_RUN_CONTEXT_FIELDS = ['product', 'workspaceId', 'actor', 'ownerApproved', 'scopes', 'costCapCents', 'requestedItems', 'now'] as const
@@ -40,12 +40,12 @@ export const ADOS_10_MARKET_CONTROLS: readonly AdosMarketControl[] = Object.free
   { id: 'ADOS-01', control: 'PRODUCT_WORKSPACE_ISOLATION', enforcement: 'Every plan and review packet is digest-bound to one product and workspace.' },
   { id: 'ADOS-02', control: 'SYNTHETIC_DATA_ONLY', enforcement: 'Only the bounded market request shape is accepted; no market response or provider payload is ingested.' },
   { id: 'ADOS-03', control: 'FAIL_CLOSED_CONFIGURATION', enforcement: 'Only literal GCL_MARKET_LIVE_ENABLED=false permits the synthetic adapter; absent, malformed, and true values deny.' },
-  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, D8/D9 harden local ingress, D10 snapshots context and its clock boundary, D11 requires literal owner approval, D12 snapshots the governed-run envelope, D13 snapshots canonical market input across the runner seam, D14 fixes the connector configuration snapshot, D15 fixes governed host seams and time, D16 snapshots direct market context and time, and D3/D4/D5/D6/D7 recheck evidence without a write.' },
+  { id: 'ADOS-04', control: 'STRICT_PACKET_INTEGRITY', enforcement: 'Review reconstructs the complete canonical plan; D2 rejects unknown, changed, malformed, or replayed packets, D8/D9 harden local ingress, D10 snapshots context and its clock boundary, D11 requires literal owner approval, D12 snapshots the governed-run envelope, D13 snapshots canonical market input across the runner seam, D14 fixes the connector configuration snapshot, D15 fixes governed host seams and time, D16 snapshots direct market context and time, D17 fixes the selected synthetic connector binding, and D3/D4/D5/D6/D7 recheck evidence without a write.' },
   { id: 'ADOS-05', control: 'UNTRUSTED_CONTENT_IS_DATA', enforcement: 'Request values are labelled data-only and cannot become connector instructions.' },
   { id: 'ADOS-06', control: 'OWNER_AND_MAKER_CHECKER', enforcement: 'Only the primitive boolean true passes every market owner gate; a separate canonical owner actor with market:review is required and the plan maker cannot self-review.' },
   { id: 'ADOS-07', control: 'NO_EGRESS_OR_CREDENTIALS', enforcement: 'No network client, provider URL, credential, API key, scheduler, or automatic sync exists in this connector.' },
-  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory; D5 reconstructs one caller-supplied segment, D6/D7 only minimize and recheck derived evidence, D8 leaves a malformed append undecided, D9 rejects shaped host results, D10 bounds review context and clock values, D11 rejects non-boolean approval values, D12 snapshots the runner envelope, D13 retains the market preflight snapshot, D14 fixes the connector configuration snapshot, D15 fixes governed host seams and time, and D16 snapshots direct market context and time before audit, quota, or run seams.' },
-  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet, review receipt, and D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16 evidence permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
+  { id: 'ADOS-08', control: 'BOUNDED_GOVERNANCE', enforcement: 'Preflight, independent cost and quota limits, and the scoped SHA-256 audit chain remain mandatory; D5 reconstructs one caller-supplied segment, D6/D7 only minimize and recheck derived evidence, D8 leaves a malformed append undecided, D9 rejects shaped host results, D10 bounds review context and clock values, D11 rejects non-boolean approval values, D12 snapshots the runner envelope, D13 retains the market preflight snapshot, D14 fixes the connector configuration snapshot, D15 fixes governed host seams and time, D16 snapshots direct market context and time, and D17 fixes the selected synthetic connector binding before audit, quota, or run seams.' },
+  { id: 'ADOS-09', control: 'NO_MARKET_ACTION', enforcement: 'The packet, review receipt, and D4/D5/D6/D7/D8/D9/D10/D11/D12/D13/D14/D15/D16/D17 evidence permanently report no quote, reservation, booking, publication, handoff, or automatic action.' },
   { id: 'ADOS-10', control: 'NO_LAUNCH_OR_PRODUCTION_WRITE', enforcement: 'No production migration, main/prod write, live launch, or market-provider integration is part of this connector.' },
 ])
 
@@ -1465,25 +1465,29 @@ export class SyntheticMarketConnector implements Connector<SyntheticMarketInput,
   readonly authKind = 'owner-token' as const
   readonly quotaGroup = 'market'
   readonly scopes = MARKET_SCOPES
-  private readonly config: SyntheticMarketConnectorConfig | null
+  // `#config` cannot be shadowed through normal object-property mutation.
+  // D17 additionally freezes this instance after its own run/preflight data
+  // functions have been installed, so a later async seam cannot replace them.
+  readonly #config: SyntheticMarketConnectorConfig | null
 
   constructor(config: SyntheticMarketConnectorConfig = {}) {
-    this.config = snapshotMarketConnectorConfig(config)
+    this.#config = snapshotMarketConnectorConfig(config)
+    Object.freeze(this)
   }
 
   /**
    * D13 returns the newly parsed scalar-only request rather than retaining a
    * caller-owned input object. D14 similarly fixes the constructor's
-   * configuration snapshot. The governed runner then crosses its asynchronous
-   * audit and quota boundaries without retaining either caller-owned value.
+   * configuration snapshot. D17 keeps this own data-function fixed while the
+   * governed runner crosses its asynchronous audit and quota boundaries.
    */
-  preflight(input: SyntheticMarketInput, ctx: ConnectorRunContext): SyntheticMarketInput {
-    return validatedRequest(this.config, input, marketRunContext(ctx))
+  readonly preflight = (input: SyntheticMarketInput, ctx: ConnectorRunContext): SyntheticMarketInput => {
+    return validatedRequest(this.#config, input, marketRunContext(ctx))
   }
 
-  async run(input: SyntheticMarketInput, ctx: ConnectorRunContext): Promise<ConnectorResult<SyntheticMarketPlan>> {
+  readonly run = async (input: SyntheticMarketInput, ctx: ConnectorRunContext): Promise<ConnectorResult<SyntheticMarketPlan>> => {
     const safeContext = marketRunContext(ctx)
-    const request = validatedRequest(this.config, input, safeContext)
+    const request = validatedRequest(this.#config, input, safeContext)
     const occurredAt = marketRunNow(safeContext)
     const binding = planBinding(safeContext)
     const plan = syntheticMarketPlan(binding, request)

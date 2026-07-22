@@ -622,6 +622,48 @@ test('D16 rejects shaped direct market contexts and invalid clocks without evalu
   )
 })
 
+test('D17 fixes the synthetic connector instance and its method bindings across governed async seams', async () => {
+  const connector = new SyntheticMarketConnector(limits)
+  assert.equal(Object.isFrozen(connector), true)
+  assert.equal(Object.isFrozen(connector.scopes), true)
+  assert.equal(Object.getOwnPropertyDescriptor(connector, 'preflight')?.writable, false)
+  assert.equal(Object.getOwnPropertyDescriptor(connector, 'run')?.configurable, false)
+  assert.equal(Object.getOwnPropertyNames(connector).includes('config'), false)
+
+  let firstAppend: (() => void) | undefined
+  const waitForFirstAppend = new Promise<void>((resolve) => { firstAppend = resolve })
+  let releaseRequestedAudit: (() => void) | undefined
+  const requestedAuditReleased = new Promise<void>((resolve) => { releaseRequestedAudit = resolve })
+  let appendCalls = 0
+  const audit = {
+    async append() {
+      appendCalls += 1
+      if (appendCalls === 1) {
+        firstAppend?.()
+        await requestedAuditReleased
+      }
+      return { hash: appendCalls === 1 ? 'a'.repeat(64) : 'b'.repeat(64) }
+    },
+  }
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+  const governedRun = runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
+  await waitForFirstAppend
+
+  assert.throws(() => Object.defineProperty(connector, 'run', { value: async () => { throw new Error('MUTATED_RUN_MUST_NOT_EXECUTE') } }))
+  assert.throws(() => Object.defineProperty(connector, 'preflight', { value: () => { throw new Error('MUTATED_PREFLIGHT_MUST_NOT_EXECUTE') } }))
+  assert.throws(() => Object.defineProperty(connector, 'config', { value: { liveEnabled: true } }))
+  assert.throws(() => Object.setPrototypeOf(connector, { run: async () => { throw new Error('PROTOTYPE_RUN_MUST_NOT_EXECUTE') } }))
+  assert.throws(() => (connector.scopes as string[]).push('market:provider:write'))
+
+  releaseRequestedAudit?.()
+  const result = await governedRun
+  assert.equal((result.data as SyntheticMarketPlan).liveStatus, 'LIVE_DISABLED')
+  assert.deepEqual((result.data as SyntheticMarketPlan).sideEffects, { externalNetwork: false, reservation: false, booking: false, publication: false })
+  assert.equal(appendCalls, 2)
+  assert.equal(quota.requests.length, 1)
+})
+
 test('a distinct owner can audit a market review, but neither decision can authorize an execution', async () => {
   const setup = marketRunner()
   const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
@@ -1531,6 +1573,7 @@ test('ADOS 10 controls are complete and explicitly prohibit egress and productio
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D14 fixes the connector configuration snapshot/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D15 fixes governed host seams and time/i)
   assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D16 snapshots direct market context and time/i)
+  assert.match(ADOS_10_MARKET_CONTROLS[7]?.enforcement ?? '', /D17 fixes the selected synthetic connector binding/i)
   assert.match(ADOS_10_MARKET_CONTROLS[6]?.enforcement ?? '', /No network client, provider URL, credential, API key/i)
   assert.match(ADOS_10_MARKET_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
