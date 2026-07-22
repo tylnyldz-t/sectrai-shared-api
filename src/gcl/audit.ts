@@ -22,6 +22,9 @@ const SCOPE_ID = /^[a-z][a-z0-9:-]{0,79}$/
 const ERROR_CODE = /^[a-z][a-z0-9_]{0,79}$/
 const REVIEW_POLICY_VERSION = 'gcl-translation-synthetic-v1'
 const PROPOSAL_KEYS = ['kind', 'contentHash', 'mediaType', 'source', 'synthetic', 'approvalState', 'autoPublish', 'reviewPolicyVersion', 'reviewExpiresAt'] as const
+const TEXT_TRANSLATION_SCOPES = ['translation:text'] as const
+const SPEECH_TRANSLATION_SCOPES = ['translation:speech'] as const
+const ARTIFACT_APPROVAL_SCOPES = ['translation:artifact:approve'] as const
 
 function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
@@ -52,6 +55,20 @@ function scopes(value: unknown): value is readonly string[] {
     && value.length <= 12
     && value.every((scope) => typeof scope === 'string' && SCOPE_ID.test(scope))
     && new Set(value).size === value.length
+}
+
+/**
+ * Scope names alone are insufficient provenance: each synthetic connector has
+ * one immutable run scope, and checker decisions have their own zero-cost
+ * scope. This makes a hash-valid but semantically forged audit row unusable.
+ */
+function exactScopes(value: unknown, expected: readonly string[]): boolean {
+  return scopes(value) && value.length === expected.length && value.every((scope, index) => scope === expected[index])
+}
+
+function connectorRunScopes(connectorId: unknown, value: unknown): boolean {
+  return (connectorId === 'translation-text-synthetic' && exactScopes(value, TEXT_TRANSLATION_SCOPES))
+    || (connectorId === 'translation-speech-synthetic' && exactScopes(value, SPEECH_TRANSLATION_SCOPES))
 }
 
 function validArtifactBinding(connectorId: unknown, value: Record<string, unknown>): boolean {
@@ -126,7 +143,7 @@ function artifactDetail(value: unknown, state: 'pending-checker-approval' | 'app
 function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
   if (!isObject(value) || !hasExactlyKeys(value, ['type', 'connectorId', 'product', 'workspaceId', 'actor', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'])) return false
   if (typeof value.type !== 'string'
-    || !CONNECTOR_ID.test(value.connectorId as string)
+    || typeof value.connectorId !== 'string' || !CONNECTOR_ID.test(value.connectorId)
     || typeof value.product !== 'string' || !PRODUCT_ID.test(value.product)
     || typeof value.workspaceId !== 'string' || !WORKSPACE_ID.test(value.workspaceId)
     || !canonicalActor(value.actor)
@@ -135,16 +152,16 @@ function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
     || !safeInteger(value.requestedItems, 100_000)
     || !canonicalTimestamp(value.occurredAt)) return false
 
-  if (value.type === 'connector.run.requested') return isObject(value.detail) && hasExactlyKeys(value.detail, []) && value.costCapCents >= 1 && value.requestedItems >= 1
+  if (value.type === 'connector.run.requested') return connectorRunScopes(value.connectorId, value.scopes) && isObject(value.detail) && hasExactlyKeys(value.detail, []) && value.costCapCents >= 1 && value.requestedItems === 1
   if (value.type === 'connector.run.succeeded') {
-    if (!isObject(value.detail) || value.costCapCents < 1 || value.requestedItems < 1 || typeof value.detail.requestedAuditHash !== 'string' || !SHA256.test(value.detail.requestedAuditHash)) return false
+    if (!connectorRunScopes(value.connectorId, value.scopes) || !isObject(value.detail) || value.costCapCents < 1 || value.requestedItems !== 1 || typeof value.detail.requestedAuditHash !== 'string' || !SHA256.test(value.detail.requestedAuditHash)) return false
     if (hasExactlyKeys(value.detail, ['requestedAuditHash'])) return true
     return hasExactlyKeys(value.detail, ['requestedAuditHash', 'artifact']) && artifactProposalDetail(value.connectorId, value.detail.artifact)
   }
-  if (value.type === 'connector.run.failed') return isObject(value.detail) && hasExactlyKeys(value.detail, ['requestedAuditHash', 'error']) && typeof value.detail.requestedAuditHash === 'string' && SHA256.test(value.detail.requestedAuditHash) && typeof value.detail.error === 'string' && ERROR_CODE.test(value.detail.error) && value.costCapCents >= 1 && value.requestedItems >= 1
-  if (value.type === 'translation.artifact.created') return isObject(value.detail) && artifactDetail(value.detail, 'pending-checker-approval') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents >= 1 && value.requestedItems >= 1
-  if (value.type === 'translation.artifact.approved') return isObject(value.detail) && artifactDetail(value.detail, 'approved') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
-  if (value.type === 'translation.artifact.rejected') return isObject(value.detail) && artifactDetail(value.detail, 'rejected') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
+  if (value.type === 'connector.run.failed') return connectorRunScopes(value.connectorId, value.scopes) && isObject(value.detail) && hasExactlyKeys(value.detail, ['requestedAuditHash', 'error']) && typeof value.detail.requestedAuditHash === 'string' && SHA256.test(value.detail.requestedAuditHash) && typeof value.detail.error === 'string' && ERROR_CODE.test(value.detail.error) && value.costCapCents >= 1 && value.requestedItems === 1
+  if (value.type === 'translation.artifact.created') return connectorRunScopes(value.connectorId, value.scopes) && isObject(value.detail) && artifactDetail(value.detail, 'pending-checker-approval') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents >= 1 && value.requestedItems === 1
+  if (value.type === 'translation.artifact.approved') return exactScopes(value.scopes, ARTIFACT_APPROVAL_SCOPES) && isObject(value.detail) && artifactDetail(value.detail, 'approved') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
+  if (value.type === 'translation.artifact.rejected') return exactScopes(value.scopes, ARTIFACT_APPROVAL_SCOPES) && isObject(value.detail) && artifactDetail(value.detail, 'rejected') && validArtifactBinding(value.connectorId, value.detail) && value.costCapCents === 0 && value.requestedItems === 0
   return false
 }
 

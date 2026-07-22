@@ -184,6 +184,16 @@ raw exception) is still invalid: it returns `GCL_AUDIT_CHAIN_INVALID` and no
 new entry is appended. Run failures retain only a stable error code, never an
 exception message.
 
+Audit provenance also binds the event's semantics, not merely its field
+shapes: text runs and their creation event must have exactly
+`["translation:text"]`; speech runs and their creation event must have exactly
+`["translation:speech"]`; and checker decisions must have exactly
+`["translation:artifact:approve"]` with zero cost/items. Every run and
+creation event has exactly one requested item. A hash-valid persisted row that
+uses another syntactically valid scope or a multi-item run is an invalid chain
+(`GCL_AUDIT_CHAIN_INVALID`), so no new audit row, proposal, or decision can be
+written from it.
+
 For an artifact-producing success, the `succeeded` audit event contains the
 complete metadata-only proposal envelope (binding, content hash, synthetic
 marker, review policy, and expiry), never fixture content. A durable artifact
