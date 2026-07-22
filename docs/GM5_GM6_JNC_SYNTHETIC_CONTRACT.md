@@ -187,6 +187,12 @@ proposal-only, owner-review, not-published state and their matching
 owner-evidence state, disabled publication, and the exact contract-only
 GPU/JNC forms.
 
+GM5 additionally binds the displayed artifact's `outputFormat` to the frozen,
+normalized submitted input. A self-consistent, re-hashed review snapshot cannot
+therefore turn a requested `glb` proposal into an `obj` proposal (or the
+reverse). This is an egress consistency check only: it does not create a file,
+convert an asset, invoke Blender, contact JNC, or authorize a hand-off.
+
 The policy also binds provenance to the snapshot input: GM5 must use its own
 `synthetic-3d:<connector>` source and no run ID; GM6 must use
 `synthetic-game-engine-plan`, `game-engine-input`, and the plan's build ID.

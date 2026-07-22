@@ -179,6 +179,40 @@ test('GM5 final egress binds the optional GPU contract card to the submitted pla
   assert.equal(unexpectedRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
 })
 
+test('GM5 final egress binds the synthetic artifact output format to the submitted plan', async () => {
+  const input = { prompt: 'A local GLB-only synthetic proposal', outputFormat: 'glb' as const }
+  const genuine = await new SyntheticTextToThreeDConnector(threeDConfig()).run(input, directContext())
+  const matchingObjPlan = await new SyntheticTextToThreeDConnector(threeDConfig()).run(
+    { prompt: 'A local OBJ-only synthetic proposal', outputFormat: 'obj' }, directContext(),
+  )
+  assert.equal(matchingObjPlan.data.artifact.outputFormat, 'obj')
+  assert.equal((matchingObjPlan.data.reviewSnapshot.payload.input as { outputFormat: string }).outputFormat, 'obj')
+  const substitutedArtifact = { ...genuine.data.artifact, outputFormat: 'obj' as const }
+  const substitutedPayload = { ...genuine.data.reviewSnapshot.payload, artifact: substitutedArtifact }
+  const substitutedSnapshot = createSyntheticReviewSnapshot({
+    connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, payload: substitutedPayload,
+  })
+  const substitutedData = deepFreeze({
+    ...genuine.data,
+    artifact: substitutedArtifact,
+    integrity: substitutedSnapshot.integrity,
+    reviewReceipt: substitutedSnapshot.reviewReceipt,
+    reviewSnapshot: substitutedSnapshot,
+  }) as unknown as SyntheticThreeDResult
+  const substitutedConnector: Connector = {
+    id: 'text-to-3d', kind: 'media-3d', authKind: 'owner-approval', scopes: ['3d:generate'],
+    async run() { return { data: substitutedData, provenance: genuine.provenance, confidence: 0 } },
+  }
+  const substitutedRun = runner(substitutedConnector)
+
+  await assert.rejects(substitutedRun.run.run(request({ input })), SyntheticResultIntegrityError)
+  assert.equal(substitutedRun.quota.reservations.length, 1)
+  assert.equal(substitutedRun.audit.entries.length, 2)
+  assert.equal(substitutedRun.audit.entries[1]?.event.type, 'connector.run.failed')
+  assert.equal(substitutedRun.audit.entries[1]?.event.detail.error, 'synthetic_result_integrity_invalid')
+  assert.equal(verifiedAuditChainHead(substitutedRun.audit.entries), substitutedRun.audit.entries[1]?.hash)
+})
+
 test('synthetic review receipts are scope-bound, verify their plan digest, and fail closed on corruption', () => {
   const payload = { connectorId: 'text-to-3d', scope: { product: 'sectrai-gm-contract-test', workspaceId: 'gm-workspace' }, artifact: 'synthetic-only' }
   const integrity = createSyntheticPlanIntegrity(payload)

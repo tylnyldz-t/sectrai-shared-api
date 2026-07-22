@@ -70,4 +70,5 @@ different valid synthetic plan cannot be substituted after preflight.
 Its final boundary also binds the snapshot's product/workspace, owner actor,
 and cost/item reservation data to the governed request, rejecting replay from
 a different synthetic scope, owner, or quota context. GM5 proposal IDs and
-optional GPU-card requests are bound to that same frozen review plan.
+optional GPU-card requests are bound to that same frozen review plan; its
+displayed output format must also match the submitted synthetic proposal.
