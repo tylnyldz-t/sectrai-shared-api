@@ -1067,7 +1067,7 @@ test('D18 binds regex validation and rejects late RegExp prototype hooks before 
   const runner = new GovernedConnectorRunner(new ConnectorRegistry([configuredConnector(60, 300)]), audit, quota, now)
   const result = await runner.run({ connectorId: VISION_DOCUMENT_FIELD_EXTRACTION_CONNECTOR_ID, input, ...context }) as ConnectorResult<DocumentFieldExtractionData>
   const clone = () => JSON.parse(JSON.stringify(result.data.proposal)) as typeof result.data.proposal
-  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v19')
+  assert.equal(result.data.proposal.reviewPacket.version, 'synthetic-document-review-packet-v20')
   assert.deepEqual(result.data.proposal.reviewPacket.patternBoundaryBinding, {
     validation: 'module-captured-regexp-exec',
     latePatchedRegExpMethodsAccepted: false,
@@ -1174,6 +1174,73 @@ test('D19 binds the module-captured Proxy inspector and ignores a late node:util
   assert.equal(proposalTraps, 0)
   assert.equal(reviewed?.decision, 'approved')
   assert.equal(audit.entries.length, 1)
+})
+
+test('D20 binds a strict audit receipt and does not report a review as successful with malformed audit output', async () => {
+  const proposal = (await configuredConnector(60, 300).run(input, context)).data.proposal
+  const clone = () => JSON.parse(JSON.stringify(proposal)) as typeof proposal
+  assert.equal(proposal.reviewPacket.version, 'synthetic-document-review-packet-v20')
+  assert.deepEqual(proposal.reviewPacket.auditReceiptBoundaryBinding, {
+    receiptShape: 'plain-own-enumerable-sha256-hash-only',
+    malformedReceiptAccepted: false,
+    reviewResultRequiresValidatedAuditHash: true,
+  })
+
+  let preAppendCalls = 0
+  const preAppendAudit = { async append(): Promise<{ hash: string }> { preAppendCalls += 1; return { hash: 'd'.repeat(64) } } }
+  const missingBinding = clone()
+  delete (missingBinding.reviewPacket as { auditReceiptBoundaryBinding?: unknown }).auditReceiptBoundaryBinding
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(missingBinding, 'approved', true, 'checker@example.test', preAppendAudit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_AUDIT_RECEIPT_BOUNDARY_BINDING')
+
+  const extraBindingField = clone()
+  ;(extraBindingField.reviewPacket.auditReceiptBoundaryBinding as { extension?: unknown }).extension = 'forbidden'
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(extraBindingField, 'approved', true, 'checker@example.test', preAppendAudit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_DOCUMENT_REVIEW_AUDIT_RECEIPT_BOUNDARY_BINDING_FIELD')
+
+  const alteredBinding = clone()
+  alteredBinding.reviewPacket.auditReceiptBoundaryBinding.malformedReceiptAccepted = true as never
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(alteredBinding, 'approved', true, 'checker@example.test', preAppendAudit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_AUDIT_RECEIPT_BOUNDARY_BINDING')
+
+  const legacyPacket = clone()
+  legacyPacket.reviewPacket.version = 'synthetic-document-review-packet-v19' as never
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(legacyPacket, 'approved', true, 'checker@example.test', preAppendAudit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
+  assert.equal(preAppendCalls, 0)
+
+  const malformedReceipts: unknown[] = [undefined, { hash: 'D'.repeat(64) }, { hash: 'd'.repeat(63) }, { hash: 'd'.repeat(64), extension: true }]
+  let receiptAppendCalls = 0
+  for (const receipt of malformedReceipts) {
+    const malformedAudit = { async append(): Promise<{ hash: string }> { receiptAppendCalls += 1; return receipt as never } }
+    await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', malformedAudit, context), (error: unknown) => error instanceof ConnectorInputError && (error.message === 'INVALID_DOCUMENT_REVIEW_AUDIT_RECEIPT' || error.message === 'UNEXPECTED_DOCUMENT_REVIEW_AUDIT_RECEIPT_FIELD'))
+  }
+
+  let accessorRead = false
+  const accessorReceipt: Record<string, unknown> = {}
+  Object.defineProperty(accessorReceipt, 'hash', {
+    enumerable: true,
+    get: () => { accessorRead = true; throw new Error('AUDIT_RECEIPT_ACCESSOR_MUST_NOT_RUN') },
+  })
+  const accessorAudit = { async append(): Promise<{ hash: string }> { receiptAppendCalls += 1; return accessorReceipt as never } }
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', accessorAudit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'UNEXPECTED_DOCUMENT_REVIEW_AUDIT_RECEIPT_FIELD')
+  assert.equal(accessorRead, false)
+
+  let receiptTraps = 0
+  const proxiedReceipt = new Proxy({ hash: 'd'.repeat(64) }, {
+    // Promise resolution checks `then` before the adapter receives the result.
+    get(_target, key) {
+      if (key === 'then') return undefined
+      receiptTraps += 1
+      throw new Error('AUDIT_RECEIPT_PROXY_TRAP_MUST_NOT_RUN')
+    },
+    getPrototypeOf() { receiptTraps += 1; throw new Error('AUDIT_RECEIPT_PROXY_TRAP_MUST_NOT_RUN') },
+  })
+  const proxyAudit = { async append(): Promise<{ hash: string }> { receiptAppendCalls += 1; return proxiedReceipt as never } }
+  await assert.rejects(() => independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', proxyAudit, context), (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_DOCUMENT_REVIEW_AUDIT_RECEIPT')
+  assert.equal(receiptTraps, 0)
+  assert.equal(receiptAppendCalls, malformedReceipts.length + 2)
+
+  const validAudit = { async append(): Promise<{ hash: string }> { return { hash: 'd'.repeat(64) } } }
+  const reviewed = await independentlyReviewSyntheticDocumentProposal(clone(), 'approved', true, 'checker@example.test', validAudit, context)
+  assert.equal(reviewed.auditHash, 'd'.repeat(64))
+  assert.equal(reviewed.mesaEvidenceHandoff.sent, false)
 })
 
 test('environment construction has no credential input and accepts only explicit synthetic mode', async () => {
