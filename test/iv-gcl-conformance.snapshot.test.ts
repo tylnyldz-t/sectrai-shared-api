@@ -166,7 +166,8 @@ function gitBlobId(source: string): string {
 
 function parsedTypeScriptSource(source: string): ts.SourceFile {
   const sourceFile = ts.createSourceFile('gcl-audit.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS)
-  if (sourceFile.parseDiagnostics.length > 0) throw new Error('GCL_AUDIT_INVALID_TYPESCRIPT_SOURCE')
+  const parseDiagnostics = (sourceFile as unknown as { parseDiagnostics?: readonly ts.Diagnostic[] }).parseDiagnostics
+  if (parseDiagnostics && parseDiagnostics.length > 0) throw new Error('GCL_AUDIT_INVALID_TYPESCRIPT_SOURCE')
   return sourceFile
 }
 
