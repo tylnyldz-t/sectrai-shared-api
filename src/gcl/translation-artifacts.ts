@@ -1,5 +1,6 @@
 import { type Prisma, type PrismaClient } from '@prisma/client'
 import { appendAuditEvent, requireSuccessfulRunAudit, requireTranslationArtifactLifecycleAudit } from './audit.js'
+import { requireGclTenantContext, validGclTenantContext } from './context.js'
 import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorUnavailableError, MakerCheckerError } from './errors.js'
 import { translationArtifactReviewDigest } from './translation-artifact-review.js'
 import type { AuditLog, ConnectorAuditEvent, TranslationArtifactProposal } from './types.js'
@@ -158,8 +159,7 @@ function toRecord(record: { id: string; product: string; workspaceId: string; va
   const stored = storedArtifact(record.values)
   if (!stored
     || typeof record.id !== 'string' || !/^[a-zA-Z0-9_-]{1,120}$/.test(record.id)
-    || typeof record.product !== 'string' || !/^[a-z0-9][a-z0-9-]{0,80}$/.test(record.product)
-    || typeof record.workspaceId !== 'string' || !/^[a-zA-Z0-9:_-]{1,120}$/.test(record.workspaceId)
+    || !validGclTenantContext(record)
     || record.status !== stored.approvalState
     || !canonicalActor(record.createdBy)
     || !(record.createdAt instanceof Date) || Number.isNaN(record.createdAt.valueOf())) return null
@@ -211,6 +211,7 @@ export class PrismaTranslationArtifactStore {
 
   /** Atomically persists metadata and its creation audit row; no raw content enters either. */
   async proposeAndAudit(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: TranslationArtifactProposal; runAuditHash: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord; auditHash: string }> {
+    requireGclTenantContext(input)
     if (!validCreationAuditInput(input)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_CREATION_AUDIT_INVALID')
     return this.prisma.$transaction(async (transaction) => {
       const proposal = translationArtifactProposal(input.connectorId, input.proposal)
@@ -248,6 +249,7 @@ export class PrismaTranslationArtifactStore {
   }
 
   async get(product: string, workspaceId: string, id: string): Promise<TranslationArtifactRecord | null> {
+    requireGclTenantContext({ product, workspaceId })
     return this.prisma.$transaction(async (transaction) => {
       const record = await transaction.record.findFirst({ where: { id, product, workspaceId, moduleId: GCL_TRANSLATION_ARTIFACT_MODULE_ID } })
       if (!record) return null
@@ -260,6 +262,7 @@ export class PrismaTranslationArtifactStore {
 
   /** The compare-and-set decision and its audit row share one transaction. */
   async decideAndAudit(input: { product: string; workspaceId: string; id: string; actor: string; decision: TranslationArtifactDecision; reviewDigest: string; now: Date; audit: ArtifactAuditContext }): Promise<{ artifact: TranslationArtifactRecord | null; auditHash?: string }> {
+    requireGclTenantContext(input)
     if (!validDecisionAuditInput(input)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_DECISION_AUDIT_INVALID')
     const decidedAt = input.now.toISOString()
     return this.prisma.$transaction(async (transaction) => {
@@ -323,6 +326,7 @@ export class InMemoryTranslationArtifactStore {
   }
 
   async propose(input: { product: string; workspaceId: string; actor: string; connectorId: string; proposal: TranslationArtifactProposal; runAuditHash: string }): Promise<TranslationArtifactRecord> {
+    requireGclTenantContext(input)
     const proposal = translationArtifactProposal(input.connectorId, input.proposal)
     if (!proposal || !AUDIT_SHA256.test(input.runAuditHash)) throw new ConnectorUnavailableError('TRANSLATION_ARTIFACT_PROPOSAL_INVALID')
     const pending = { connectorId: input.connectorId, ...proposal, runAuditHash: input.runAuditHash }
@@ -357,6 +361,7 @@ export class InMemoryTranslationArtifactStore {
   }
 
   async get(product: string, workspaceId: string, id: string): Promise<TranslationArtifactRecord | null> {
+    requireGclTenantContext({ product, workspaceId })
     const artifact = this.entries.find((entry) => entry.id === id && entry.product === product && entry.workspaceId === workspaceId)
     if (!artifact) return null
     const stored = storedArtifact({
@@ -379,6 +384,7 @@ export class InMemoryTranslationArtifactStore {
   }
 
   async decide(input: { product: string; workspaceId: string; id: string; actor: string; decision: TranslationArtifactDecision; reviewDigest: string; now: Date }): Promise<TranslationArtifactRecord | null> {
+    requireGclTenantContext(input)
     const index = this.entries.findIndex((entry) => entry.id === input.id && entry.product === input.product && entry.workspaceId === input.workspaceId)
     if (index < 0) return null
     const artifact = await this.get(input.product, input.workspaceId, input.id)

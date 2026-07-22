@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { hashAuditEvent, InMemoryHashChainAuditLog } from '../src/gcl/audit.js'
-import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, QuotaError, ScopeError } from '../src/gcl/errors.js'
+import { ArtifactReviewBindingError, ArtifactReviewExpiredError, ArtifactStateError, ConnectorContextError, ConnectorInputError, ConnectorUnavailableError, CostCapError, MakerCheckerError, OwnerGateError, QuotaError, ScopeError } from '../src/gcl/errors.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
 import { InMemoryTranslationArtifactStore, PrismaTranslationArtifactStore, translationArtifactReviewDigest } from '../src/gcl/translation-artifacts.js'
 import { LIVE_DISABLED, SPEECH_TRANSLATION_CONNECTOR_ID, SYNTHETIC_TRANSLATION_ONLY, SyntheticSpeechTranslationConnector, SyntheticTextTranslationConnector, TEXT_TRANSLATION_CONNECTOR_ID, translationConnectorsFromEnvironment, type SpeechTranslationData, type SpeechTranslationInput, type TextTranslationData, type TextTranslationInput, type TranslationConnectorConfig } from '../src/gcl/translation.js'
@@ -160,6 +160,33 @@ test('an invalid run clock fails closed before preflight, audit, or quota reserv
 
   await assert.rejects(() => runner.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: textInput(), ...context }), (error: unknown) => error instanceof ConnectorUnavailableError && error.message === 'CONNECTOR_RUN_CLOCK_INVALID')
   assert.equal(preflightCalls, 0)
+  assert.equal(audit.entries.length, 0)
+  assert.equal(quota.requests.length, 0)
+})
+
+test('a malformed tenant envelope fails closed before preflight, audit, quota, or adapter execution', async () => {
+  let preflightCalls = 0
+  let adapterCalls = 0
+  const connector: Connector = {
+    id: TEXT_TRANSLATION_CONNECTOR_ID,
+    kind: 'text-translation',
+    authKind: 'owner-token',
+    scopes: ['translation:text'],
+    preflight(): void { preflightCalls += 1 },
+    async run(): Promise<ConnectorResult> { adapterCalls += 1; throw new Error('must not run') },
+  }
+  const audit = new InMemoryHashChainAuditLog()
+  const quota = new TestQuota()
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+
+  for (const invalidContext of [
+    { product: 'translation-test', workspaceId: context.workspaceId },
+    { product: context.product, workspaceId: ' ws-translation' },
+  ]) {
+    await assert.rejects(() => runner.run({ connectorId: TEXT_TRANSLATION_CONNECTOR_ID, input: textInput(), ...context, ...invalidContext }), (error: unknown) => error instanceof ConnectorContextError && error.message === 'INVALID_CONNECTOR_TENANT_CONTEXT')
+  }
+  assert.equal(preflightCalls, 0)
+  assert.equal(adapterCalls, 0)
   assert.equal(audit.entries.length, 0)
   assert.equal(quota.requests.length, 0)
 })

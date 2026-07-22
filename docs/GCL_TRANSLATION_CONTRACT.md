@@ -42,13 +42,27 @@ does not trim or otherwise rewrite a padded scope into an accepted authority;
 such a request returns `INVALID_CONNECTOR_SCOPES` before the runner, artifact
 store, audit log, or quota can observe it.
 
-The owner actor is likewise a canonical audit identity, not display text. The
-HTTP boundary rejects a blank or whitespace-padded `X-Sectrai-Owner-Actor`
-with `INVALID_OWNER_ACTOR`; it never trims that header into a different maker
-or checker. The connector configuration is equally closed: the presence of a
+The owner actor is likewise a canonical audit identity, not display text. GCL
+code never trims a received `X-Sectrai-Owner-Actor` into a different maker or
+checker; blank or noncanonical received values return `INVALID_OWNER_ACTOR`.
+HTTP parsers normalize grammar-level header whitespace before application code
+receives it, so the auditable identity is the canonical value made available by
+that parser. Direct GCL callers cannot use a padded actor identity. The
+connector configuration is equally closed: the presence of a
 `liveOptInRequested` construction field, even `false`, is a poison pill. This
 keeps programmatic construction aligned with the environment rule for
 `GCL_TRANSLATION_LIVE_ENABLED`.
+
+## Canonical tenant envelope
+
+The connector runner, audit validator, and both artifact stores require the
+same product/workspace envelope before touching preflight, quota, audit, or
+metadata. Product must match `sectrai-[a-z0-9-]{1,80}` and workspace must
+match `[a-zA-Z0-9:_-]{1,120}` exactly. No caller is allowed to trim, broaden,
+or substitute either value. This protects direct programmatic use as well as
+the HTTP route: a malformed tenant envelope returns
+`INVALID_CONNECTOR_TENANT_CONTEXT` with no connector, quota, audit, or durable
+artifact side effect.
 
 ## Canonical synthetic run clock
 
@@ -292,7 +306,8 @@ artifact.
 ## ADOS boundary checklist (10 rules)
 
 1. Product/workspace scope is retained; no cross-product DB query, runtime
-   import, or shared in-process state is introduced.
+   import, or shared in-process state is introduced. Every GCL entry point
+   validates the canonical tenant envelope before preflight or persistence.
 2. The connector stays `LIVE_DISABLED`; it has no credential, provider URL,
    HTTP client, or outbound request capability.
 3. Synthetic enablement, owner token, and canonical owner actor default to

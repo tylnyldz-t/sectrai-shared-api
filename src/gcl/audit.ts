@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { type Prisma, type PrismaClient } from '@prisma/client'
+import { validGclTenantContext } from './context.js'
 import { ConnectorUnavailableError } from './errors.js'
 import { translationArtifactReviewDigest } from './translation-artifact-review.js'
 import type { TranslationArtifactRecord } from './translation-artifacts.js'
@@ -16,8 +17,6 @@ type AuditRecordValue = {
 const SHA256 = /^[a-f0-9]{64}$/
 const CONTENT_HASH = /^sha256:[a-f0-9]{64}$/
 const CONNECTOR_ID = /^translation-(?:text|speech)-synthetic$/
-const PRODUCT_ID = /^[a-z0-9][a-z0-9-]{0,80}$/
-const WORKSPACE_ID = /^[a-zA-Z0-9:_-]{1,120}$/
 const ACTOR_ID = /^[a-zA-Z0-9:_@. -]{1,160}$/
 const SCOPE_ID = /^[a-z][a-z0-9:-]{0,79}$/
 const ERROR_CODE = /^[a-z][a-z0-9_]{0,79}$/
@@ -188,8 +187,7 @@ function validAuditEvent(value: unknown): value is ConnectorAuditEvent {
   if (!isObject(value) || !hasExactlyKeys(value, ['type', 'connectorId', 'product', 'workspaceId', 'actor', 'scopes', 'costCapCents', 'requestedItems', 'occurredAt', 'detail'])) return false
   if (typeof value.type !== 'string'
     || typeof value.connectorId !== 'string' || !CONNECTOR_ID.test(value.connectorId)
-    || typeof value.product !== 'string' || !PRODUCT_ID.test(value.product)
-    || typeof value.workspaceId !== 'string' || !WORKSPACE_ID.test(value.workspaceId)
+    || !validGclTenantContext(value)
     || !canonicalActor(value.actor)
     || !scopes(value.scopes)
     || !safeInteger(value.costCapCents, 10_000_000)

@@ -29,6 +29,11 @@ export class ConnectorInputError extends GclError {
   constructor(message = 'INVALID_CONNECTOR_INPUT') { super(message, 422, 'invalid_connector_input') }
 }
 
+/** Product/workspace are authority, not adapter input; reject malformed tenant envelopes before preflight. */
+export class ConnectorContextError extends GclError {
+  constructor(message = 'INVALID_CONNECTOR_TENANT_CONTEXT') { super(message, 422, 'invalid_connector_tenant_context') }
+}
+
 export class ArtifactStateError extends GclError {
   constructor(message = 'TRANSLATION_ARTIFACT_NOT_PENDING_CHECKER_APPROVAL') { super(message, 409, 'translation_artifact_state_conflict') }
 }

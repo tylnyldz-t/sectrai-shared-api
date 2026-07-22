@@ -1,4 +1,5 @@
 import { CostCapError, ConnectorUnavailableError, GclError, OwnerGateError, ScopeError } from './errors.js'
+import { requireGclTenantContext } from './context.js'
 import type { AuditLog, Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from './types.js'
 
 const ACTOR_ID = /^[a-zA-Z0-9:_@. -]{1,160}$/
@@ -74,6 +75,7 @@ export class GovernedConnectorRunner {
 
   async run(request: RunConnectorRequest): Promise<ConnectorResult> {
     const connector = this.registry.get(request.connectorId)
+    requireGclTenantContext(request)
     if (!request.ownerApproved) throw new OwnerGateError()
     if (!canonicalActor(request.actor)) throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
     if (!Number.isSafeInteger(request.costCapCents) || request.costCapCents < 1) throw new CostCapError('CONNECTOR_COST_CAP_REQUIRED')
