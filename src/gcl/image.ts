@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { ConnectorInputError, ConnectorUnavailableError, CostCapError, FamilySafetyError, OwnerGateError } from './errors.js'
 import type { ImageCandidateIssuanceEvent, ImageCandidateIssuanceProof, ImageCandidateLedger } from './image-candidate-ledger.js'
-import type { ImageOwnerReviewDecisionEvent, ImageOwnerReviewLedger } from './image-review-ledger.js'
+import type { ImageOwnerReviewDecisionEvent, ImageOwnerReviewDecisionProof, ImageOwnerReviewLedger } from './image-review-ledger.js'
 import type { Connector, ConnectorResult, ConnectorRunContext } from './types.js'
 
 export const IMAGE_TTI_CONNECTOR_ID = 'image-tti'
@@ -611,15 +611,16 @@ function assertOwnerReviewContext(candidate: SyntheticImageCandidate, context: u
   return { context: reviewContext, occurredAt }
 }
 
-function assertOwnerReviewRequest(candidate: unknown, ownerApproved: boolean, actor: unknown, reviewLedger: unknown, context: ImageOwnerReviewContext): { candidate: SyntheticImageCandidate; actor: string; context: ImageOwnerReviewContext; occurredAt: Date; appendDecision: (...args: unknown[]) => unknown } {
+function assertOwnerReviewRequest(candidate: unknown, ownerApproved: boolean, actor: unknown, reviewLedger: unknown, context: ImageOwnerReviewContext): { candidate: SyntheticImageCandidate; actor: string; context: ImageOwnerReviewContext; occurredAt: Date; appendDecision: (...args: unknown[]) => unknown; assertRecorded: (...args: unknown[]) => unknown } {
   if (!ownerApproved) throw new OwnerGateError()
   if (!isSafeIdentifier(actor)) throw new OwnerGateError('OWNER_ACTOR_REQUIRED')
   assertSyntheticCandidate(candidate)
   if (actor === candidate.requestedBy) throw new OwnerGateError('MAKER_CHECKER_SEPARATION_REQUIRED')
   const appendDecision = dataMethod(reviewLedger, 'appendDecision')
-  if (!appendDecision) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
+  const assertRecorded = dataMethod(reviewLedger, 'assertRecorded')
+  if (!appendDecision || !assertRecorded) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
   const review = assertOwnerReviewContext(candidate, context)
-  return { candidate, actor, appendDecision, ...review }
+  return { candidate, actor, appendDecision, assertRecorded, ...review }
 }
 
 function candidateLedgerAssertion(candidateLedger: unknown): (...args: unknown[]) => unknown {
@@ -636,6 +637,12 @@ function assertIssuanceProof(value: unknown): asserts value is ImageCandidateIss
 
 function assertReviewNotBeforeIssuance(occurredAt: Date, issuance: { issuanceOccurredAt: string }): void {
   if (occurredAt.getTime() < new Date(issuance.issuanceOccurredAt).getTime()) throw new ConnectorInputError('IMAGE_OWNER_REVIEW_BEFORE_CANDIDATE_ISSUANCE')
+}
+
+/** A terminal result is usable only after the review ledger re-reads its own receipt. */
+function assertDecisionProof(value: unknown, auditHash: string, issuance: ImageCandidateIssuanceProof): asserts value is ImageOwnerReviewDecisionProof {
+  const proof = plainRecord(value)
+  if (!proof || !hasExactKeys(proof, ['auditHash', 'issuanceAuditHash', 'runAuditHash']) || typeof proof.auditHash !== 'string' || !DIGEST_PATTERN.test(proof.auditHash) || typeof proof.issuanceAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.issuanceAuditHash) || typeof proof.runAuditHash !== 'string' || !DIGEST_PATTERN.test(proof.runAuditHash) || proof.auditHash !== auditHash || proof.issuanceAuditHash !== issuance.issuanceAuditHash || proof.runAuditHash !== issuance.runAuditHash) throw new ConnectorUnavailableError('IMAGE_OWNER_REVIEW_LEDGER_INVALID')
 }
 
 function reviewAuditEvent(type: 'connector.artifact.owner_liked' | 'connector.artifact.owner_rejected', candidate: SyntheticImageCandidate, actor: string, occurredAt: Date, context: ImageOwnerReviewContext, issuance: { issuanceAuditHash: string; runAuditHash: string }, detail: Record<string, unknown>): ImageOwnerReviewDecisionEvent {
@@ -666,8 +673,11 @@ export async function ownerLikeSyntheticImage(candidate: SyntheticImageCandidate
   assertIssuanceProof(issuance)
   assertReviewNotBeforeIssuance(request.occurredAt, issuance)
   const artifactId = `owner-liked-${request.candidate.candidateId}`
-  const audit = await request.appendDecision.call(reviewLedger, reviewAuditEvent('connector.artifact.owner_liked', request.candidate, request.actor, request.occurredAt, request.context, issuance, { artifactId, ownerReview: 'liked' }))
+  const event = reviewAuditEvent('connector.artifact.owner_liked', request.candidate, request.actor, request.occurredAt, request.context, issuance, { artifactId, ownerReview: 'liked' })
+  const audit = await request.appendDecision.call(reviewLedger, event)
   const auditHash = returnedAuditHash(audit, 'IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
+  const proof = await request.assertRecorded.call(reviewLedger, event)
+  assertDecisionProof(proof, auditHash, issuance)
   return {
     artifactId,
     candidateId: request.candidate.candidateId,
@@ -696,8 +706,11 @@ export async function ownerRejectSyntheticImage(candidate: SyntheticImageCandida
   assertIssuanceProof(issuance)
   assertReviewNotBeforeIssuance(request.occurredAt, issuance)
   const reviewId = `owner-rejected-${request.candidate.candidateId}`
-  const audit = await request.appendDecision.call(reviewLedger, reviewAuditEvent('connector.artifact.owner_rejected', request.candidate, request.actor, request.occurredAt, request.context, issuance, { reviewId, ownerReview: 'rejected', reason }))
+  const event = reviewAuditEvent('connector.artifact.owner_rejected', request.candidate, request.actor, request.occurredAt, request.context, issuance, { reviewId, ownerReview: 'rejected', reason })
+  const audit = await request.appendDecision.call(reviewLedger, event)
   const auditHash = returnedAuditHash(audit, 'IMAGE_OWNER_REVIEW_LEDGER_UNAVAILABLE')
+  const proof = await request.assertRecorded.call(reviewLedger, event)
+  assertDecisionProof(proof, auditHash, issuance)
   return {
     reviewId,
     candidateId: request.candidate.candidateId,
