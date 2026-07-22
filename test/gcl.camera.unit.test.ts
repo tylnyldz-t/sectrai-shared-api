@@ -1,11 +1,11 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { InMemoryHashChainAuditLog, hashAuditEvent } from '../src/gcl/audit.js'
-import { CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
+import { AuditReceiptError, CameraConsentError, ConnectorInputError, ConnectorResultError, ConnectorUnavailableError, MakerCheckerError, OwnerGateError, QuotaError } from '../src/gcl/errors.js'
 import { ownerTokenMatches } from '../src/gcl/owner.js'
 import { cameraDailyQuotaFromEnvironment } from '../src/gcl/quota.js'
 import { ConnectorRegistry, GovernedConnectorRunner } from '../src/gcl/registry.js'
-import type { Connector, ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
+import type { AuditLog, Connector, ConnectorAuditEvent, ConnectorQuota, ConnectorResult, ConnectorRunContext } from '../src/gcl/types.js'
 import { ADOS_10_CAMERA_CONTROLS, CAMERA_CONNECTOR_ID, CAMERA_LIVE_STATUS, CAMERA_REVIEW_AUDIT_TRAIL_RECEIPT_VERSION, CAMERA_REVIEW_AUDIT_TRAIL_WITNESS_VERSION, CAMERA_REVIEW_AUDIT_WITNESS_VERSION, CAMERA_REVIEW_EVIDENCE_MANIFEST_VERSION, CAMERA_REVIEW_RECEIPT_VERSION, SyntheticCameraConnector, cameraConnectorFromEnvironment, createCameraReviewAuditTrailReceipt, createCameraReviewEvidenceManifest, independentlyReviewCameraObservation, validateCameraObservationForReview, validateCameraReviewAuditTrailReceipt, validateCameraReviewAuditTrailWitness, validateCameraReviewAuditWitness, validateCameraReviewEvidenceManifest, validateCameraReviewReceipt, type CameraObservationResult, type SyntheticCameraConnectorConfig } from '../src/gcl/camera.js'
 
 const now = () => new Date('2026-07-22T12:00:00.000Z')
@@ -28,6 +28,17 @@ class TestQuota implements ConnectorQuota {
 
 class RejectingQuota implements ConnectorQuota {
   async consume(): Promise<void> { throw new QuotaError() }
+}
+
+class ReceiptAuditLog implements AuditLog {
+  readonly events: ConnectorAuditEvent[] = []
+
+  constructor(private readonly receipts: readonly unknown[]) {}
+
+  append(event: ConnectorAuditEvent): Promise<{ hash: string }> {
+    this.events.push(event)
+    return Promise.resolve(this.receipts[this.events.length - 1] as { hash: string })
+  }
 }
 
 const limits: SyntheticCameraConnectorConfig = { syntheticEnabled: true, liveEnabled: false, maxCostCapCents: 25, maxItems: 1 }
@@ -998,6 +1009,95 @@ test('D13 governed runner rejects shaped, stale, injected, mismatched, non-synth
   assert.equal(provenanceAccessorRead, false)
 })
 
+test('D14 rejects malformed requested audit receipts before quota or adapter execution without reading shaped fields', async () => {
+  const validHash = 'a'.repeat(64)
+  let proxyTrapRead = false
+  const proxyReceipt = new Proxy({ hash: validHash }, {
+    // Promise resolution probes `then`; D14 must reject all later access.
+    get(_target, property) {
+      if (property === 'then') return undefined
+      proxyTrapRead = true
+      throw new Error('AUDIT_RECEIPT_PROXY_MUST_NOT_RUN')
+    },
+  })
+  let accessorRead = false
+  const accessorReceipt = {}
+  Object.defineProperty(accessorReceipt, 'hash', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('AUDIT_RECEIPT_ACCESSOR_MUST_NOT_RUN') },
+  })
+  const hiddenReceipt = {}
+  Object.defineProperty(hiddenReceipt, 'hash', { value: validHash, enumerable: false })
+  const symbolReceipt = { hash: validHash }
+  Object.defineProperty(symbolReceipt, Symbol('raw-media'), { value: 'data:image/png;base64,not-accepted', enumerable: true })
+
+  for (const receipt of [
+    undefined,
+    { hash: validHash, extra: 'not-accepted' },
+    { hash: validHash.toUpperCase() },
+    hiddenReceipt,
+    symbolReceipt,
+    accessorReceipt,
+    proxyReceipt,
+  ]) {
+    const quota = new TestQuota()
+    let adapterRuns = 0
+    const valid = await enabledConnector().run(loadingDockInput, context)
+    const connector: Connector = {
+      id: CAMERA_CONNECTOR_ID,
+      kind: 'synthetic-camera',
+      authKind: 'owner-token',
+      scopes: ['camera:observe'],
+      async run() { adapterRuns += 1; return valid },
+    }
+    const audit = new ReceiptAuditLog([receipt])
+    const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), audit, quota, now)
+    await assert.rejects(
+      () => runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
+      (error: unknown) => error instanceof AuditReceiptError && error.message === 'INVALID_AUDIT_APPEND_RECEIPT',
+    )
+    assert.deepEqual(audit.events.map((event) => event.type), ['connector.run.requested'])
+    assert.equal(quota.requests.length, 0)
+    assert.equal(adapterRuns, 0)
+  }
+  assert.equal(accessorRead, false)
+  assert.equal(proxyTrapRead, false)
+})
+
+test('D14 returns no result or review decision after an invalid succeeding audit receipt and emits no follow-up transition', async () => {
+  const validHash = 'b'.repeat(64)
+  const quota = new TestQuota()
+  let adapterRuns = 0
+  const valid = await enabledConnector().run(loadingDockInput, context)
+  const connector: Connector = {
+    id: CAMERA_CONNECTOR_ID,
+    kind: 'synthetic-camera',
+    authKind: 'owner-token',
+    scopes: ['camera:observe'],
+    async run() { adapterRuns += 1; return valid },
+  }
+  const runAudit = new ReceiptAuditLog([{ hash: validHash }, { hash: 'not-a-sha256-receipt' }])
+  const runner = new GovernedConnectorRunner(new ConnectorRegistry([connector]), runAudit, quota, now)
+  await assert.rejects(
+    () => runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }),
+    (error: unknown) => error instanceof AuditReceiptError && error.message === 'INVALID_AUDIT_APPEND_RECEIPT',
+  )
+  assert.deepEqual(runAudit.events.map((event) => event.type), ['connector.run.requested', 'connector.run.succeeded'])
+  assert.equal(quota.requests.length, 1)
+  assert.equal(adapterRuns, 1)
+
+  const setup = runnerFor()
+  const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
+  const reviewAudit = new ReceiptAuditLog([{ hash: 'C'.repeat(64) }])
+  await assert.rejects(
+    () => independentlyReviewCameraObservation(result.data, 'approved', true, 'reviewer@example.test', reviewAudit, context),
+    (error: unknown) => error instanceof AuditReceiptError && error.message === 'INVALID_AUDIT_APPEND_RECEIPT',
+  )
+  assert.deepEqual(reviewAudit.events.map((event) => event.type), ['connector.camera.owner_reviewed'])
+  assert.equal(setup.audit.entries.length, 2)
+  assert.equal((setup.quota as TestQuota).requests.length, 1)
+})
+
 test('D1 fails closed before review audit append for tampered, cross-scope, raw-shaped, non-pending, and non-independent packets', async () => {
   const setup = runnerFor()
   const result = await setup.runner.run({ connectorId: CAMERA_CONNECTOR_ID, input: loadingDockInput, ...runContext }) as ConnectorResult<CameraObservationResult>
@@ -1060,8 +1160,8 @@ test('ADOS 10 controls remain complete and explicitly prohibit egress and produc
     'ADOS-01', 'ADOS-02', 'ADOS-03', 'ADOS-04', 'ADOS-05', 'ADOS-06', 'ADOS-07', 'ADOS-08', 'ADOS-09', 'ADOS-10',
   ])
   assert.match(ADOS_10_CAMERA_CONTROLS[6]?.enforcement ?? '', /no camera SDK, network client, stream URL, credential/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, and the D13 result\/provenance control plane/i)
-  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[3]?.enforcement ?? '', /D8 caller-context fields, D10 execution-context\/provenance-clock values, the D11 runner clock, the D12 governed-run request envelope, the D13 result\/provenance control plane, and D14 audit append receipts/i)
+  assert.match(ADOS_10_CAMERA_CONTROLS[8]?.enforcement ?? '', /D4\/D5\/D6\/D7 witnesses.*D8\/D9.*D10.*D11.*D12.*D13.*D14/i)
   assert.match(ADOS_10_CAMERA_CONTROLS[9]?.enforcement ?? '', /No production migration, main\/prod write, live launch/i)
 })
 
