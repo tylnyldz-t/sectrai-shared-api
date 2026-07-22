@@ -245,8 +245,9 @@ function isProxyObject(value: unknown): value is object {
   return value !== null && typeof value === 'object' && nodeUtilTypes.isProxy(value)
 }
 function isRecord(value: unknown): value is Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  if (!value || typeof value !== 'object') return false
   if (isProxyObject(value)) return false
+  if (Array.isArray(value)) return false
   const prototype = Object.getPrototypeOf(value)
   return prototype === Object.prototype || prototype === null
 }
@@ -620,6 +621,13 @@ function reviewedFieldRecordBoundaryBinding(value: unknown): SyntheticDocumentRe
   return { ...SYNTHETIC_DOCUMENT_FIELD_RECORD_BOUNDARY }
 }
 
+function reviewedProxyBoundaryBinding(value: unknown): SyntheticDocumentReviewPacket['proxyBoundaryBinding'] {
+  if (!isRecord(value)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PROXY_BOUNDARY_BINDING')
+  exactKeys(value, ['proxyDetection', 'proxyObjectsAccepted', 'proxyArraysAccepted'], 'UNEXPECTED_DOCUMENT_REVIEW_PROXY_BOUNDARY_BINDING_FIELD')
+  if (value.proxyDetection !== SYNTHETIC_DOCUMENT_PROXY_BOUNDARY.proxyDetection || value.proxyObjectsAccepted !== false || value.proxyArraysAccepted !== false) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PROXY_BOUNDARY_BINDING')
+  return { ...SYNTHETIC_DOCUMENT_PROXY_BOUNDARY }
+}
+
 function reviewedEvidenceBinding(
   value: unknown,
   evidence: SyntheticDocumentProposal['evidence'],
@@ -703,7 +711,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const mesaEvidenceHandoff: SyntheticDocumentProposal['mesaEvidenceHandoff'] = { state: 'BLOCKED_PENDING_INDEPENDENT_OWNER_REVIEW', referenceOnly: true, rawContentIncluded: false, sent: false }
 
   if (!isRecord(proposal.reviewPacket)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET')
-  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'makerCheckerBinding', 'collectionBoundaryBinding', 'stringBoundaryBinding', 'timeBoundaryBinding', 'fieldRecordBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
+  exactKeys(proposal.reviewPacket, ['version', 'integrityDigest', 'scopeBinding', 'consentBinding', 'governanceBinding', 'dataBoundaryBinding', 'makerCheckerBinding', 'collectionBoundaryBinding', 'stringBoundaryBinding', 'timeBoundaryBinding', 'fieldRecordBoundaryBinding', 'proxyBoundaryBinding', 'evidenceBinding', 'reviewWindow', 'state', 'rawDocumentContentIncluded', 'automaticApply', 'automaticPublication'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_FIELD')
   if (proposal.reviewPacket.version !== SYNTHETIC_DOCUMENT_REVIEW_PACKET_VERSION) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_VERSION_UNSUPPORTED')
   if (!isRecord(proposal.reviewPacket.scopeBinding)) throw new ConnectorInputError('INVALID_DOCUMENT_REVIEW_PACKET_SCOPE')
   exactKeys(proposal.reviewPacket.scopeBinding, ['productDigest', 'workspaceDigest'], 'UNEXPECTED_DOCUMENT_REVIEW_PACKET_SCOPE_FIELD')
@@ -719,6 +727,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   const stringBoundaryBinding = reviewedStringBoundaryBinding(proposal.reviewPacket.stringBoundaryBinding)
   const timeBoundaryBinding = reviewedTimeBoundaryBinding(proposal.reviewPacket.timeBoundaryBinding)
   const fieldRecordBoundaryBinding = reviewedFieldRecordBoundaryBinding(proposal.reviewPacket.fieldRecordBoundaryBinding)
+  const proxyBoundaryBinding = reviewedProxyBoundaryBinding(proposal.reviewPacket.proxyBoundaryBinding)
   const evidenceBinding = reviewedEvidenceBinding(proposal.reviewPacket.evidenceBinding, evidence, governanceBinding, reviewedAt)
   const reviewWindow = reviewedReviewWindow(proposal.reviewPacket.reviewWindow, reviewedAt)
   validateReviewPacketTimeline(consentBinding, governanceBinding, evidenceBinding, reviewWindow)
@@ -734,6 +743,7 @@ function validateSyntheticDocumentProposalForReviewAt(
     stringBoundaryBinding,
     timeBoundaryBinding,
     fieldRecordBoundaryBinding,
+    proxyBoundaryBinding,
     evidenceBinding,
     reviewWindow,
     state: 'PENDING_INDEPENDENT_OWNER_REVIEW',
@@ -743,7 +753,7 @@ function validateSyntheticDocumentProposalForReviewAt(
   }
   if (proposal.reviewPacket.state !== reviewPacket.state || proposal.reviewPacket.rawDocumentContentIncluded !== false || proposal.reviewPacket.automaticApply !== false || proposal.reviewPacket.automaticPublication !== false || productDigest !== digest(scoped.product) || workspaceDigest !== digest(scoped.workspaceId)) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_SCOPE_MISMATCH')
   const normalized: SyntheticDocumentProposal = { proposalId, syntheticUri: proposal.syntheticUri, preparedBy, mode: LIVE_DISABLED, extraction: 'SYNTHETIC_PROPOSAL_ONLY_NOT_OCR', evidence, fields, fieldsDigest, ownerReview, reviewPacket, mesaEvidenceHandoff }
-  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.makerCheckerBinding, reviewPacket.collectionBoundaryBinding, reviewPacket.stringBoundaryBinding, reviewPacket.timeBoundaryBinding, reviewPacket.fieldRecordBoundaryBinding, reviewPacket.evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
+  if (integrityDigest !== digest(JSON.stringify(reviewPacketIntegrityMaterial(normalized, reviewPacket.scopeBinding, reviewPacket.consentBinding, reviewPacket.governanceBinding, reviewPacket.dataBoundaryBinding, reviewPacket.makerCheckerBinding, reviewPacket.collectionBoundaryBinding, reviewPacket.stringBoundaryBinding, reviewPacket.timeBoundaryBinding, reviewPacket.fieldRecordBoundaryBinding, reviewPacket.proxyBoundaryBinding, reviewPacket.evidenceBinding, reviewPacket.reviewWindow)))) throw new ConnectorInputError('DOCUMENT_REVIEW_PACKET_INTEGRITY_MISMATCH')
   return normalized
 }
 
