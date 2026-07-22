@@ -33,6 +33,15 @@ const context: ConnectorRunContext = {
   requestedItems: 1,
   now,
 }
+const runContext = {
+  product: context.product,
+  workspaceId: context.workspaceId,
+  actor: context.actor,
+  ownerApproved: context.ownerApproved,
+  scopes: context.scopes,
+  costCapCents: context.costCapCents,
+  requestedItems: context.requestedItems,
+}
 
 class TestQuota implements ConnectorQuota {
   readonly requests: Array<{ connectorId: string; quotaGroup?: string; requestedItems: number }> = []
@@ -52,7 +61,7 @@ function marketRunner(config = limits) {
 
 test('synthetic market returns only an owner-review plan and never a quote, booking, reservation, publication, or provider contact', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
 
   assert.equal(plan.mode, 'SYNTHETIC')
@@ -141,15 +150,15 @@ test('synthetic market environment factory fails closed unless its live flag is 
 test('synthetic market rejects missing operation scope and mismatched listing quota before audit or quota reservation', async () => {
   const setup = marketRunner()
   await assert.rejects(
-    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context, scopes: ['market:discover'] }),
+    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext, scopes: ['market:discover'] }),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'MARKET_OPERATION_SCOPE_REQUIRED',
   )
   await assert.rejects(
-    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context, requestedItems: 2 }),
+    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext, requestedItems: 2 }),
     (error: unknown) => error instanceof Error && error.message === 'MARKET_LISTINGS_MUST_MATCH_REQUESTED_ITEMS',
   )
   await assert.rejects(
-    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context, workspaceId: 'invalid/workspace' }),
+    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext, workspaceId: 'invalid/workspace' }),
     (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_MARKET_CONTEXT',
   )
   assert.equal(setup.audit.entries.length, 0)
@@ -159,7 +168,7 @@ test('synthetic market rejects missing operation scope and mismatched listing qu
 test('synthetic market owner gate rejects before proposal creation', async () => {
   const setup = marketRunner()
   await assert.rejects(
-    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context, ownerApproved: false }),
+    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext, ownerApproved: false }),
     (error: unknown) => error instanceof OwnerGateError,
   )
   assert.equal(setup.audit.entries.length, 0)
@@ -205,7 +214,7 @@ test('D11 requires literal boolean owner approval across runner, direct run, and
       OwnerGateError,
     )
     await assert.rejects(
-      () => directSetup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context, ownerApproved: ownerApproved as never }),
+      () => directSetup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext, ownerApproved: ownerApproved as never }),
       OwnerGateError,
     )
   }
@@ -213,7 +222,7 @@ test('D11 requires literal boolean owner approval across runner, direct run, and
   assert.equal(directSetup.quota.requests.length, 0)
 
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   let clockCalls = 0
   let ledgerCalls = 0
@@ -252,9 +261,76 @@ test('D11 requires literal boolean owner approval across runner, direct run, and
   assert.equal(setup.quota.requests.length, 1)
 })
 
+test('D12 snapshots the exact governed-run envelope before preflight, audit, or quota and never evaluates shaped fields', async () => {
+  const setup = marketRunner()
+  const request = () => ({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
+  const mustReject = async (candidate: unknown) => {
+    await assert.rejects(
+      () => setup.runner.run(candidate as never),
+      (error: unknown) => error instanceof ConnectorInputError && error.message === 'INVALID_CONNECTOR_RUN_REQUEST',
+    )
+    assert.equal(setup.audit.entries.length, 0)
+    assert.equal(setup.quota.requests.length, 0)
+  }
+
+  await mustReject({ ...request(), providerCredential: 'synthetic-not-accepted' })
+
+  const hiddenCredential = request()
+  Object.defineProperty(hiddenCredential, 'providerCredential', { value: 'synthetic-not-accepted' })
+  await mustReject(hiddenCredential)
+
+  let accessorRead = false
+  const accessorApproval = request()
+  Object.defineProperty(accessorApproval, 'ownerApproved', {
+    enumerable: true,
+    get() { accessorRead = true; throw new Error('APPROVAL_ACCESSOR_MUST_NOT_RUN') },
+  })
+  await mustReject(accessorApproval)
+  assert.equal(accessorRead, false)
+
+  let proxyRead = false
+  const proxyEnvelope = new Proxy(request(), {
+    get() { proxyRead = true; throw new Error('RUN_REQUEST_PROXY_MUST_NOT_RUN') },
+  })
+  await mustReject(proxyEnvelope)
+  assert.equal(proxyRead, false)
+
+  let inheritedRead = false
+  const inheritedPrototype = {}
+  Object.defineProperty(inheritedPrototype, 'ownerApproved', {
+    get() { inheritedRead = true; throw new Error('INHERITED_APPROVAL_MUST_NOT_RUN') },
+  })
+  await mustReject(Object.create(inheritedPrototype))
+  assert.equal(inheritedRead, false)
+
+  let scopeAccessorRead = false
+  const accessorScopes = ['market:capacity:quote']
+  Object.defineProperty(accessorScopes, '0', {
+    enumerable: true,
+    get() { scopeAccessorRead = true; throw new Error('SCOPE_ACCESSOR_MUST_NOT_RUN') },
+  })
+  await mustReject({ ...request(), scopes: accessorScopes })
+  assert.equal(scopeAccessorRead, false)
+
+  let scopeProxyRead = false
+  const proxyScopes = new Proxy(['market:capacity:quote'], {
+    get() { scopeProxyRead = true; throw new Error('SCOPE_PROXY_MUST_NOT_RUN') },
+  })
+  await mustReject({ ...request(), scopes: proxyScopes })
+  assert.equal(scopeProxyRead, false)
+
+  const callerOwned = { ...request(), scopes: ['market:capacity:quote'] }
+  const run = setup.runner.run(callerOwned)
+  callerOwned.scopes[0] = 'market:discover'
+  const result = await run
+  assert.deepEqual((result.data as SyntheticMarketPlan).binding.scopes, ['market:capacity:quote'])
+  assert.equal(setup.audit.entries.length, 2)
+  assert.equal(setup.quota.requests.length, 1)
+})
+
 test('a distinct owner can audit a market review, but neither decision can authorize an execution', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
 
@@ -307,7 +383,7 @@ test('a distinct owner can audit a market review, but neither decision can autho
 
 test('D3 receipt validation is local-only and rejects receipt, plan, scope, sparse-array, and prototype drift without another write', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
   const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext)
@@ -363,7 +439,7 @@ test('D3 receipt validation is local-only and rejects receipt, plan, scope, spar
 
 test('D4 audit-witness validation is local-only and rejects event, chain-link, context, and credential-shaped drift', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
   const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext)
@@ -425,7 +501,7 @@ test('D4 audit-witness validation is local-only and rejects event, chain-link, c
 
 test('D5 audit-trail witness verifies one caller-held requested/succeeded/review segment and rejects discontinuity, semantic, time, accessor, and proxy drift without writes', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
   const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext)
@@ -514,7 +590,7 @@ test('D5 audit-trail witness verifies one caller-held requested/succeeded/review
 
 test('D6 audit-trail receipt is minimized, context-bound, and rejects mutated or shaped evidence without writes', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
   const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext)
@@ -626,7 +702,7 @@ test('D6 audit-trail receipt is minimized, context-bound, and rejects mutated or
 
 test('D7 evidence manifest binds independently rebuilt D3 and D6 evidence, omits market data, and rejects mutated or shaped evidence without writes', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
   const reviewed = await independentlyReviewSyntheticMarketPlan(plan, 'acknowledged', true, 'checker@example.test', setup.reviews, reviewContext)
@@ -744,7 +820,7 @@ test('D7 evidence manifest binds independently rebuilt D3 and D6 evidence, omits
 
 test('D1 review packet reconstruction rejects injection, source/quote/action drift, scope drift, and whitespace identity bypasses before audit append', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
   const clone = (): SyntheticMarketPlan => structuredClone(plan)
@@ -782,7 +858,7 @@ test('D1 review packet reconstruction rejects injection, source/quote/action dri
     (error: unknown) => error instanceof OwnerGateError && error.message === 'MARKET_REVIEWER_REQUIRED',
   )
   await assert.rejects(
-    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context, actor: ` ${context.actor}` }),
+    () => setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext, actor: ` ${context.actor}` }),
     (error: unknown) => error instanceof OwnerGateError && error.message === 'MARKET_REQUESTER_REQUIRED',
   )
   assert.equal(setup.audit.entries.length, 2)
@@ -791,7 +867,7 @@ test('D1 review packet reconstruction rejects injection, source/quote/action dri
 
 test('D2 process-local terminal review ledger rejects sequential and concurrent replays without creating a market action', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
 
@@ -962,7 +1038,7 @@ test('D8 terminal ledger rejects accessor- and Proxy-shaped audit append results
 
 test('D9 snapshots every caller-held review-plan branch before semantic reads and blocks shaped host-ledger seams without a review audit', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
   const mustRejectPlan = (candidate: unknown, read: () => boolean = () => false) => {
@@ -1055,7 +1131,7 @@ test('D9 snapshots every caller-held review-plan branch before semantic reads an
 
 test('D10 snapshots review context and treats its clock as a narrow fail-closed host seam', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   const base: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
   const mustRejectContext = (candidate: MarketReviewContext, expected = 'INVALID_MARKET_REVIEW_CONTEXT') => assert.throws(
@@ -1140,7 +1216,7 @@ test('D10 snapshots review context and treats its clock as a narrow fail-closed 
 
 test('D3 refuses an injected ledger result whose audit hash is malformed before it can return a receipt', async () => {
   const setup = marketRunner()
-  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...context })
+  const result = await setup.runner.run({ connectorId: MARKET_CONNECTOR_ID, input: capacityQuote, ...runContext })
   const plan = result.data as SyntheticMarketPlan
   const reviewContext: MarketReviewContext = { product: context.product, workspaceId: context.workspaceId, scopes: ['market:review'], now }
   await assert.rejects(

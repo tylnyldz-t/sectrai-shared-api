@@ -19,7 +19,7 @@ function isSafeNonNegativeInteger(value: number): boolean { return Number.isSafe
 const RUN_REQUEST_FIELDS = ['connectorId', 'input', 'product', 'workspaceId', 'actor', 'ownerApproved', 'scopes', 'costCapCents', 'requestedItems'] as const
 const MAX_RUN_SCOPES = 64
 
-type SnapshottedRunConnectorRequest = Omit<RunConnectorRequest, 'scopes'> & { scopes: string[] }
+type SnapshottedRunConnectorRequest = Omit<RunConnectorRequest, 'scopes' | 'ownerApproved'> & { scopes: string[]; ownerApproved: unknown }
 
 /**
  * The governed runner is the first library boundary before connector
@@ -59,15 +59,17 @@ function runScopes(value: unknown): string[] {
   ) throw new ConnectorInputError('INVALID_CONNECTOR_RUN_REQUEST')
 
   const names = Object.getOwnPropertyNames(value)
-  const descriptors = Object.getOwnPropertyDescriptors(value)
-  const length = descriptors.length
+  const descriptors: Record<string, PropertyDescriptor> = Object.getOwnPropertyDescriptors(value)
+  const length = descriptors['length']
   if (
-    !length || !('value' in length) || length.enumerable || !Number.isSafeInteger(length.value) || length.value > MAX_RUN_SCOPES ||
-    names.length !== length.value + 1 || names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))
+    !length || !('value' in length) || length.enumerable || typeof length.value !== 'number' ||
+    !Number.isSafeInteger(length.value) || length.value > MAX_RUN_SCOPES || names.length !== length.value + 1 ||
+    names.some((name) => name !== 'length' && !/^(0|[1-9][0-9]*)$/.test(name))
   ) throw new ConnectorInputError('INVALID_CONNECTOR_RUN_REQUEST')
+  const scopeCount = length.value
 
   const scopes: string[] = []
-  for (let index = 0; index < length.value; index += 1) {
+  for (let index = 0; index < scopeCount; index += 1) {
     const descriptor = descriptors[String(index)]
     if (!descriptor || !descriptor.enumerable || !('value' in descriptor) || typeof descriptor.value !== 'string') {
       throw new ConnectorInputError('INVALID_CONNECTOR_RUN_REQUEST')
@@ -82,7 +84,7 @@ function snapshotRunRequest(value: unknown): SnapshottedRunConnectorRequest {
   if (
     typeof envelope.connectorId !== 'string' || typeof envelope.product !== 'string' ||
     typeof envelope.workspaceId !== 'string' || typeof envelope.actor !== 'string' ||
-    typeof envelope.ownerApproved !== 'boolean' || typeof envelope.costCapCents !== 'number' ||
+    typeof envelope.costCapCents !== 'number' ||
     typeof envelope.requestedItems !== 'number'
   ) throw new ConnectorInputError('INVALID_CONNECTOR_RUN_REQUEST')
 
